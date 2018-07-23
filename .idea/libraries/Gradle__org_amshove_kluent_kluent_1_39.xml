@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="Gradle: org.amshove.kluent:kluent:1.39">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/Could not find org.amshove.kluent:kluent:1.39.&#13;&#10;Searched in the following locations:&#13;&#10;    https:/repo1.maven.org/maven2/org/amshove/kluent/kluent/1.39/kluent-1.39.pom&#13;&#10;    https:/repo1.maven.org/maven2/org/amshove/kluent/kluent/1.39/kluent-1.39.jar!/" />
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/org.amshove.kluent/kluent/1.39/582a9397a0da9cce4126d359e9ec2116808845cf/kluent-1.39.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES>
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/org.amshove.kluent/kluent/1.39/91ac2748b7326b8d949209d61e585bdf062ec0ed/kluent-1.39-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>
