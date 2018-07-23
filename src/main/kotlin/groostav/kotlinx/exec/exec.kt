@@ -15,6 +15,29 @@ fun execAsync(config: ProcessBuilder): RunningProcess {
 
     val jvmProcessBuilder = JProcBuilder(config.command)
     val jvmRunningProcess = jvmProcessBuilder.start()
+
+    //TODO: dont like dependency on zero-turnaround, but its so well packaged...
+    //
+    // on windows: interestingly, they use a combination the cmd tools taskkill and wmic, and a reflection hack + JNA Win-Kernel32 call to manage the process
+    //   - note that oshi (https://github.com/oshi/oshi, EPL license) has some COM object support... why cant I just load wmi.dll from JNA?
+    // on linux: they dont support the deletion of children (???), and its pure shell commands (of course, since the shell is so nice)
+    // what about android or even IOS? *nix == BSD support means... what? is there even a use-case here?
+    //
+    // so I think cross-platform support is a grid of:
+    //                    windows | osx | linux | solaris | *nix?
+    // getPID(jvmProc)     kern32 |  ?  |   ?   |    ?    |   ?
+    // descendants(pid)    wmic   |  ?  |   ?   |    ?    |   ?
+    // kill(pid)         taskkill |  ?  |   ?   |    ?    |   ?
+    // isAlive(pid)        wmic   |  ?  |   ?   |    ?    |   ?
+    // join(pid)          jvm...? |
+    //
+    // and you probably want to target jdk 6, so a third dimension might be jdk-9
+    //
+    // also, what can I steal from zero-turnarounds own process API? Its not bad, it uses a builder and it buffers _all_ standard output.
+    // clearly their consumption model is for invoking things like `ls`, not so much `ansys`.
+    //
+    // also, java 9's API is nice, but it doesnt provide kill mechanism
+    // http://www.baeldung.com/java-9-process-api
     val ztpidRunningProcess = (Processes.newPidProcess(jvmRunningProcess) as WindowsProcess).apply {
         isIncludeChildren = true
         isGracefulDestroyEnabled = true

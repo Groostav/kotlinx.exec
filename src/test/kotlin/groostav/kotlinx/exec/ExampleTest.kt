@@ -57,8 +57,14 @@ class ExamplesTest {
         stdout.shouldContain("running!")
     }
 
-}
+    @Test fun `when using stream should be able to relatively easily interact with process`(){
+        TODO()
+    }
 
-fun ReceiveChannel<Char>.lines(): ReceiveChannel<String> = TODO()
+    @Test fun `when looking for character streams should be relatively simple`(){
+        TODO()
+    }
+
+}
 
 data class DomainModel(val data: String)
