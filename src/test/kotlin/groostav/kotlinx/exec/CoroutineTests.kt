@@ -27,6 +27,7 @@ class CoroutineTests {
         val z = 4;
     }
 
+    @Ignore("see https://youtrack.jetbrains.com/issue/KT-24209")
     @Test fun `when using select in producer to merge channels should operate normally`() = runBlocking<Unit> {
 
         val sourceOne = produce { send(1); send(2); send(3) }

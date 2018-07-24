@@ -12,4 +12,4 @@ out/
 .idea/workspace.xml
 .idea/misc.xml
 .gradle/
-.build/
+build/
