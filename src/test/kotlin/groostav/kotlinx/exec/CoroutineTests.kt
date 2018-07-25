@@ -1,11 +1,14 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.experimental.CompletableDeferred
 import kotlinx.coroutines.experimental.channels.ReceiveChannel
+import kotlinx.coroutines.experimental.channels.actor
 import kotlinx.coroutines.experimental.channels.produce
 import kotlinx.coroutines.experimental.runBlocking
 import kotlinx.coroutines.experimental.selects.select
 import org.junit.Ignore
 import org.junit.Test
+import java.util.*
 import kotlin.coroutines.experimental.EmptyCoroutineContext
 
 
@@ -45,5 +48,12 @@ class CoroutineTests {
 
         merged.receiveOrNull()
         //does not reach here.
+    }
+
+    @Ignore("https://youtrack.jetbrains.net/issue/KT-25716")
+    @Test fun `one two`(){
+//        class Message(val outputQuestionLine: String, val response: CompletableDeferred<String> = CompletableDeferred())
+//
+//        val localDecoder = listOf<Message>()
     }
 }

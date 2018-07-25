@@ -17,7 +17,7 @@ internal class ThreadBlockingResult(val jvmProcess: java.lang.Process): ProcessF
             }
         }
 
-        val dk: Any = when(previousState){
+        when(previousState){
             Uninitialized -> {
                 // we're the first to request a result value, so we need to initialize the blocking thread
                 launch(blockableThread) {

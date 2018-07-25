@@ -21,6 +21,9 @@ import kotlinx.coroutines.experimental.channels.SendChannel
  */
 interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 
+    //TODO replace this with a primative, either Char or Byte.
+    // -> does anybody actually emit binary mesasges in this way?
+    // surely somebody has tried to fire protobuf stuff out of standard out... right?
     val standardOutput: ReceiveChannel<String>
     val standardError: ReceiveChannel<String>
     val standardInput: SendChannel<String>
@@ -34,3 +37,8 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 
     suspend fun join(): Unit
 }
+
+sealed class ProcessEvent
+data class StandardError(val line: String): ProcessEvent()
+data class StandardOutput(val line: String): ProcessEvent()
+data class ExitCode(val value: Int): ProcessEvent()

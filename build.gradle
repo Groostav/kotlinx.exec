@@ -1,16 +1,22 @@
 buildscript {
-    ext.kotlin_version = '1.2.10'
+    ext.kotlin_version = '1.2.31'
 
     repositories {
         mavenCentral()
+        jcenter()
     }
     dependencies {
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath 'com.jfrog.bintray.gradle:gradle-bintray-plugin:1.+'
     }
 }
 
-group 'groostav.kotlinx.exec'
-version '0.1-SNAPSHOT'
+plugins {
+    id "com.jfrog.bintray" version "1.7"
+}
+
+group 'groostav'
+version '0.3'
 
 apply plugin: 'java'
 apply plugin: 'kotlin'
@@ -21,7 +27,6 @@ repositories {
     mavenCentral()
     jcenter()
 }
-
 dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     compile "org.jetbrains.kotlinx:kotlinx-coroutines-core:0.23.4"
@@ -41,5 +46,42 @@ compileTestKotlin {
 kotlin {
     experimental {
         coroutines "enable"
+    }
+}
+
+task sourcesJar(type: Jar, dependsOn: classes) {
+    classifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+task javadocJar(type: Jar, dependsOn: javadoc) {
+    classifier = 'javadoc'
+    from javadoc.destinationDir
+}
+
+artifacts {
+    archives sourcesJar
+    archives javadocJar
+}
+
+bintray {
+    user = bintrayUser
+    key = bintrayKey
+
+    pkg {
+        repo = 'generic'
+        name = 'kotlinx.exec'
+        user = project.group
+        licenses = ['Apache-2.0']
+        vcsUrl = 'https://github.com/Groostav/kotlinx.exec'
+
+        override = true
+
+        configurations = ['archives']
+
+        version {
+            name = project.version
+        }
+
     }
 }

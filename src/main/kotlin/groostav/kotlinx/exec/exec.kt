@@ -28,21 +28,23 @@ suspend fun exec(commandFirst: String, vararg commandRest: String) = exec {
 enum class OutputHandlingStrategy { Buffer, Drop }
 enum class InputSourceStrategy { None }
 
-sealed class ProcessEvent
-data class StandardError(val line: String): ProcessEvent()
-data class StandardOutput(val line: String): ProcessEvent()
-data class ExitCode(val value: Int): ProcessEvent()
-
 data class ProcessBuilder internal constructor(
         var inputProvidingStrategy: InputSourceStrategy = InputSourceStrategy.None,
         var outputHandlingStrategy: OutputHandlingStrategy = OutputHandlingStrategy.Buffer,
         var encoding: Charset = Charsets.UTF_8,
         var command: List<String> = emptyList(),
         var includeDescendantsInKill: Boolean = false
+
+        //TODO handling of non-zero exit codes:
+        // most libs throw exceptions for non-zero exit codes... I could `exitCode.completeExceptionlly` there... make that configurable here?
+        //    -> maybe even buffer a couple lines from standard-error to throw with the exception?
+        // this is most useful for 'fire-and-forget' (mutable) processes (mkdir, curl, etc),
+        // where the user isnt liklely to do anything with the exit value.
+        // on the other hand, why return it at all if you throw an exception when its not zero?
 )
 internal fun processBuilder(block: ProcessBuilder.() -> Unit): ProcessBuilder {
     val result = ProcessBuilder()
     result.block()
     require(result.command.any()) { "empty command: $result" }
-    return result
+    return result //defensive copy?
 }

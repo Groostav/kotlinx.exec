@@ -9,7 +9,11 @@ hs_err_pid*
 
 #build system outputs
 out/
-.idea/workspace.xml
-.idea/misc.xml
 .gradle/
 build/
+
+#since this project is effectively a gradle project, I'm removing the .idea folder
+.idea/
+
+#gradle local settings
+settings.gradle

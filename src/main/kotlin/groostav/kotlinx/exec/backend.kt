@@ -7,12 +7,15 @@ import kotlinx.coroutines.experimental.selects.SelectClause1
 import kotlinx.coroutines.experimental.selects.SelectClause2
 import kotlinx.coroutines.experimental.selects.select
 import java.io.*
+import java.lang.Runnable
 import java.nio.charset.Charset
 
 import java.lang.ProcessBuilder as JProcBuilder
 import java.lang.Process as JProcess
 
 import java.util.concurrent.Executors
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 
@@ -87,6 +90,7 @@ internal class RunningProcessImpl(
 
     //TODO: should we make standardError and standardOutput broadcast channels and pickup a subscription here?
     private val aggregateChannel = produce<ProcessEvent> {
+        //TODO should standardError and standardOutput be subscription channels?
         while(isActive){
             val next = select<ProcessEvent?>{
                 if( ! standardError.isClosedForReceive) standardError.onReceiveOrNull { errorMessage ->
@@ -96,7 +100,6 @@ internal class RunningProcessImpl(
                     outputMessage?.let { StandardOutput(it) }
                 }
                 exitCode.onAwait { ExitCode(it) }
-                //todo this is a race: exitCode might show up before the standard output is finished.
             }
             if(next == null) continue
             send(next)
@@ -118,8 +121,14 @@ internal class RunningProcessImpl(
 
 }
 
-//TODO: keep alive time of 60 seconds on non-daemon threads isn't acceptable.
-internal val blockableThread = Executors.newCachedThreadPool().asCoroutineDispatcher()
+
+internal val blockableThread = ThreadPoolExecutor(
+        0,
+        Integer.MAX_VALUE,
+        100L,
+        TimeUnit.MILLISECONDS,
+        SynchronousQueue()
+).asCoroutineDispatcher()
 
 private fun InputStream.toPumpedReceiveChannel(encoding: Charset = Charsets.UTF_8): ReceiveChannel<String> {
 
@@ -139,7 +148,6 @@ private fun OutputStream.toSendChannel(encoding: Charset = Charsets.UTF_8): Send
 
         consumeEach { nextLine ->
             try {
-                test(nextLine)
                 writer.appendln(nextLine)
                 writer.flush()
             }
@@ -150,10 +158,6 @@ private fun OutputStream.toSendChannel(encoding: Charset = Charsets.UTF_8): Send
         }
     }
 }
-private fun test(line: String){
-    val x = 4;
-}
-
 internal sealed class Maybe<out T> {
     abstract val value: T
 }
