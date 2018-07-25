@@ -12,7 +12,7 @@ launch {
     
     //complex + linux 
     val outputs: ReceiveChannel<String> = execAsync { command = listOf("ps", "-l") }.map { output -> 
-        when(output){
+        when (output) {
             is StandardError -> "error: ${output.line}"
             is StandardOutput -> output.line
             is ExitCode -> "(returned exit code ${output.code})"
