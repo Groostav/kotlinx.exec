@@ -25,9 +25,14 @@ suspend fun exec(commandFirst: String, vararg commandRest: String) = exec {
     command = listOf(commandFirst) + commandRest.toList()
 }
 
+//TODO: regarding ZeroTurnarounds own "run this and get me a list of std-out"  style java builder,
+// should we add a third method here to cover that same use case? Simply suspend until all output is availabe,
+// and return it as a list of lines?
+
 enum class OutputHandlingStrategy { Buffer, Drop }
 enum class InputSourceStrategy { None }
 
+//TODO: this seems excessive, defaulted on `exec` and `execAsync` would likely do the job.
 data class ProcessBuilder internal constructor(
         var inputProvidingStrategy: InputSourceStrategy = InputSourceStrategy.None,
         var outputHandlingStrategy: OutputHandlingStrategy = OutputHandlingStrategy.Buffer,

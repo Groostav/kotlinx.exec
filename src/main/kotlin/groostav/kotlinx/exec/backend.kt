@@ -29,9 +29,11 @@ internal class RunningProcessImpl(
 
     override val processID: Int = processControlWrapper.pid.value
 
-    override val standardOutput: ReceiveChannel<String> = process.inputStream.toPumpedReceiveChannel(config.encoding)
-    override val standardError: ReceiveChannel<String> = process.errorStream.toPumpedReceiveChannel(config.encoding)
-    override val standardInput: SendChannel<String> = process.outputStream.toSendChannel(config.encoding)
+    //TODO, the docs require "prompt" attachment to these streams,
+    // because of coroutines and the 'pump' implementation we might require a thread allocation
+    override val standardOutput: ReceiveChannel<Char> = process.inputStream.toPumpedReceiveChannel(config.encoding)
+    override val standardError: ReceiveChannel<Char> = process.errorStream.toPumpedReceiveChannel(config.encoding)
+    override val standardInput: SendChannel<Char> = process.outputStream.toSendChannel(config.encoding)
 
     private val _exitCode: CompletableDeferred<Int> = CompletableDeferred<Int>().apply {
         processControlWrapper.addCompletionHandle().value { result -> complete(result) }
@@ -78,25 +80,33 @@ internal class RunningProcessImpl(
 
     override suspend fun join(): Unit = _exitCode.join()
 
+    private val inputLines = actor<String>{
+        consumeEach { nextLine ->
+            nextLine.forEach { standardInput.send(it) }
+            System.lineSeparator().forEach { standardInput.send(it) }
+        }
+    }
 
     //SendChannel
-    override val isClosedForSend: Boolean get() = standardInput.isClosedForSend
-    override val isFull: Boolean get() = standardInput.isFull
-    override val onSend: SelectClause2<String, SendChannel<String>> = standardInput.onSend
-    override fun offer(element: String): Boolean = standardInput.offer(element)
-    override suspend fun send(element: String) = standardInput.send(element)
-    //TODO this doesnt seem right... can channels be closed for send but open for receive?
-    override fun close(cause: Throwable?) = standardInput.close(cause)
+    override val isClosedForSend: Boolean get() = inputLines.isClosedForSend
+    override val isFull: Boolean get() = inputLines.isFull
+    override val onSend: SelectClause2<String, SendChannel<String>> = inputLines.onSend
+    override fun offer(element: String): Boolean = inputLines.offer(element)
+    override suspend fun send(element: String) = inputLines.send(element)
+    override fun close(cause: Throwable?) = inputLines.close(cause)
 
     //TODO: should we make standardError and standardOutput broadcast channels and pickup a subscription here?
     private val aggregateChannel = produce<ProcessEvent> {
-        //TODO should standardError and standardOutput be subscription channels?
+
+        val errorLines = standardError.lines()
+        val outputLines = standardOutput.lines()
+
         while(isActive){
             val next = select<ProcessEvent?>{
-                if( ! standardError.isClosedForReceive) standardError.onReceiveOrNull { errorMessage ->
+                if( ! errorLines.isClosedForReceive) errorLines.onReceiveOrNull { errorMessage ->
                     errorMessage?.let { StandardError(it) }
                 }
-                if( ! standardOutput.isClosedForReceive) standardOutput.onReceiveOrNull { outputMessage ->
+                if( ! outputLines.isClosedForReceive) outputLines.onReceiveOrNull { outputMessage ->
                     outputMessage?.let { StandardOutput(it) }
                 }
                 exitCode.onAwait { ExitCode(it) }
@@ -116,9 +126,7 @@ internal class RunningProcessImpl(
     override fun poll(): ProcessEvent? = aggregateChannel.poll()
     override suspend fun receive(): ProcessEvent = aggregateChannel.receive()
     override suspend fun receiveOrNull(): ProcessEvent? = aggregateChannel.receiveOrNull()
-    //TODO this doesnt seem right... we should probably shut the whole show down right? Can channels be closed for receive but open for send?
     override fun cancel(cause: Throwable?): Boolean = aggregateChannel.cancel()
-
 }
 
 
@@ -130,26 +138,58 @@ internal val blockableThread = ThreadPoolExecutor(
         SynchronousQueue()
 ).asCoroutineDispatcher()
 
-private fun InputStream.toPumpedReceiveChannel(encoding: Charset = Charsets.UTF_8): ReceiveChannel<String> {
+private fun InputStream.toPumpedReceiveChannel(encoding: Charset = Charsets.UTF_8): ReceiveChannel<Char> {
 
     return produce(capacity = UNLIMITED, context = blockableThread){
         val reader = BufferedReader(InputStreamReader(this@toPumpedReceiveChannel, encoding))
 
         while(isActive){
-            val line = reader.readLine() ?: break
-            send(line)
+            val nextCodePoint = reader.read().takeUnless { it == -1 } ?: break
+            val nextChar = nextCodePoint.toChar()
+            send(nextChar)
         }
     }
 }
 
-private fun OutputStream.toSendChannel(encoding: Charset = Charsets.UTF_8): SendChannel<String> {
-    return actor<String>(blockableThread) {
+private suspend fun ReceiveChannel<Char>.lines() = produce<String>{
+    val buffer = StringBuilder(80)
+    var lastWasSlashR = false
+
+    for(nextChar in this@lines){
+
+        when(nextChar){
+            '\r' -> {
+                val line = buffer.toString().also { buffer.setLength(0) }
+                lastWasSlashR = true
+                send(line)
+            }
+            '\n' -> {
+                if( ! lastWasSlashR){
+                    val line = buffer.toString().also { buffer.setLength(0) }
+                    lastWasSlashR = false
+                    send(line)
+                }
+                else {
+                    lastWasSlashR = false
+                }
+            }
+            else -> {
+                buffer.append(nextChar)
+                lastWasSlashR = false
+            }
+        }
+    }
+}
+
+private fun OutputStream.toSendChannel(encoding: Charset = Charsets.UTF_8): SendChannel<Char> {
+    return actor<Char>(blockableThread) {
         val writer = OutputStreamWriter(this@toSendChannel, encoding)
 
-        consumeEach { nextLine ->
+        consumeEach { nextChar ->
+
             try {
-                writer.appendln(nextLine)
-                writer.flush()
+                writer.append(nextChar)
+                if(nextChar == '\n') writer.flush()
             }
             catch (ex: FileNotFoundException) {
                 //writer was closed, process was terminated.
