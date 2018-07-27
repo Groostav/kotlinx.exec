@@ -154,12 +154,56 @@ class WindowsTests {
         )
     }
 
+    @Test fun `when using script with Write-Progress style progress bar should only see echo statements`() = runBlocking <Unit>{
+        //setup
+        val testScript = getLocalResourcePath("WriteProgressStyleProgressBar.ps1")
+
+        //act
+        val proc = execAsync("powershell.exe",
+                "-File", testScript,
+                "-SleepTime", "1",
+                "-ExecutionPolicy", "Bypass"
+        )
+        val output = proc.standardOutput.lines().map { println(it); it }.toList()
+
+        //assert
+        output shouldEqual listOf(
+                "Important task 42",
+                //unfortunately the progress bar, which shows up as a nice UI element in powershell ISE
+                // or as a set of 'ooooooo's in powershell terminal doesnt get emitted to any standard output channel, so we loose it.
+                "done Important Task 42!"
+        )
+
+    }
+
+    @Test fun `when using script with simple slash-r style progress bar should render lien by line`() = runBlocking<Unit>{
+        //setup
+        val testScript = getLocalResourcePath("WriteInlineProgressStyleProgressBar.ps1")
+
+        //act
+        val proc = execAsync("powershell.exe",
+                "-File", testScript,
+                "-SleepTime", "1",
+                "-ExecutionPolicy", "Bypass"
+        )
+        val output = proc.map { println(it); it }.toList()
+
+        //assert
+        output shouldEqual listOf(
+                "Important task 42",
+                //unfortunately the progress bar, which shows up as a nice UI element in powershell ISE
+                // or as a set of 'ooooooo's in powershell terminal doesnt get emitted to any standard output channel, so we loose it.
+                "done Important Task 42!"
+        )
+
+    }
+
     @Test fun `when looking for character streams should be relatively simple`(){
         TODO()
     }
 
     private fun getLocalResourcePath(localName: String): String {
-        val rsx = WindowsTests::class.java.getResource(localName)
+        val rsx = WindowsTests::class.java.getResource(localName) ?: throw UnsupportedOperationException("cant find $localName")
         val resource = Paths.get(rsx.toURI()).toString()
         return resource
     }

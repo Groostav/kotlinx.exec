@@ -38,7 +38,9 @@ data class ProcessBuilder internal constructor(
         var outputHandlingStrategy: OutputHandlingStrategy = OutputHandlingStrategy.Buffer,
         var encoding: Charset = Charsets.UTF_8,
         var command: List<String> = emptyList(),
-        var includeDescendantsInKill: Boolean = false
+        var includeDescendantsInKill: Boolean = false,
+        var gracefulTimeousMillis: Long = 1500L,
+        var charBufferSize: Int = 2048
 
         //TODO handling of non-zero exit codes:
         // most libs throw exceptions for non-zero exit codes... I could `exitCode.completeExceptionlly` there... make that configurable here?

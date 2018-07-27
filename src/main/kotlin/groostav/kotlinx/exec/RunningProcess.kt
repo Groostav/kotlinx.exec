@@ -32,7 +32,7 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
     val processID: Int
 
     //suspends while cancelling gracefully
-    suspend fun kill(gracefulTimeousMillis: Long? = 3_000)
+    suspend fun kill(): Unit
 
     suspend fun join(): Unit
 }
