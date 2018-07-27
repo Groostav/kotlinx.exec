@@ -114,9 +114,9 @@ function Write-InlineProgress {
             }
             else {
                 Remove-Variable -Name 'lastProgressString' -Scope 'Script' -ErrorAction SilentlyContinue
-                [console]::WriteLine()
+                #[console]::WriteLine()
             }
-            [console]::CursorVisible = $true
+            #[console]::CursorVisible = $true
         }
         else {
             if ($Completed) {
@@ -135,8 +135,13 @@ function Write-InlineProgress {
 
             $cursorPosition = $host.UI.RawUI.CursorPosition
             #$cursorPositionY = $host.UI.RawUI.CursorPosition.Y
-            [console]::CursorVisible=$false
-            $windowWidth = [console]::WindowWidth
+            #[console]::CursorVisible=$false
+            try {
+                $windowWidth = [console]::WindowWidth
+            }
+            catch {
+                $windowWidth = 80
+            }
 
             # if screen is very small, don't display the percent
             if ($windowWidth -le 40) {$ShowPercent = $false}
@@ -231,8 +236,8 @@ function Write-InlineProgress {
             if ($Completed) {
                 # do some clean-up and jump to the next line
                 Remove-Variable -Name 'lastProgressString' -Scope 'Script' -ErrorAction SilentlyContinue
-                [console]::CursorVisible = $true
-                [console]::WriteLine()
+                #[console]::CursorVisible = $true
+                #[console]::WriteLine()
             }
         }
     }
