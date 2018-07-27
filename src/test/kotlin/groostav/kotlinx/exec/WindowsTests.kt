@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import junit.framework.Assert.assertEquals
 import kotlinx.coroutines.experimental.CompletableDeferred
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.delay
@@ -186,15 +187,23 @@ class WindowsTests {
                 "-SleepTime", "1",
                 "-ExecutionPolicy", "Bypass"
         )
-        val output = proc.map { println(it); it }.toList()
+        val output = proc.standardOutput.lines().map { println(it); it }.toList()
 
         //assert
-        output shouldEqual listOf(
-                "Important task 42",
-                //unfortunately the progress bar, which shows up as a nice UI element in powershell ISE
-                // or as a set of 'ooooooo's in powershell terminal doesnt get emitted to any standard output channel, so we loose it.
+        assertEquals(listOf(
+                "started Important task 42",
+                "Important Task 42    [#####..............................................]  10% ",
+                "Important Task 42    [##########.........................................]  20% ",
+                "Important Task 42    [###############....................................]  30% ",
+                "Important Task 42    [####################...............................]  40% ",
+                "Important Task 42    [#########################..........................]  50% ",
+                "Important Task 42    [##############################.....................]  60% ",
+                "Important Task 42    [###################################................]  70% ",
+                "Important Task 42    [########################################...........]  80% ",
+                "Important Task 42    [#############################################......]  90% ",
+                "Important Task 42    [###################################################] 100% ",
                 "done Important Task 42!"
-        )
+        ), output)
 
     }
 
