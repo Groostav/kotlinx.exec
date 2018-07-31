@@ -10,7 +10,8 @@ import kotlinx.coroutines.experimental.sync.Mutex
 import kotlinx.coroutines.experimental.sync.withLock
 import java.io.*
 import java.nio.charset.Charset
-import java.util.concurrent.CopyOnWriteArrayList
+import java.util.*
+import java.util.concurrent.CountDownLatch
 
 import java.lang.ProcessBuilder as JProcBuilder
 import java.lang.Process as JProcess
@@ -19,6 +20,13 @@ import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
+internal val TRACE = true
+
+internal inline fun trace(message: () -> String){
+    if(TRACE){
+        println(message())
+    }
+}
 
 internal class RunningProcessImpl(
         _config: ProcessBuilder,
@@ -30,12 +38,36 @@ internal class RunningProcessImpl(
 
     override val processID: Int = processControlWrapper.pid.value
 
-    //TODO, the docs require "prompt" attachment to these streams,
-    // because of coroutines and the 'pump' implementation we might require a thread allocation
-    private var _standardOutput: BroadcastChannel<Char> = process.inputStream.toPumpedReceiveChannel(config)
-    private var _standardError: BroadcastChannel<Char> = process.errorStream.toPumpedReceiveChannel(config)
+    private val _standardOutput: SourcedBroadcastChannel<Char> = process.inputStream.toPumpedReceiveChannel("std-out-$processID", config)
+    private val _standardError: SourcedBroadcastChannel<Char> = process.errorStream.toPumpedReceiveChannel("std-err-$processID", config)
     private val _standardInput: SendChannel<Char> = process.outputStream.toSendChannel(config.encoding)
     private val inputLineLock = Mutex()
+
+    private val standardOutputLines: BroadcastChannel<String> by lazy { BroadcastChannel<String>(10).apply {
+        launch(blockableThread) {
+            _standardOutput.openSubscription().lines(config.delimiters).consumeEach { send(it) }
+        }
+    }}
+    private val standardErrorLines: BroadcastChannel<String> by lazy { BroadcastChannel<String>(10).apply {
+        launch(blockableThread) {
+            _standardError.openSubscription().lines(config.delimiters).consumeEach { send(it) }
+        }
+    }}
+
+    val errorHistory = async<Queue<String>> {
+        val result = LinkedList<String>()
+        if (config.linesForExceptionError > 0) {
+            standardErrorLines.openSubscription().consumeEach {
+                result.addLast(it)
+                if (result.size > config.linesForExceptionError) {
+                    result.removeFirst()
+                }
+            }
+        }
+        result
+    }
+
+    private val killLock = Mutex()
 
     override val standardOutput: ReceiveChannel<Char> by lazy { _standardOutput.openSubscription() }
     override val standardError: ReceiveChannel<Char> by lazy { _standardError.openSubscription() }
@@ -49,10 +81,44 @@ internal class RunningProcessImpl(
     }}
 
     private val _exitCode: CompletableDeferred<Int> = CompletableDeferred<Int>().apply {
-        processControlWrapper.addCompletionHandle().value { result -> complete(result) }
+        processControlWrapper.addCompletionHandle().value { result ->
+            launch(blockableThread) {
+
+                trace { "$processID exited with $result, closing streams" }
+
+                _standardOutput.join()
+                _standardError.join()
+
+                standardErrorLines.join() //this is the problem
+                //the broadcast channel, the way I've implemented it above for _standardOutput and _stdErr,
+                // is that the join() method blocks until the producer is done,
+                // but it gives no way to know how much back pressure the subscribers are offering
+                // it seems like right now, there simply isnt any way for something like
+                standardErrorLines.dispatchAllRemainingJobsAndClose()
+                //the invokeOnClose() method might do it: https://github.com/Kotlin/kotlinx.coroutines/issues/341
+                // remember that broadcast channels will sink any back-pressure put on them and offer no pressure
+                // to the channel they pull from. In that way they act like a 'kink' in the reciever-channel flow:
+                // if a particular subscriber is slow, they prevent the upstream from knowing about it.
+                // this also explains why for example the error line facility *sometimes* looses lines, its simply that
+                // no amount of careful join logic can gaurentee that all subscribers of a broadcase channel are finished.
+                // but, building a simple multiplexing channel shouldnt be so-hard right?
+                standardOutputLines.join()
+
+                trace { "$processID std-err and std-out closed, complete with exitValue=$result" }
+
+                if (result in config.expectedOutputCodes) {
+                    complete(result)
+                }
+                else {
+                    val errorLines = errorHistory.await().toList()
+                    val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
+                    completeExceptionally(exception)
+                }
+            }
+        }
     }
 
-    override val exitCode: Deferred<Int> = async<Int>(blockableThread) {
+    override val exitCode: Deferred<Int> = async<Int>(Unconfined) {
         try {
             _exitCode.await()
         }
@@ -65,6 +131,9 @@ internal class RunningProcessImpl(
             }
             throw ex
         }
+        finally {
+            trace { "$processID exited" }
+        }
     }
 
 
@@ -72,24 +141,26 @@ internal class RunningProcessImpl(
 
         val gracefulTimeousMillis = config.gracefulTimeousMillis
 
-        if(_exitCode.isCompleted) return@withContext
+        killLock.withLock {
+            if(_exitCode.isCompleted) return@withContext
 
-        try {
+            try {
 
-            if (gracefulTimeousMillis != null) {
-                processControlWrapper.killGracefully(config.includeDescendantsInKill)
-                withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) { _exitCode.join() }
+                if (gracefulTimeousMillis > 0) {
+                    processControlWrapper.killGracefully(config.includeDescendantsInKill)
+                    withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) { _exitCode.join() }
 
-                if (_exitCode.isCompleted) { return@withContext }
+                    if (_exitCode.isCompleted) { return@withContext }
+                }
+
+                processControlWrapper.killForcefully(config.includeDescendantsInKill)
+                _exitCode.join() //can this fail?
             }
-
-            processControlWrapper.killForcefully(config.includeDescendantsInKill)
-            _exitCode.join() //can this fail?
-        }
-        finally {
-            _standardOutput.cancel()
-            _standardError.cancel()
-            _standardInput.close()
+            finally {
+                _standardOutput.join()
+                _standardError.join()
+                _standardInput.close()
+            }
         }
     }
 
@@ -117,8 +188,8 @@ internal class RunningProcessImpl(
     private val aggregateChannel by lazy {
         produce<ProcessEvent> {
 
-            val errorLines = _standardError.openSubscription().lines()
-            val outputLines = _standardOutput.openSubscription().lines()
+            val errorLines = standardErrorLines.openSubscription()
+            val outputLines = standardOutputLines.openSubscription()
 
             while (isActive) {
                 val next = select<ProcessEvent?> {
@@ -150,7 +221,7 @@ internal class RunningProcessImpl(
 }
 
 
-internal val blockableThread = ThreadPoolExecutor(
+internal val blockableThread: CloseableCoroutineDispatcher = ThreadPoolExecutor(
         0,
         Integer.MAX_VALUE,
         100L,
@@ -158,58 +229,76 @@ internal val blockableThread = ThreadPoolExecutor(
         SynchronousQueue()
 ).asCoroutineDispatcher()
 
-private fun InputStream.toPumpedReceiveChannel(config: ProcessBuilder): BroadcastChannel<Char> {
+// hack to avoid late thread allocation, consider jvm process documentation
+//
+// >Because some native platforms only provide limited buffer size for standard input and output streams,
+// >failure to promptly write the input stream or read the output stream of the subprocess
+// >may cause the subprocess to block, or even deadlock."
+//
+// because we're allocating threads to 'pump' those streams,
+// the thread-allocation time might not be 'prompt' enough.
+internal fun CoroutineDispatcher.prestart(jobs: Int){
+
+    trace { "prestarting $jobs on $this, possible deadlock..." }
+
+    // this might well premature optimization
+    // TODO: microbenchmark? when is this helpful?
+    val latch = CountDownLatch(jobs)
+    for(jobId in 1 .. jobs){
+        launch(this) { latch.countDown() }
+    }
+
+    latch.await()
+
+    trace { "prestarted $jobs threads on $this" }
+}
+
+private class SourcedBroadcastChannel<T>(
+        private val broadcastChannel: BroadcastChannel<T>,
+        private val job: Job,
+        private val channelName: String
+): BroadcastChannel<T> by broadcastChannel {
+    suspend fun join() = job.join()
+
+    override fun toString(): String = "SourcedBroadcastChannel[source=$channelName]"
+
+    override fun openSubscription() = object: ReceiveChannel<T> by broadcastChannel.openSubscription() {
+        override fun toString() = "Subscription[source=$channelName]"
+    }
+}
+private fun InputStream.toPumpedReceiveChannel(channelName: String, config: ProcessBuilder): SourcedBroadcastChannel<Char> {
 
     val source = produce(capacity = UNLIMITED, context = blockableThread){
         val reader = BufferedReader(InputStreamReader(this@toPumpedReceiveChannel, config.encoding))
 
-        while(isActive){
-            val nextCodePoint = reader.read().takeUnless { it == -1 } ?: break
+        trace { "SOF on $channelName" }
+
+        while(isActive) {
+            val nextCodePoint = reader.read().takeUnless { it == -1 }
+            if(nextCodePoint == null){
+                trace { "EOF on $channelName" }
+                break
+            }
             val nextChar = nextCodePoint.toChar()
+
             send(nextChar)
         }
     }
 
-    val result = BroadcastChannel<Char>(config.charBufferSize).apply {
-        launch(Unconfined){
-            source.consumeEach { send(it) }
+    val result = BroadcastChannel<Char>(config.charBufferSize)
+    val job = launch(blockableThread){
+        try {
+            source.consumeEach { result.send(it) }
+        }
+        finally {
             close()
+            trace { "closed $channelName" }
         }
     }
 
-    return result
+    return SourcedBroadcastChannel(result, job, channelName)
 }
 
-//TODO: why isn't this part of kotlinx.coroutines already? Something they know I dont?
-internal suspend fun ReceiveChannel<Char>.lines() = produce<String>{
-    val buffer = StringBuilder(80)
-    var lastWasSlashR = false
-
-    for(nextChar in this@lines){
-
-        when(nextChar){
-            '\r' -> {
-                val line = buffer.toString().also { buffer.setLength(0) }
-                lastWasSlashR = true
-                send(line)
-            }
-            '\n' -> {
-                if( ! lastWasSlashR){
-                    val line = buffer.toString().also { buffer.setLength(0) }
-                    lastWasSlashR = false
-                    send(line)
-                }
-                else {
-                    lastWasSlashR = false
-                }
-            }
-            else -> {
-                buffer.append(nextChar)
-                lastWasSlashR = false
-            }
-        }
-    }
-}
 
 private fun OutputStream.toSendChannel(encoding: Charset = Charsets.UTF_8): SendChannel<Char> {
     return actor<Char>(blockableThread) {
@@ -223,6 +312,7 @@ private fun OutputStream.toSendChannel(encoding: Charset = Charsets.UTF_8): Send
             }
             catch (ex: FileNotFoundException) {
                 //writer was closed, process was terminated.
+                //TODO need a test to induce this, verify correctness.
                 return@actor
             }
         }
@@ -231,7 +321,6 @@ private fun OutputStream.toSendChannel(encoding: Charset = Charsets.UTF_8): Send
 internal sealed class Maybe<out T> {
     abstract val value: T
 }
-
 internal data class Supported<out T>(override val value: T): Maybe<T>()
 internal object Unsupported : Maybe<Nothing>() { override val value: Nothing get() = TODO() }
 
@@ -299,64 +388,3 @@ internal fun makeCompositImplementation(jvmRunningProcess: JProcess): ProcessFac
     return ZeroTurnaroundProcessFacade(jvmRunningProcess) thenTry ThreadBlockingResult(jvmRunningProcess)
 }
 
-
-internal class BufferredBroadcastChannel<T>(
-        val source: ReceiveChannel<T>,
-        private val broadcast: BroadcastChannel<T>
-): BroadcastChannel<T> by broadcast  {
-
-    private val buffer = CopyOnWriteArrayList<T>() //gaurded by mutex
-    private val mutex = Mutex()
-
-    init {
-        //TODO: does Unconfied get me what I want? who is the initial entry point?
-        //TBH a callback intrface is actually what I want here:
-        // source.onNext { nextElement -> .... }, where the lambda is called in the `send()`ers context.
-        launch(blockableThread){
-            source.consumeEach {
-                mutex.withLock {
-                    buffer += it
-                }
-                send(it)
-            }
-        }
-    }
-
-    private class Rest<T>(val subscription: ReceiveChannel<T>)
-
-    override fun openSubscription() = produce<T> {
-
-        var current = 0
-
-        while(true) {
-
-            val next: Any? /*T | Rest<ReceiveChannel<T>>*/ = mutex.withLock {
-                val result = if (current < buffer.size) buffer[current] else Rest(broadcast.openSubscription())
-                current += 1
-                result
-            }
-
-            if(next is Rest<*>){
-                val newSubscription = next.subscription as ReceiveChannel<T>
-                newSubscription.consumeEach {
-                    testing(it)
-                    send(it)
-                }
-                //TODO: so it seems
-                val x = 4;
-                break
-            }
-            else {
-                send(next as T)
-            }
-        }
-
-        val y = 4;
-    }
-
-}
-
-
-private fun testing(it: Any?){
-    val x = 4;
-}

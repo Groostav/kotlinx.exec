@@ -17,7 +17,7 @@ import kotlinx.coroutines.experimental.channels.SendChannel
  * 2. a set of lower level primatives for direct access std-in, std-err, std-out,
  *    and the process exit code as a SendChannel, ReceiveChannels, and a Deferred.
  *
- * [exec] and [execAsync] are the most concise process-builder factories.
+ * [execVoid] and [execAsync] are the most concise process-builder factories.
  */
 interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 

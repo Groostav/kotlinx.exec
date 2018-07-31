@@ -16,7 +16,7 @@ class WindowsTests {
 
     @Ignore("functional")
     @Test fun `when running calc should get a calc`() = runBlocking<Unit> {
-        val code = exec("calc.exe")
+        val code = execVoid("calc.exe")
 
         code shouldEqual 0
     }
@@ -24,7 +24,6 @@ class WindowsTests {
     @Test fun `when running simple echo statement should properly redirect`() = runBlocking<Unit> {
 
         val processSpec = ProcessBuilder().apply {
-            outputHandlingStrategy = OutputHandlingStrategy.Buffer
             command = listOf("cmd", "/C", "echo", "hello command line!")
         }
 
@@ -126,7 +125,7 @@ class WindowsTests {
         val result = runningOutputChannel.map { it.also { println(it) } }.toSet()
 
         //assert
-        result shouldEqual setOf(
+        assertEquals(setOf(
                 StandardOutput(line="Serious script(tm)(C)(R)"),
                 StandardOutput(line="Input the user name"),
                 StandardOutput(line="groostav"),
@@ -152,7 +151,7 @@ class WindowsTests {
                 StandardOutput(line="quit"),
                 StandardOutput(line="Have a nice day!"),
                 ExitCode(value=0)
-        )
+        ), result)
     }
 
     @Test fun `when using script with Write-Progress style progress bar should only see echo statements`() = runBlocking <Unit>{
@@ -208,6 +207,79 @@ class WindowsTests {
     }
 
     @Test fun `when looking for character streams should be relatively simple`(){
+        TODO()
+    }
+
+    @Test fun `when command returns non-zero exit code should throw by default`() = runBlocking<Unit>{
+        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
+
+        val thrown = try {
+            exec("powershell.exe",
+                    "-File", simpleScript,
+                    "-ThrowError",
+                    "-ExecutionPolicy", "Bypass"
+            )
+            null
+        }
+        catch(ex: InvalidExitValueException){ ex }
+
+        assertEquals("""
+            |exec 'powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass'
+            |exited with code 1 (expected one of '0')
+            |the most recent standard-error output was:
+            |this is an important message!
+            |At $simpleScript:12 char:5
+            |+     throw "this is an important message!"
+            |+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            |    + CategoryInfo          : OperationStopped: (this is an important message!:String) [], RuntimeException
+            |    + FullyQualifiedErrorId : this is an important message!
+            |${" "}
+            |
+        """.trimMargin().lines(), thrown?.message?.lines())
+//        TODO("this test is a flapper, put a breakpoint on the `lines()` extension function -> this test fails")
+    }
+
+    @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
+        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
+        val (lines, _) = exec {
+            command = listOf(
+                    "powershell.exe",
+                    "-File", simpleScript,
+                    "-ExitCode", "1",
+                    "-ExecutionPolicy", "Bypass"
+            )
+            expectedOutputCodes = setOf(1)
+        }
+
+        assertEquals(listOf<String>(
+                "env:GROOSTAV_ENV_VALUE is ''",
+                "Process finished with exit code 1"
+        ), lines)
+    }
+
+    @Test fun `when using dropping buffer should not attempt to cache any output`() = runBlocking<Unit>{
+        TODO()
+    }
+
+    @Test fun `when running with non standard env should do things`() = runBlocking<Unit> {
+        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
+        val (lines, _) = exec {
+            command = listOf(
+                    "powershell.exe",
+                    "-File", simpleScript,
+                    "-ExecutionPolicy", "Bypass"
+            )
+            environment += "GROOSTAV_ENV_VALUE" to "Testing!"
+        }
+
+        assertEquals(listOf<String>(
+                "env:GROOSTAV_ENV_VALUE is 'Testing!'",
+                "Process finished with exit code 0"
+        ), lines)
+
+    }
+
+    @Test fun `when syncing on exit code output should still be available`(){
         TODO()
     }
 
