@@ -1,12 +1,11 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.experimental.Unconfined
-import kotlinx.coroutines.experimental.channels.ReceiveChannel
-import kotlinx.coroutines.experimental.channels.consumeEach
-import kotlinx.coroutines.experimental.channels.produce
+import kotlinx.coroutines.experimental.channels.*
+import kotlinx.coroutines.experimental.launch
 
 //TODO: why isn't this part of kotlinx.coroutines already? Something they know I dont?
-internal suspend fun ReceiveChannel<Char>.lines(
+internal fun ReceiveChannel<Char>.lines(
         delimiters: List<String> = listOf("\r", "\n", "\r\n")
 ): ReceiveChannel<String> = produce<String>(Unconfined){
 
@@ -80,3 +79,37 @@ private class StateMachine(delimiters: List<String>) {
 }
 
 enum class State { NoMatch, NewMatch, ContinuedMatch }
+
+
+internal fun <T> ReceiveChannel<T>.backPressureFreeMostRecent(bufferSize: Int): Channel<T> {
+
+    val buffer = ArrayChannel<T>(bufferSize) //TODO CharArrayChannel?
+    launch(Unconfined) {
+        try {
+            for (item in this@backPressureFreeMostRecent) {
+                buffer.pushBack(item)
+            }
+        }
+        finally {
+            buffer.close()
+        }
+    }
+
+    return buffer
+}
+
+private inline suspend fun <T> ArrayChannel<T>.pushBack(next: T){
+    try {
+        while (!offer(next)) {
+            receiveOrNull()
+        }
+    }
+    catch(ex: ClosedSendChannelException){
+        // means we cant take anymore ever, so throw for cancellation of parent
+        throw ex
+    }
+    catch(ex: ClosedReceiveChannelException){
+        // ignore, this means we couldnt drop the element and wont be able to make space,
+        // but space might still open up.
+    }
+}

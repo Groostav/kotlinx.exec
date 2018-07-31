@@ -1,6 +1,7 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.experimental.CancellationException
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.channels.Channel.Factory.UNLIMITED
 import kotlinx.coroutines.experimental.selects.SelectClause1
@@ -11,14 +12,10 @@ import kotlinx.coroutines.experimental.sync.withLock
 import java.io.*
 import java.nio.charset.Charset
 import java.util.*
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.*
 
 import java.lang.ProcessBuilder as JProcBuilder
 import java.lang.Process as JProcess
-
-import java.util.concurrent.SynchronousQueue
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
 
 internal val TRACE = true
 
@@ -38,26 +35,18 @@ internal class RunningProcessImpl(
 
     override val processID: Int = processControlWrapper.pid.value
 
-    private val _standardOutput: SourcedBroadcastChannel<Char> = process.inputStream.toPumpedReceiveChannel("std-out-$processID", config)
-    private val _standardError: SourcedBroadcastChannel<Char> = process.errorStream.toPumpedReceiveChannel("std-err-$processID", config)
-    private val _standardInput: SendChannel<Char> = process.outputStream.toSendChannel(config.encoding)
-    private val inputLineLock = Mutex()
+    ///////////////////////////////////////////////////////////////////
+    // output
 
-    private val standardOutputLines: BroadcastChannel<String> by lazy { BroadcastChannel<String>(10).apply {
-        launch(blockableThread) {
-            _standardOutput.openSubscription().lines(config.delimiters).consumeEach { send(it) }
-        }
-    }}
-    private val standardErrorLines: BroadcastChannel<String> by lazy { BroadcastChannel<String>(10).apply {
-        launch(blockableThread) {
-            _standardError.openSubscription().lines(config.delimiters).consumeEach { send(it) }
-        }
-    }}
+    private val _standardOutput: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(process.inputStream.toPumpedReceiveChannel("std-out-$processID", config))
+    private val _standardOutputLines: SimpleInlineMulticaster<String> by lazy { SimpleInlineMulticaster(_standardOutput.openSubscription().lines(config.delimiters)) }
+    private val _standardError: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(process.errorStream.toPumpedReceiveChannel("std-err-$processID", config))
+    private val _standardErrorLines: SimpleInlineMulticaster<String> by lazy { SimpleInlineMulticaster(_standardError.openSubscription().lines(config.delimiters)) }
 
     val errorHistory = async<Queue<String>> {
         val result = LinkedList<String>()
         if (config.linesForExceptionError > 0) {
-            standardErrorLines.openSubscription().consumeEach {
+            _standardErrorLines.openSubscription().consumeEach {
                 result.addLast(it)
                 if (result.size > config.linesForExceptionError) {
                     result.removeFirst()
@@ -67,10 +56,20 @@ internal class RunningProcessImpl(
         result
     }
 
-    private val killLock = Mutex()
+    override val standardOutput: ReceiveChannel<Char> by lazy {
+        _standardOutput.openSubscription().backPressureFreeMostRecent(config.charBufferSize)
+    }
+    override val standardError: ReceiveChannel<Char> by lazy {
+        _standardError.openSubscription().backPressureFreeMostRecent(config.charBufferSize)
+    }
 
-    override val standardOutput: ReceiveChannel<Char> by lazy { _standardOutput.openSubscription() }
-    override val standardError: ReceiveChannel<Char> by lazy { _standardError.openSubscription() }
+
+    ///////////////////////////////////////////////////////////////////
+    // input
+
+    private val _standardInput: SendChannel<Char> = process.outputStream.toSendChannel(config.encoding)
+    private val inputLineLock = Mutex()
+
     override val standardInput: SendChannel<Char> by lazy { actor<Char> {
         consumeEach {
             inputLineLock.withLock {
@@ -80,6 +79,24 @@ internal class RunningProcessImpl(
         _standardInput.close()
     }}
 
+    private val inputLines by lazy {
+        actor<String> {
+            consumeEach { nextLine ->
+                inputLineLock.withLock {
+                    nextLine.forEach { _standardInput.send(it) }
+                    System.lineSeparator().forEach { _standardInput.send(it) }
+                }
+            }
+        }
+    }
+
+
+
+
+
+
+    private val killLock = Mutex()
+
     private val _exitCode: CompletableDeferred<Int> = CompletableDeferred<Int>().apply {
         processControlWrapper.addCompletionHandle().value { result ->
             launch(blockableThread) {
@@ -88,21 +105,6 @@ internal class RunningProcessImpl(
 
                 _standardOutput.join()
                 _standardError.join()
-
-                standardErrorLines.join() //this is the problem
-                //the broadcast channel, the way I've implemented it above for _standardOutput and _stdErr,
-                // is that the join() method blocks until the producer is done,
-                // but it gives no way to know how much back pressure the subscribers are offering
-                // it seems like right now, there simply isnt any way for something like
-                standardErrorLines.dispatchAllRemainingJobsAndClose()
-                //the invokeOnClose() method might do it: https://github.com/Kotlin/kotlinx.coroutines/issues/341
-                // remember that broadcast channels will sink any back-pressure put on them and offer no pressure
-                // to the channel they pull from. In that way they act like a 'kink' in the reciever-channel flow:
-                // if a particular subscriber is slow, they prevent the upstream from knowing about it.
-                // this also explains why for example the error line facility *sometimes* looses lines, its simply that
-                // no amount of careful join logic can gaurentee that all subscribers of a broadcase channel are finished.
-                // but, building a simple multiplexing channel shouldnt be so-hard right?
-                standardOutputLines.join()
 
                 trace { "$processID std-err and std-out closed, complete with exitValue=$result" }
 
@@ -166,16 +168,6 @@ internal class RunningProcessImpl(
 
     override suspend fun join(): Unit = _exitCode.join()
 
-    private val inputLines by lazy {
-        actor<String> {
-            consumeEach { nextLine ->
-                inputLineLock.withLock {
-                    nextLine.forEach { _standardInput.send(it) }
-                    System.lineSeparator().forEach { _standardInput.send(it) }
-                }
-            }
-        }
-    }
 
     //SendChannel
     override val isClosedForSend: Boolean get() = inputLines.isClosedForSend
@@ -186,10 +178,10 @@ internal class RunningProcessImpl(
     override fun close(cause: Throwable?) = inputLines.close(cause)
 
     private val aggregateChannel by lazy {
-        produce<ProcessEvent> {
+        val actual = produce<ProcessEvent> {
 
-            val errorLines = standardErrorLines.openSubscription()
-            val outputLines = standardOutputLines.openSubscription()
+            val errorLines = _standardErrorLines.openSubscription()
+            val outputLines = _standardOutputLines.openSubscription()
 
             while (isActive) {
                 val next = select<ProcessEvent?> {
@@ -206,6 +198,8 @@ internal class RunningProcessImpl(
                 if (next is ExitCode) return@produce
             }
         }
+
+        return@lazy actual.backPressureFreeMostRecent(config.charBufferSize / 80)
     }
 
     //ReceiveChannel
@@ -266,9 +260,9 @@ private class SourcedBroadcastChannel<T>(
         override fun toString() = "Subscription[source=$channelName]"
     }
 }
-private fun InputStream.toPumpedReceiveChannel(channelName: String, config: ProcessBuilder): SourcedBroadcastChannel<Char> {
+private fun InputStream.toPumpedReceiveChannel(channelName: String, config: ProcessBuilder): ReceiveChannel<Char> {
 
-    val source = produce(capacity = UNLIMITED, context = blockableThread){
+    return produce(capacity = UNLIMITED, context = blockableThread){
         val reader = BufferedReader(InputStreamReader(this@toPumpedReceiveChannel, config.encoding))
 
         trace { "SOF on $channelName" }
@@ -284,19 +278,6 @@ private fun InputStream.toPumpedReceiveChannel(channelName: String, config: Proc
             send(nextChar)
         }
     }
-
-    val result = BroadcastChannel<Char>(config.charBufferSize)
-    val job = launch(blockableThread){
-        try {
-            source.consumeEach { result.send(it) }
-        }
-        finally {
-            close()
-            trace { "closed $channelName" }
-        }
-    }
-
-    return SourcedBroadcastChannel(result, job, channelName)
 }
 
 
@@ -388,3 +369,33 @@ internal fun makeCompositImplementation(jvmRunningProcess: JProcess): ProcessFac
     return ZeroTurnaroundProcessFacade(jvmRunningProcess) thenTry ThreadBlockingResult(jvmRunningProcess)
 }
 
+
+class SimpleInlineMulticaster<T>(val source: ReceiveChannel<T>) {
+
+    private val subs = CopyOnWriteArrayList<Channel<T>>()
+    private val sourceJob: Job
+
+    init {
+        sourceJob = launch(Unconfined){
+            source.consumeEach { next ->
+                for(sub in subs){
+                    sub.send(next)
+                    // apply back-pressure from _all_ subs,
+                    // suspending the upstream until all children are satisfied.
+                }
+            }
+        }
+    }
+
+    fun openSubscription(): ReceiveChannel<T>{
+        val subscription = RendezvousChannel<T>()
+        subs += subscription
+        return subscription
+    }
+
+    // suspends until source is empty and all elements have been dispatched to all subscribers.
+    // key functional difference here vs BroadcastChannel.
+    suspend fun join(): Unit {
+        sourceJob.join()
+    }
+}
