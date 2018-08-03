@@ -7,74 +7,133 @@ import kotlinx.coroutines.experimental.launch
 //TODO: why isn't this part of kotlinx.coroutines already? Something they know I dont?
 internal fun ReceiveChannel<Char>.lines(
         delimiters: List<String> = listOf("\r", "\n", "\r\n")
-): ReceiveChannel<String> = produce<String>(Unconfined){
+): ReceiveChannel<String> {
+    val result = produce<String>(Unconfined){
 
-    trace { "starting 'lines' on ${this@lines}" }
+        trace { "starting lines-${this@lines}" }
 
-    val buffer = StringBuilder(80)
-    fun StringBuilder.takeAndClear(): String = toString().also { buffer.setLength(0) }
+        val buffer = StringBuilder(80)
 
-    val stateMachine = StateMachine(delimiters)
+        val stateMachine = LineSeparatingStateMachine(delimiters)
 
-    this@lines.consumeEach { nextChar ->
+        this@lines.consumeEach { nextChar ->
 
-        val newState = stateMachine.translate(nextChar)
+            val newState = stateMachine.translate(nextChar)
 
-        when(newState){
-            State.NoMatch -> {
-                buffer.append(nextChar)
-            }
-            State.NewMatch -> {
-                val line = buffer.takeAndClear()
-                send(line)
-            }
-            State.ContinuedMatch -> {
-                //noop, drop the character.
-            }
+            doThings(newState, buffer, nextChar)
         }
-    }
-    if (!buffer.isEmpty()) {
-        send(buffer.takeAndClear())
+        if (!buffer.isEmpty()) {
+            send(buffer.takeAndClear())
+        }
+
+        trace { "finished lines-${this@lines}" }
     }
 
-    trace { "No more lines on ${this@lines}" }
+    return object: ReceiveChannel<String> by result {
+        override fun toString() = "lines-${this@lines}"
+    }
 }
 
-private class StateMachine(delimiters: List<String>) {
+private fun StringBuilder.takeAndClear(): String = toString().also { setLength(0) }
+
+private suspend fun ProducerScope<String>.doThings(newState: State, buffer: StringBuilder, nextChar: Char) {
+    when (newState) {
+        State.NoMatch -> {
+            buffer.append(nextChar)
+        }
+        State.NewMatch -> {
+            val line = buffer.takeAndClear()
+            send(line)
+        }
+        State.ContinuedMatch -> {
+            //noop, drop the character.
+        }
+    }
+}
+
+private class LineSeparatingStateMachine(delimiters: List<String>) {
     val delimeterMatrix: Array<CharArray> = delimiters.map { it.toCharArray() }.toTypedArray()
     var currentMatchColumn: Int = -1
     val activeRows: MutableSet<Int> = (0 until delimeterMatrix.size).toHashSet()
 
     var previousState: State = State.NoMatch
 
+    //TODO: can I make this immutable and fast?
     fun translate(next: Char): State {
 
-        currentMatchColumn += 1
+        // strategy:
+        // array delimieters into a jaggad matrix,
+        // where rows are 'delimiter strings' (eg \r\n)
+        // keep an index indicating the current 'column' being checked.
+        // and keep a set of "still feasible rows" (activeRows),
+        // these are the indexes of rows that still match the provided character.
+        // as we see new characters, increment the column index and see if
+        // any of the rows at that index match the current character.
 
+        // for example, given we have delimeters d1="\r\n" and d2="\n",
+        // and we'er parsing the string "a\r\nb", we would do
+        //
+        // initialization:
+        //   activeRows initialized to setOf(indexOf(d1), indexOf(d2)) == setOf(0, 1)
+        //   currentMatchColumn = -1,
+        //   currentState = NoMatch
+        //
+        // translate('a') =>
+        //    activeRows => removes d1 because \r isnt 'a', d2 because '\n' isnt 'a' => == emptySet()
+        //    newstate is NoMatch because activeRows.isEmpty()
+        //    currentMatchColumn set to -1 because activeRows isEmpty
+        //    activeRows reset to setOf(0, 1)
+        // translate('\r') =>
+        //    activeRows keeps d1, removes d2 because '\r' isnt '\n'
+        //    nextState is NewMatch because activeRows.any() and previousState == NoMatch
+        //    currentMatchColumn is 0
+        // translate('\n') =>
+        //    activeRows keeps d1 because '\n' is '\n', no changes
+        //    newState is ContinuedMatch because activeRows.any() and previousState == NewMatch
+        //    currentMatchColumn is 1
+        // translate('b') =>
+        //    activeRows removes d1 because 'b' isnt '\n'
+        //    newState is NoMatch because activeRows isEmpty
+        //    activeRows reset to setOf(0, 1)
+        //    currentMatchColumn is reset to -1
+
+        //update active-rows
+        moveNext(next)
+
+        if(activeRows.isEmpty()){
+            //try a new match
+            reset()
+            moveNext(next)
+        }
+
+        //generate new state
+        val nextState = when {
+            activeRows.isEmpty() -> State.NoMatch
+            currentMatchColumn == 0 -> State.NewMatch
+            previousState == State.NoMatch -> State.NewMatch
+            previousState == State.NewMatch -> State.ContinuedMatch
+            previousState == State.ContinuedMatch -> State.ContinuedMatch
+            else -> TODO()
+        }
+
+        if(nextState == State.NoMatch){ reset() }
+
+        previousState = nextState
+
+        return nextState
+    }
+
+    private fun reset() {
+        currentMatchColumn = -1
+        activeRows += (0 until delimeterMatrix.size)
+    }
+
+    private fun moveNext(next: Char) {
+        currentMatchColumn += 1
         activeRows.removeIf { activeRowIndex ->
             val row = delimeterMatrix[activeRowIndex]
             row.size == currentMatchColumn || row[currentMatchColumn] != next
         }
-
-        val nextState = when (previousState) {
-            State.NoMatch -> {
-                if (activeRows.any()) State.NewMatch else State.NoMatch
-            }
-            State.NewMatch -> {
-                if (activeRows.any()) State.ContinuedMatch else State.NoMatch
-            }
-            State.ContinuedMatch -> {
-                if (activeRows.any()) State.ContinuedMatch else State.NoMatch
-            }
-        }
-
-        if(activeRows.isEmpty()){
-            currentMatchColumn = -1
-            activeRows.run { addAll(0 until delimeterMatrix.size) }
-        }
-        previousState = nextState
-
-        return nextState
     }
 }
 
@@ -83,11 +142,15 @@ enum class State { NoMatch, NewMatch, ContinuedMatch }
 
 internal fun <T> ReceiveChannel<T>.backPressureFreeMostRecent(bufferSize: Int): Channel<T> {
 
-    val buffer = ArrayChannel<T>(bufferSize) //TODO CharArrayChannel?
+    trace { "allocated $bufferSize for $this" }
+
+    val buffer = object: ArrayChannel<T>(bufferSize) {
+        override fun toString() = "bpf-${this@backPressureFreeMostRecent}"
+    }
     launch(Unconfined) {
         try {
             for (item in this@backPressureFreeMostRecent) {
-                buffer.pushBack(item)
+                buffer.pushForward(item)
             }
         }
         finally {
@@ -98,10 +161,13 @@ internal fun <T> ReceiveChannel<T>.backPressureFreeMostRecent(bufferSize: Int): 
     return buffer
 }
 
-private inline suspend fun <T> ArrayChannel<T>.pushBack(next: T){
+private suspend inline fun <T> ArrayChannel<T>.pushForward(next: T){
     try {
         while (!offer(next)) {
-            receiveOrNull()
+            val bumpedElement = receiveOrNull()
+            if (bumpedElement != null){
+                trace { "WARN: back-pressure forced drop '$bumpedElement' from ${this@pushForward}" }
+            }
         }
     }
     catch(ex: ClosedSendChannelException){

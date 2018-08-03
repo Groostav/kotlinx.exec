@@ -1,10 +1,6 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.channels.ReceiveChannel
-import kotlinx.coroutines.experimental.channels.any
-import kotlinx.coroutines.experimental.channels.map
-import kotlinx.coroutines.experimental.channels.toList
-import java.nio.charset.Charset
+import kotlinx.coroutines.experimental.channels.*
 import java.lang.ProcessBuilder as JProcBuilder
 
 internal fun execAsync(config: ProcessBuilder): RunningProcess {
@@ -15,7 +11,9 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
     blockableThread.prestart(2)
     val jvmRunningProcess = jvmProcessBuilder.start()
 
-    val processControllerFacade: ProcessFacade = makeCompositImplementation(jvmRunningProcess)
+    //TODO: using a lateinit flow with `facade.init(jvmRunningProcess)` would allow you to re-order this
+    // and avoid the object allocations in this time-sensitive spot.
+    val processControllerFacade: ProcessControlFacade = makeCompositImplementation(jvmRunningProcess)
 
     return RunningProcessImpl(config, jvmRunningProcess, processControllerFacade)
 }
@@ -25,13 +23,29 @@ fun execAsync(commandFirst: String, vararg commandRest: String): RunningProcess 
     command = listOf(commandFirst) + commandRest.toList()
 }
 
-suspend fun exec(config: ProcessBuilder.() -> Unit): Pair<List<String>, Int>
-        = execAsync(processBuilder(config)).run { map { it.toDefaultString() }.toList() to exitCode.await() }
+suspend fun exec(config: ProcessBuilder.() -> Unit): Pair<List<String>, Int> {
+    val runningProcess = execAsync(processBuilder(config))
+    runningProcess.exitCode.await()
+
+    val output = runningProcess
+            .filter { it !is ExitCode }
+            .map { it.toDefaultString() }
+
+    return output.toList() to runningProcess.exitCode.getCompleted()
+}
 
 suspend fun exec(commandFirst: String, vararg commandRest: String): Pair<List<String>, Int>
         = exec { command = listOf(commandFirst) + commandRest }
 
-suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int = execAsync(processBuilder(config)).exitCode.await()
+suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
+    val configActual = processBuilder {
+        lineBufferSize = 0
+//        standardOutputCharBuffer = 0
+
+        config()
+    }
+    return execAsync(configActual).exitCode.await()
+}
 suspend fun execVoid(commandFirst: String, vararg commandRest: String) = execVoid {
     command = listOf(commandFirst) + commandRest.toList()
 }

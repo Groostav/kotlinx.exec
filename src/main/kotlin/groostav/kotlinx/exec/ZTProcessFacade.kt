@@ -3,13 +3,13 @@ package groostav.kotlinx.exec
 import org.zeroturnaround.process.Processes
 import org.zeroturnaround.process.WindowsProcess
 
-internal class ZeroTurnaroundProcessFacade(val process: Process): ProcessFacade {
+internal class ZeroTurnaroundProcessFacade(val process: Process): ProcessControlFacade {
 
     val pidProcess = Processes.newPidProcess(process)
 
     override val pid: Maybe<Int> = Supported(pidProcess.pid)
 
-    override fun killGracefully(includeDescendants: Boolean): Maybe<Unit> {
+    override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
 
         when(pidProcess){
             is WindowsProcess -> {
@@ -27,7 +27,7 @@ internal class ZeroTurnaroundProcessFacade(val process: Process): ProcessFacade 
         return Supported(Unit)
     }
 
-    override fun killForcefully(includeDescendants: Boolean): Maybe<Unit> {
+    override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
 
         when(pidProcess){
             is WindowsProcess -> {
@@ -43,6 +43,7 @@ internal class ZeroTurnaroundProcessFacade(val process: Process): ProcessFacade 
         return Supported(Unit)
     }
 
-    override fun addCompletionHandle(): Maybe<ResultEventSource> = Unsupported
+    override val completionEvent: Maybe<ResultEventSource>
+        get() = Unsupported
 
 }

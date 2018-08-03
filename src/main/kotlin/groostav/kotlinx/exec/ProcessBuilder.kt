@@ -12,13 +12,85 @@ data class ProcessBuilder internal constructor(
         var environment: Map<String, String> = System.getenv(),
 
         var delimiters: List<String> = listOf("\r", "\n", "\r\n"),
+
+        // this sucks, cant use delimeters because you might flush \r separately from \n.
+        // which does illicit a different behaviour from powershell.
+        var inputFlushMarker: Char = '\n',
+
+
         var encoding: Charset = Charsets.UTF_8,
+
+        /**
+         * Amount of raw-character output to buffer.
+         *
+         * This value controls the number of characters buffered for both standard-error and standard-out
+         * streams.
+         *
+         * It is used when the output process produces one or several characters on either stream and the
+         * stream consumers have not yet processed those values. In the event this buffer is filled, the oldest
+         * values are dropped to make room, giving a behaviour similar to posix `tail`.
+         *
+         * Other buffers may be acquired as part of the child APIs,
+         * namely the [java.lang.Process.getInputStream]'s representation of standard-output
+         * is buffered by a default [java.io.BufferedInputStream.DEFAULT_BUFFER_SIZE]
+         * at time of writing. There is, to my knowledge, no strategy to change this buffer short of
+         * class-loader or byte-code manipulations.
+         */
         var charBufferSize: Int = 8192,
 
+        /**
+         * Number of lines to buffer in the aggregate channel
+         *
+         * This value controls the number of lines of combined standard-output and standard-error
+         * that will be kept by the running process. In the event that this buffer is filled,
+         * the oldest line will be dropped, giving a behaviour similar to posix `tail`.
+         */
+        var lineBufferSize: Int = charBufferSize / 80,
+
+        /**
+         * The amount of time to wait before considering a SIG_INT kill command to have failed.
+         *
+         * Using a time of zero will result in no SIG_INT signals at all, instead using only kill -9,
+         * or similar techniques.
+         */
         var gracefulTimeousMillis: Long = 1500L,
+
+        /**
+         * Indication of whether a `kill` call should be interpreted a _kill process-tree_ or _kill (single process)_
+         *
+         * if `true`, this may subsantially increase the time the `kill` command takes.
+         */
+        // TODO: what about a docker-style program, that quickly forks child-processes and the exits?
+        // can we call `kill(includeDescendants=true)` on a process thats already stopped, in an attempt
+        // to end its child processes?
+        // Such a feature would involve a graph traversal problem similar to those of the GC.
         var includeDescendantsInKill: Boolean = false,
 
+        /**
+         * Indication of how exit values should be interpreted, wherein 'normal' or 'success' exit codes result
+         * in regular `return` statements, and 'error' or 'failure' exit codes result in thrown exceptions.
+         *
+         * How this set is interpreted:
+         *
+         * 1. If a process exits with a code that is in this list, then calls to [RunningProcess.exitCode]
+         *    will yield that value.
+         * 2. If the list is empty, all exit codes will be treated as valid and be yielded from
+         *    [RunningProcess.exitCode]
+         * 3. If a process exists with a code that is not in this list
+         *    and the list is not empty, a [InvalidExitValueException] is thrown by [RunningProcess.exitCode].
+         */
         var expectedOutputCodes: Set<Int> = setOf(0),
+
+        /**
+         * Number of lines to be kept for generation of the exception on a bad exit code.
+         *
+         * [InvalidExitValueException]s are thrown when an unexpected exit code is generatated,
+         * those exceptions include a message that contains the most recent messages written to standard-error.
+         * This value changes the number of lines that will be buffered for the purpose of generating that message.
+         *
+         * Setting this value to zero will disable standard-error buffering for the purposes
+         * of stack-trace generation entirely.
+         */
         var linesForExceptionError: Int = 15
 )
 
@@ -27,13 +99,14 @@ internal fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessB
             command = it.command.toList(),
             delimiters = it.delimiters.toList(),
             expectedOutputCodes = it.expectedOutputCodes.toSet(),
-            environment = it.environment.toMap()
+            environment = if(it.environment === System.getenv()) it.environment else it.environment.toMap()
     )}
 
     result.apply {
         require(command.any()) { "cannot exec empty command: $this" }
         require(command.all { '\u0000' !in it }) { "cannot exec command with null character: $this"}
         require(charBufferSize >= 0) { "cannot exec with output buffer size less than zero: $this"}
+        require(delimiters.all { it.any()}) { "cannot parse output lines with empty delimeter: $this" }
     }
 
     return result

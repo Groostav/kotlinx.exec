@@ -85,6 +85,8 @@ class WindowsTests {
         stdout.size shouldBeGreaterThan ((5000-1) / 500)
     }
 
+    val IP_REGEX = Regex("(\\d+\\.){3}\\d+")
+
     @Test fun channels_should_make_the_shell_interactive() = runBlocking<Unit>{
 
         //setup
@@ -98,14 +100,15 @@ class WindowsTests {
             val domainsToTry: Queue<String> = queueOf("jetbrains.com", "asdf.asdf.asdf.12345.!!!")
 
             consumeEach { nextInput ->
-                testing(nextInput)
                 when(nextInput.outputQuestionLine) {
                     "Input the user name" -> nextInput.response.complete("groostav")
                     "Input your server name, or 'quit' to exit" -> {
                         val next = domainsToTry.poll() ?: "quit"
                         nextInput.response.complete(next)
                     }
-                    else -> nextInput.response.complete(null)
+                    else -> {
+                        nextInput.response.complete(null)
+                    }
                 }
             }
         }
@@ -122,36 +125,46 @@ class WindowsTests {
             }
             is ExitCode -> event
         }}
-        val result = runningOutputChannel.map { it.also { println(it) } }.toSet()
+        val result = runningOutputChannel
+                .map { (it as? StandardOutput)?.run { copy(line = line.replace(IP_REGEX, "1.2.3.4"))} ?: it }
+                .map { it.also { trace { it.toString() } } }
+                .toList()
 
         //assert
-        assertEquals(setOf(
-                StandardOutput(line="Serious script(tm)(C)(R)"),
-                StandardOutput(line="Input the user name"),
-                StandardOutput(line="groostav"),
-                StandardOutput(line="Input your server name, or 'quit' to exit"),
-                StandardOutput(line="jetbrains.com"),
-                StandardOutput(line="Sorry groostav, jetbrains.com is already at 54.225.64.222"), //TODO: this IP changes... herp derp.
-                StandardOutput(line="Input your server name, or 'quit' to exit"),
-                StandardOutput(line="asdf.asdf.asdf.12345.!!!"),
+        val expectedAlmostSequence = listOf(
+                StandardOutput(line = "Serious script(tm)(C)(R)"),
+                StandardOutput(line = "Input the user name"),
+                StandardOutput(line = "groostav"),
+                StandardOutput(line = "Input your server name, or 'quit' to exit"),
+                StandardOutput(line = "jetbrains.com"),
+                StandardOutput(line = "Sorry groostav, jetbrains.com is already at 1.2.3.4"),
+                StandardOutput(line = "Input your server name, or 'quit' to exit"),
+                StandardOutput(line = "asdf.asdf.asdf.12345.!!!"),
 
-                // regarding order: there is a race condition here
-                // the next output line could come before this,
-                // so to stave-off the flapper I'm doing set equality rather than list equality.
-                StandardError(line="Resolve-DnsName : asdf.asdf.asdf.12345.!!! : DNS name contains an invalid character"),
-                StandardError(line="At $testScript:12 char:22"),
-                StandardError(line="+     \$ServerDetails = Resolve-DnsName \$Server"),
-                StandardError(line="+                      ~~~~~~~~~~~~~~~~~~~~~~~"),
-                StandardError(line="    + CategoryInfo          : ResourceUnavailable: (asdf.asdf.asdf.12345.!!!:String) [Resolve-DnsName], Win32Exception"),
-                StandardError(line="    + FullyQualifiedErrorId : DNS_ERROR_INVALID_NAME_CHAR,Microsoft.DnsClient.Commands.ResolveDnsName"),
-                StandardError(line=" "),
+                StandardError(line = "Resolve-DnsName : asdf.asdf.asdf.12345.!!! : DNS name contains an invalid character"),
+                StandardError(line = "At $testScript:12 char:22"),
+                StandardError(line = "+     \$ServerDetails = Resolve-DnsName \$Server"),
+                StandardError(line = "+                      ~~~~~~~~~~~~~~~~~~~~~~~"),
+                StandardError(line = "    + CategoryInfo          : ResourceUnavailable: (asdf.asdf.asdf.12345.!!!:String) [Resolve-DnsName], Win32Exception"),
+                StandardError(line = "    + FullyQualifiedErrorId : DNS_ERROR_INVALID_NAME_CHAR,Microsoft.DnsClient.Commands.ResolveDnsName"),
+                StandardError(line = " "),
 
-                StandardOutput(line="you're in luck groostav, asdf.asdf.asdf.12345.!!! isnt taken!"),
-                StandardOutput(line="Input your server name, or 'quit' to exit"),
-                StandardOutput(line="quit"),
-                StandardOutput(line="Have a nice day!"),
-                ExitCode(value=0)
-        ), result)
+                StandardOutput(line = "you're in luck groostav, asdf.asdf.asdf.12345.!!! isnt taken!"),
+                StandardOutput(line = "Input your server name, or 'quit' to exit"),
+                StandardOutput(line = "quit"),
+                StandardOutput(line = "Have a nice day!"),
+                ExitCode(value = 0)
+        )
+
+        // regarding order: there is a race condition here
+        // individual lines have happens-before, but the mixing of standard-error and standard-out isn't fixed here,
+        // so to avoid flappers, we'll do set equality on the whole thing,
+        // then sequence equality on the channels separately.
+        // assertEquals(expectedAlmostSequence, result) passes _most_ of the time.
+        assertEquals(expectedAlmostSequence.toSet(), result.toSet())
+        assertEquals(expectedAlmostSequence.filterIsInstance<StandardOutput>(), result.filterIsInstance<StandardOutput>())
+        assertEquals(expectedAlmostSequence.filterIsInstance<StandardError>(), result.filterIsInstance<StandardError>())
+        assertEquals(expectedAlmostSequence.last(), result.last())
     }
 
     @Test fun `when using script with Write-Progress style progress bar should only see echo statements`() = runBlocking <Unit>{
@@ -206,10 +219,6 @@ class WindowsTests {
 
     }
 
-    @Test fun `when looking for character streams should be relatively simple`(){
-        TODO()
-    }
-
     @Test fun `when command returns non-zero exit code should throw by default`() = runBlocking<Unit>{
         val simpleScript = getLocalResourcePath("SimpleScript.ps1")
 
@@ -258,7 +267,21 @@ class WindowsTests {
     }
 
     @Test fun `when using dropping buffer should not attempt to cache any output`() = runBlocking<Unit>{
-        TODO()
+        //setup
+        val simpleScript = getLocalResourcePath("MultilineScript.ps1")
+
+        //act
+        val (output, code) = exec {
+            lineBufferSize = 1
+            command = listOf(
+                    "powershell.exe",
+                    "-File", simpleScript,
+                    "-ExecutionPolicy", "Bypass"
+            )
+        }
+
+        //assert
+        assertEquals(listOf<String>("nextline!"), output)
     }
 
     @Test fun `when running with non standard env should do things`() = runBlocking<Unit> {
@@ -279,8 +302,23 @@ class WindowsTests {
 
     }
 
-    @Test fun `when syncing on exit code output should still be available`(){
-        TODO()
+    @Test fun `when syncing on exit code output should still be available`() = runBlocking<Unit> {
+        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
+        val runningProcess = execAsync {
+            command = listOf(
+                    "powershell.exe",
+                    "-File", simpleScript,
+                    "-ExecutionPolicy", "Bypass"
+            )
+        }
+        val exitCode = runningProcess.exitCode.await()
+        val lines = runningProcess.toList()
+
+        assertEquals(listOf<ProcessEvent>(
+                StandardOutput("env:GROOSTAV_ENV_VALUE is ''"),
+                ExitCode(0)
+        ), lines)
+
     }
 
     private fun getLocalResourcePath(localName: String): String {
@@ -289,10 +327,6 @@ class WindowsTests {
         return resource
     }
 
-}
-
-internal fun testing(arg: Any? = null){
-    val x = 4;
 }
 
 data class DomainModel(val data: String)
