@@ -6,12 +6,13 @@ import kotlinx.coroutines.experimental.channels.ReceiveChannel
 import kotlinx.coroutines.experimental.channels.RendezvousChannel
 import kotlinx.coroutines.experimental.channels.consumeEach
 import kotlinx.coroutines.experimental.launch
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 // the express purpose of this object is to block on send,
 // adhere to all back-pressure provided by any of the subscribers!
 // in this way we pass on any problems back up to source!
-class SimpleInlineMulticaster<T> {
+class SimpleInlineMulticaster<T>(val name: String) {
 
     sealed class State<T> {
         data class Registration<T>(val subs: List<RendezvousChannel<T>> = emptyList()): State<T>()
@@ -22,6 +23,11 @@ class SimpleInlineMulticaster<T> {
     private val state: AtomicReference<State<T>> = AtomicReference(State.Registration())
     private var source: ReceiveChannel<T>? = null
     private val sourceJob = CompletableDeferred<Unit>()
+    private val subId = AtomicInteger(0)
+
+    init {
+        trace { "instanced $this" }
+    }
 
     fun start(source: ReceiveChannel<T>) {
 
@@ -36,10 +42,10 @@ class SimpleInlineMulticaster<T> {
         if(newState is State.Running){
 
             this.source = source
+            trace { "publishing src=$source to $this, locked-in subs: ${newState.subs.joinToString()}" }
 
             launch(Unconfined) {
                 try {
-                    trace { "started ${this@SimpleInlineMulticaster}" }
                     source.consumeEach { next ->
                         for (sub in newState.subs) {
                             sub.send(next)
@@ -47,7 +53,6 @@ class SimpleInlineMulticaster<T> {
                             // suspending the upstream until all children are satisfied.
                         }
                     }
-                    trace { "${this@SimpleInlineMulticaster} saw EOF, closing subs" }
                 }
                 finally {
                     shutdown()
@@ -67,6 +72,7 @@ class SimpleInlineMulticaster<T> {
         }
 
         if(previous is State.Running){
+            trace { "${this@SimpleInlineMulticaster} saw EOF, closing subs" }
             sourceJob.complete(Unit)
             previous.subs.forEach { it.close() }
             trace { "all subs of ${this@SimpleInlineMulticaster} closed" }
@@ -80,7 +86,8 @@ class SimpleInlineMulticaster<T> {
                 is State.Registration<T> -> {
 
                     val subscription = object: RendezvousChannel<T>() {
-                        override fun toString() = "sub-$source"
+                        val id = subId.incrementAndGet()
+                        override fun toString() = "sub$id-$name"
                     }
 
                     State.Registration(it.subs + subscription)
@@ -92,7 +99,7 @@ class SimpleInlineMulticaster<T> {
 
         if(registered is State.Registration<T>){
             val subscription = registered.subs.last()
-            trace { "opened $subscription" }
+            trace { "opened $subscription from ${this@SimpleInlineMulticaster}" }
             return subscription
         }
         else {
@@ -103,10 +110,9 @@ class SimpleInlineMulticaster<T> {
     // suspends until source is empty and all elements have been dispatched to all subscribers.
     // key functional difference here vs BroadcastChannel.
     suspend fun join(): Unit {
-        trace { "$this.join()..." }
         sourceJob.join()
         trace { "$this.join() completed" }
     }
 
-    override fun toString() = "caster-$source"
+    override fun toString() = "caster-$name"
 }

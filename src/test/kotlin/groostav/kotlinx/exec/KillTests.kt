@@ -14,7 +14,7 @@ class KillTests {
     @Test fun `when killing a process should exit without finishing`() = runBlocking<Unit>{
         //setup
         val runningProcess = execAsync {
-            command = completableScriptCommand()
+            command = promptScriptCommand()
         }
 
         //act

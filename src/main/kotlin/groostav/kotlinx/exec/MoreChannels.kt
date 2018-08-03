@@ -141,11 +141,12 @@ enum class State { NoMatch, NewMatch, ContinuedMatch }
 
 internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 
-    trace { "allocated buffer=$bufferSize for $this" }
-
     val buffer = object: ArrayChannel<T>(bufferSize) {
         override fun toString() = "tail$bufferSize-${this@tail}"
     }
+
+    trace { "allocated buffer=$bufferSize for $buffer" }
+
     launch(Unconfined) {
         try {
             for (item in this@tail) {

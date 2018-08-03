@@ -22,54 +22,55 @@ internal inline fun trace(message: () -> String){
     }
 }
 
-internal class RunningProcessImpl(_config: ProcessBuilder): RunningProcess {
+internal class Factory {
 
-    private val config = _config.copy()
+    val _standardOutputLines = SimpleInlineMulticaster<String>("stdout-lines")
+    val _standardErrorLines = SimpleInlineMulticaster<String>("stderr-lines")
+    val _standardOutputSource = SimpleInlineMulticaster<Char>("stdout")
+    val _standardErrorSource = SimpleInlineMulticaster<Char>("stderr")
 
-    private var _processID: Int? = null
-    override val processID: Int get() = _processID!!
+    internal fun create(
+            config: ProcessBuilder,
+            process: JProcess,
+            processControl: ProcessControlFacade
+    ): RunningProcessImpl {
 
-    private lateinit var process: JProcess
-    private lateinit var processControlWrapper: ProcessControlFacade
-
-    //TODO: convert to use a factory, which should reduce the insane field count
-    fun init(process: JProcess, processControl: ProcessControlFacade){
-        this.process = process
-        this.processControlWrapper = processControl
-
-        _processID = processControlWrapper.pid.value
+        val processID = processControl.pid.value
+        val result = RunningProcessImpl(
+                config,
+                processID,
+                process,
+                processControl,
+                _standardOutputSource,
+                _standardOutputLines,
+                _standardErrorSource,
+                _standardErrorLines
+        )
 
         _standardOutputLines.start(_standardOutputSource.openSubscription().lines(config.delimiters))
         _standardErrorLines.start(_standardErrorSource.openSubscription().lines(config.delimiters))
         _standardOutputSource.start(process.inputStream.toPumpedReceiveChannel("stdout-$processID", config))
         _standardErrorSource.start(process.errorStream.toPumpedReceiveChannel("stderr-$processID", config))
 
-        processControlWrapper.completionEvent.value { result ->
-
-            launch(Unconfined) {
-
-                trace { "$processID exited with $result, closing streams" }
-
-                _standardOutputSource.join()
-                _standardErrorSource.join()
-
-                when {
-                    killed -> _exitCode.cancel()
-                    result in config.expectedOutputCodes -> _exitCode.complete(result)
-                    else -> {
-                        val errorLines = errorHistory.await().toList()
-                        val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
-                        _exitCode.completeExceptionally(exception)
-                    }
-                }
-            }
-        }
+        return result
     }
+}
+
+internal class RunningProcessImpl(
+        _config: ProcessBuilder,
+        override val processID: Int,
+        private val process: JProcess,
+        private val processControlWrapper: ProcessControlFacade,
+        _standardOutputSource: SimpleInlineMulticaster<Char>,
+        _standardOutputLines: SimpleInlineMulticaster<String>,
+        _standardErrorSource: SimpleInlineMulticaster<Char>,
+        _standardErrorLines: SimpleInlineMulticaster<String>
+): RunningProcess {
+
+    private val config = _config.copy()
 
     // region output
 
-    private val _standardOutputSource = SimpleInlineMulticaster<Char>()
-    private val _standardOutputLines = SimpleInlineMulticaster<String>()
     private val _standardOutput: ReceiveChannel<Char>? = run {
         if(config.standardOutputBufferCharCount == 0) null
         else _standardOutputSource.openSubscription().tail(config.standardErrorBufferCharCount)
@@ -78,8 +79,6 @@ internal class RunningProcessImpl(_config: ProcessBuilder): RunningProcess {
             "no buffer specified for standard-output"
     )
 
-    private val _standardErrorSource = SimpleInlineMulticaster<Char>()
-    private val _standardErrorLines = SimpleInlineMulticaster<String>()
     private val _standardError: ReceiveChannel<Char>? = run {
         if(config.standardErrorBufferCharCount == 0) null
         else _standardErrorSource.openSubscription().tail(config.standardErrorBufferCharCount)
@@ -111,6 +110,31 @@ internal class RunningProcessImpl(_config: ProcessBuilder): RunningProcess {
     private val killLock = Mutex()
     private var killed: Boolean = false
 
+    private val _exitCode = CompletableDeferred<Int>()
+
+    init {
+        processControlWrapper.completionEvent.value { result ->
+
+            launch(Unconfined) {
+
+                trace { "$processID exited with $result, closing streams" }
+
+                _standardOutputSource.join()
+                _standardErrorSource.join()
+
+                when {
+                    killed -> _exitCode.cancel()
+                    result in config.expectedOutputCodes -> _exitCode.complete(result)
+                    else -> {
+                        val errorLines = errorHistory.await().toList()
+                        val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
+                        _exitCode.completeExceptionally(exception)
+                    }
+                }
+            }
+        }
+    }
+
     private val errorHistory = async<Queue<String>>(Unconfined) {
         val result = LinkedList<String>()
         if (config.linesForExceptionError > 0) {
@@ -124,56 +148,53 @@ internal class RunningProcessImpl(_config: ProcessBuilder): RunningProcess {
         result
     }
 
-    private val _exitCode = CompletableDeferred<Int>()
-
     //user-facing control root.
     override val exitCode: Deferred<Int> = async<Int>(Unconfined) {
         val result = try {
             _exitCode.await()
         }
         catch(ex: CancellationException){
-            kill()
+            killWithoutSync()
             throw ex
         }
         finally {
-            trace { "$processID exited" }
+            trace { "exitCode pid=$processID in finally block, killed=$killed" }
         }
 
         if(killed) throw CancellationException() else result
     }
 
 
-    override suspend fun kill(): Unit = withContext<Unit>(blockableThread){
+    override suspend fun kill(): Unit {
+        killWithoutSync()
+        exitCode.join()
+    }
+
+    private suspend fun killWithoutSync() {
 
         val gracefulTimeousMillis = config.gracefulTimeousMillis
 
         killLock.withLock {
-            if(_exitCode.isCompleted) return@withContext
+            if (_exitCode.isCompleted) return
 
             killed = true
 
             trace { "killing $processID" }
 
-            try {
+            if (gracefulTimeousMillis > 0) {
 
-                if (gracefulTimeousMillis > 0) {
-
-                    withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
-                        processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
-                        _exitCode.join()
-                    }
-
-                    if (_exitCode.isCompleted) { return@withContext }
+                withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
+                    processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
+                    _exitCode.join()
                 }
 
-                processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
-                _exitCode.join() //can this fail?
+                if (_exitCode.isCompleted) {
+                    return
+                }
             }
-            finally {
-                _standardOutputSource.join()
-                _standardErrorSource.join()
-                _standardInput.close()
-            }
+
+            processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
+            _exitCode.join()
         }
     }
 

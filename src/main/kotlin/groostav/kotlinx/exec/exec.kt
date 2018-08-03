@@ -8,17 +8,15 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
     val jvmProcessBuilder = JProcBuilder(config.command).apply {
         environment().apply { clear(); putAll(config.environment) }
     }
-    val runningProcessImpl = RunningProcessImpl(config)
+
+    val runningProcessFactory = Factory()
     blockableThread.prestart(2)
+
     val jvmRunningProcess = jvmProcessBuilder.start()
 
     val processControllerFacade: ProcessControlFacade = makeCompositImplementation(jvmRunningProcess)
 
-    return runningProcessImpl.apply {
-        init(jvmRunningProcess, processControllerFacade)
-    }
-
-
+    return runningProcessFactory.create(config, jvmRunningProcess, processControllerFacade)
 }
 
 fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess = execAsync(processBuilder(config))
