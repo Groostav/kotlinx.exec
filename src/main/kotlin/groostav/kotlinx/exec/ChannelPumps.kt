@@ -62,5 +62,7 @@ internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Cha
                 return@actor
             }
         }
+
+        writer.close()
     }
 }

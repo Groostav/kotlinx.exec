@@ -111,11 +111,14 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
     override fun offer(messageLine: String): Boolean
     override suspend fun send(messageLine: String)
     /**
-     * kills the running process and prevents any further input interaction
-     * on either the line-based or character-based input channels
+     * sends the end-of-input signal to the input stream,
+     * and closes the input channel.
+     *
+     * This does not directly terminate the process
+     *
+     * The character based input channel will also be closed.
      */
     override fun close(cause: Throwable?): Boolean
-
 }
 
 sealed class ProcessEvent {
@@ -199,9 +202,6 @@ internal class RunningProcessImpl(
     // endregion
 
     // region input
-
-
-    val stdInReader: OutputStream = process.outputStream
 
     private val _standardInput: SendChannel<Char> by lazy { process.outputStream.toSendChannel(config) }
     private val inputLineLock = Mutex()
@@ -337,14 +337,6 @@ internal class RunningProcessImpl(
     override fun offer(element: String): Boolean = inputLines.offer(element)
     override suspend fun send(element: String) = inputLines.send(element)
     override fun close(cause: Throwable?): Boolean {
-        fail; //NFG! process std-in's (apparently) have some kind of 'isOpen' modifier,
-        // powershell functionally expresses this as foreach($next in $input), where
-        // that loop will block until more lines become available, or hasNext=>false
-        // **when the std-in isOpen modifier changes to false**
-        // its elegant, but it means that we cant simply interpret our sendChannel.close()
-        // semantics to mean 'end the program', they need to mean 'close std-in'
-        
-        launch(Unconfined) { killWithoutSync() }
         _standardInput.close(cause)
         return inputLines.close(cause)
     }
@@ -370,7 +362,7 @@ internal class RunningProcessImpl(
 
             val actual = produce<ProcessEvent> {
 
-                while (isActive) {
+                loop@ while (isActive) {
                     val next = select<ProcessEvent?> {
                         if (!errorLines.isClosedForReceive) errorLines.onReceiveOrNull { errorMessage ->
                             errorMessage?.let { StandardError(it) }
@@ -380,9 +372,11 @@ internal class RunningProcessImpl(
                         }
                         exitCode.onAwait { ExitCode(it) }
                     }
-                    if (next == null) continue
-                    send(next)
-                    if (next is ExitCode) return@produce
+                    when(next) {
+                        null -> continue@loop
+                        is ExitCode -> return@produce
+                        else -> send(next)
+                    } as Any
                 }
             }
 

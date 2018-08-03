@@ -403,32 +403,32 @@ class WindowsTests {
             println("output=$next")
 
             val response: String? = when(next){
-                "Go ahead and write things to input..." -> {
-                    val next = responses.poll()
-                    if(next == null){
-                        runningProc.close()
-                        (runningProc as RunningProcessImpl).stdInReader.apply {
-                            flush()
-                            close()
-                            fail; //ok, so closing the input stream signals to powershell $input is finished.
-                        }
-                    }
-                    next
-                }
+                "Go ahead and write things to input..." -> responses.poll() ?: "[EOF]"
                 "exited" -> null
                 else -> null
             }
-
             println("response=$response")
 
-            if(response != null) {
-                runningProc.send(response)
+            when(response){
+                "[EOF]" -> runningProc.close()
+                is String -> runningProc.send(response)
+                null -> {}
             }
             if(next == "exited" || next == "timed-out") break;
         }
 
         //assert
-        assertEquals(listOf("hello!", "timed-out"), result)
+        assertEquals(
+                listOf(
+                        "Go ahead and write things to input...",
+                        "processing hello!",
+                        "Go ahead and write things to input...",
+                        "processing powershell!!",
+                        "Go ahead and write things to input...",
+                        "done!",
+                        "exited"
+                ),
+        result)
     }
 }
 
