@@ -3,12 +3,28 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.channels.Channel.Factory.UNLIMITED
 import java.io.*
+import kotlin.coroutines.experimental.CoroutineContext
 
-internal fun InputStream.toPumpedReceiveChannel(channelName: String, config: ProcessBuilder): ReceiveChannel<Char> {
+/**
+ * Returns the input stream as an unbufferred channel by blocking a thread provided by context
+ *
+ * **this method will put a blocking job** in [context]. Make sure the pool
+ * that backs the provided context can handle that!
+ *
+ * the resulting channel is not buffered. This means it is sensitive to back-pressure.
+ * downstream receivers should buffer appropriately!!
+ */
+internal fun InputStream.toPumpedReceiveChannel(
+        channelName: String,
+        config: ProcessBuilder,
+        context: CoroutineContext = blockableThread
+): ReceiveChannel<Char> {
 
-    //TODO: remove buffers
-    val result = produce(capacity = UNLIMITED, context = blockableThread) {
-        val reader = BufferedReader(InputStreamReader(this@toPumpedReceiveChannel, config.encoding))
+    val result = produce(context) {
+
+        // note: we ignore the "it is a good idea to buffer" here,
+        // this code expects downstream users to buffer appropriately.
+        val reader = InputStreamReader(this@toPumpedReceiveChannel, config.encoding)
 
         trace { "SOF on $channelName" }
 

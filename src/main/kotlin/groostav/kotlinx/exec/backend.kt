@@ -34,38 +34,32 @@ internal class RunningProcessImpl(
 
     // region output
 
-    private val _standardOutput: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(
+    private val _standardOutputSource: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(
             process.inputStream.toPumpedReceiveChannel("stdout-$processID", config)
     )
+    private val _standardOutput: ReceiveChannel<Char>? = run {
+        if(config.standardOutputBufferCharCount == 0) null
+        else _standardOutputSource.openSubscription().tail(config.standardErrorBufferCharCount)
+    }
+    override val standardOutput: ReceiveChannel<Char> get() = _standardOutput ?: throw IllegalStateException(
+            "no buffer specified for standard-output"
+    )
     private val _standardOutputLines: SimpleInlineMulticaster<String> by lazy {
-        SimpleInlineMulticaster(_standardOutput.openSubscription().lines(config.delimiters))
+        SimpleInlineMulticaster(_standardOutputSource.openSubscription().lines(config.delimiters))
     }
 
-    private val _standardError: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(
+    private val _standardErrorSource: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(
             process.errorStream.toPumpedReceiveChannel("stderr-$processID", config)
     )
+    private val _standardError: ReceiveChannel<Char>? = run {
+        if(config.standardErrorBufferCharCount == 0) null
+        else _standardErrorSource.openSubscription().tail(config.standardErrorBufferCharCount)
+    }
+    override val standardError: ReceiveChannel<Char> get() = _standardError ?: throw IllegalStateException(
+            "no buffer specified for standard-error"
+    )
     private val _standardErrorLines: SimpleInlineMulticaster<String> by lazy {
-        SimpleInlineMulticaster(_standardError.openSubscription().lines(config.delimiters))
-    }
-
-    private val errorHistory = async<Queue<String>>(Unconfined) {
-        val result = LinkedList<String>()
-        if (config.linesForExceptionError > 0) {
-            _standardErrorLines.openSubscription().consumeEach {
-                result.addLast(it)
-                if (result.size > config.linesForExceptionError) {
-                    result.removeFirst()
-                }
-            }
-        }
-        result
-    }
-
-    override val standardOutput: ReceiveChannel<Char> by lazy {
-        _standardOutput.openSubscription().backPressureFreeMostRecent(config.charBufferSize)
-    }
-    override val standardError: ReceiveChannel<Char> by lazy {
-        _standardError.openSubscription().backPressureFreeMostRecent(config.charBufferSize)
+        SimpleInlineMulticaster(_standardErrorSource.openSubscription().lines(config.delimiters))
     }
 
     // endregion
@@ -89,15 +83,30 @@ internal class RunningProcessImpl(
     //region join, kill
 
     private val killLock = Mutex()
+    private var killed: Boolean = false
 
-    private val _exitCode: CompletableDeferred<Int> = CompletableDeferred<Int>().apply {
+    private val errorHistory = async<Queue<String>>(Unconfined) {
+        val result = LinkedList<String>()
+        if (config.linesForExceptionError > 0) {
+            _standardErrorLines.openSubscription().consumeEach {
+                result.addLast(it)
+                if (result.size > config.linesForExceptionError) {
+                    result.removeFirst()
+                }
+            }
+        }
+        result
+    }
+
+    private val _exitCode: Deferred<Int> = CompletableDeferred<Int>().apply {
         processControlWrapper.completionEvent.value { result ->
-            launch(blockableThread) {
+
+            launch(Unconfined) {
 
                 trace { "$processID exited with $result, closing streams" }
 
-                _standardOutput.join()
-                _standardError.join()
+                _standardOutputSource.join()
+                _standardErrorSource.join()
 
                 if (result in config.expectedOutputCodes) {
                     complete(result)
@@ -111,22 +120,22 @@ internal class RunningProcessImpl(
         }
     }
 
+    //user-facing control root.
     override val exitCode: Deferred<Int> = async<Int>(Unconfined) {
-        try {
+        val result = try {
+            fail //todo: if you put a breakpoint here you can get deadlock.
             _exitCode.await()
         }
         catch(ex: CancellationException){
-            try {
-                kill()
-            }
-            catch(innerEx: Exception){
-                //todo: add suppressed exception is java 9.
-            }
+            kill()
+            val x = 4;
             throw ex
         }
         finally {
             trace { "$processID exited" }
         }
+
+        if(killed) throw CancellationException() else result
     }
 
 
@@ -136,6 +145,10 @@ internal class RunningProcessImpl(
 
         killLock.withLock {
             if(_exitCode.isCompleted) return@withContext
+
+            killed = true
+
+            trace { "killing $processID" }
 
             try {
 
@@ -153,27 +166,26 @@ internal class RunningProcessImpl(
                 _exitCode.join() //can this fail?
             }
             finally {
-                _standardOutput.join()
-                _standardError.join()
+                _standardOutputSource.join()
+                _standardErrorSource.join()
                 _standardInput.close()
             }
         }
     }
 
-    override suspend fun join(): Unit = _exitCode.join()
+    override suspend fun join(): Unit = exitCode.join()
 
     //endregion
 
     //region SendChannel
 
     private val inputLines by lazy {
-        actor<String> {
+        actor<String>(Unconfined) {
             val newlineString = System.lineSeparator()
             consumeEach { nextLine ->
                 inputLineLock.withLock {
                     nextLine.forEach { _standardInput.send(it) }
                     newlineString.forEach { _standardInput.send(it) }
-                    val x = 4;
                 }
             }
         }
@@ -190,36 +202,47 @@ internal class RunningProcessImpl(
 
     //region ReceiveChannel
 
-    private val aggregateChannel: ReceiveChannel<ProcessEvent> = run {
-
-        val errorLines = _standardErrorLines.openSubscription()
-        val outputLines = _standardOutputLines.openSubscription()
-
-        val actual = produce<ProcessEvent> {
-
-            while (isActive) {
-                val next = select<ProcessEvent?> {
-                    if (!errorLines.isClosedForReceive) errorLines.onReceiveOrNull { errorMessage ->
-                        errorMessage?.let { StandardError(it) }
-                    }
-                    if (!outputLines.isClosedForReceive) outputLines.onReceiveOrNull { outputMessage ->
-                        outputMessage?.let { StandardOutput(it) }
-                    }
-                    exitCode.onAwait { ExitCode(it) }
-                }
-                if (next == null) continue
-                send(next)
-                if (next is ExitCode) return@produce
+    private val aggregateChannel: ReceiveChannel<ProcessEvent> = when(config.aggregateOutputBufferLineCount){
+        0 -> {
+            val actual = produce<ProcessEvent>(Unconfined){
+                val code = exitCode.await()
+                send(ExitCode(code))
+            }
+            object: ReceiveChannel<ProcessEvent> by actual{
+                override fun toString() = "aggregate[size=0, delay=$exitCode]"
             }
         }
+        else -> {
 
-        val namedAggregate = object: ReceiveChannel<ProcessEvent> by actual {
-            override fun toString() = "aggregate[out=$outputLines,err=$errorLines]"
+            val errorLines = _standardErrorLines.openSubscription()
+            val outputLines = _standardOutputLines.openSubscription()
+
+            val actual = produce<ProcessEvent> {
+
+                while (isActive) {
+                    val next = select<ProcessEvent?> {
+                        if (!errorLines.isClosedForReceive) errorLines.onReceiveOrNull { errorMessage ->
+                            errorMessage?.let { StandardError(it) }
+                        }
+                        if (!outputLines.isClosedForReceive) outputLines.onReceiveOrNull { outputMessage ->
+                            outputMessage?.let { StandardOutput(it) }
+                        }
+                        exitCode.onAwait { ExitCode(it) }
+                    }
+                    if (next == null) continue
+                    send(next)
+                    if (next is ExitCode) return@produce
+                }
+            }
+
+            val namedAggregate = object: ReceiveChannel<ProcessEvent> by actual {
+                override fun toString() = "aggregate[out=$outputLines,err=$errorLines]"
+            }
+
+            namedAggregate.tail(config.aggregateOutputBufferLineCount + 1)
+            // +1 for exitCode. If the configuration has statically known math
+            // (eg 54 lines for `ls` of a directory with 54 items).
         }
-
-        return@run namedAggregate.backPressureFreeMostRecent(config.lineBufferSize + 1)
-        // +1 for exitCode. If the configuration has statically known math
-        // (eg 54 lines for `ls` of a directory with 54 items).
     }
 
     override val isClosedForReceive: Boolean get() = aggregateChannel.isClosedForReceive

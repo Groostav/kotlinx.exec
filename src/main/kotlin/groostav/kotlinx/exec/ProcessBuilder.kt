@@ -21,14 +21,11 @@ data class ProcessBuilder internal constructor(
         var encoding: Charset = Charsets.UTF_8,
 
         /**
-         * Amount of raw-character output to buffer.
+         * Amount of raw-character output buffered by [RunningProcess.standardOutput]
          *
-         * This value controls the number of characters buffered for both standard-error and standard-out
-         * streams.
+         * This value controls the number of characters buffered for the standard-output stream.
          *
-         * It is used when the output process produces one or several characters on either stream and the
-         * stream consumers have not yet processed those values. In the event this buffer is filled, the oldest
-         * values are dropped to make room, giving a behaviour similar to posix `tail`.
+         * This buffer is only
          *
          * Other buffers may be acquired as part of the child APIs,
          * namely the [java.lang.Process.getInputStream]'s representation of standard-output
@@ -36,7 +33,12 @@ data class ProcessBuilder internal constructor(
          * at time of writing. There is, to my knowledge, no strategy to change this buffer short of
          * class-loader or byte-code manipulations.
          */
-        var charBufferSize: Int = 8192,
+        var standardErrorBufferCharCount: Int = 8192,
+
+        /**
+         * TODO
+         */
+        var standardOutputBufferCharCount: Int = 8192,
 
         /**
          * Number of lines to buffer in the aggregate channel
@@ -45,7 +47,7 @@ data class ProcessBuilder internal constructor(
          * that will be kept by the running process. In the event that this buffer is filled,
          * the oldest line will be dropped, giving a behaviour similar to posix `tail`.
          */
-        var lineBufferSize: Int = charBufferSize / 80,
+        var aggregateOutputBufferLineCount: Int = standardErrorBufferCharCount / 80,
 
         /**
          * The amount of time to wait before considering a SIG_INT kill command to have failed.
@@ -105,8 +107,11 @@ internal fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessB
     result.apply {
         require(command.any()) { "cannot exec empty command: $this" }
         require(command.all { '\u0000' !in it }) { "cannot exec command with null character: $this"}
-        require(charBufferSize >= 0) { "cannot exec with output buffer size less than zero: $this"}
+        require(standardErrorBufferCharCount >= 0) { "cannot exec with output buffer size less than zero: $this"}
         require(delimiters.all { it.any()}) { "cannot parse output lines with empty delimeter: $this" }
+        require(aggregateOutputBufferLineCount >= 0)
+        require(standardErrorBufferCharCount >= 0)
+        require(standardOutputBufferCharCount >= 0)
     }
 
     return result

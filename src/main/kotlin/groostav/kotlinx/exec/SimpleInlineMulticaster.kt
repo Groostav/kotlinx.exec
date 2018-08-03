@@ -11,6 +11,9 @@ import kotlinx.coroutines.experimental.selects.select
 import java.nio.channels.ClosedChannelException
 import java.util.concurrent.CopyOnWriteArrayList
 
+// the express purpose of this object is to block on send,
+// adhere to all back-pressure provided by any of the subscribers!
+// in this way we pass on any problems back up to source!
 class SimpleInlineMulticaster<T>(val source: ReceiveChannel<T>) {
 
     private var subs: MutableList<Channel<T>>? = CopyOnWriteArrayList<Channel<T>>()
@@ -28,7 +31,7 @@ class SimpleInlineMulticaster<T>(val source: ReceiveChannel<T>) {
                         // suspending the upstream until all children are satisfied.
                     }
                 }
-                trace { "${this@SimpleInlineMulticaster}'s source finished, closing subs" }
+                trace { "${this@SimpleInlineMulticaster} saw EOF, closing subs" }
                 this@SimpleInlineMulticaster.subs = null
             }
             finally {

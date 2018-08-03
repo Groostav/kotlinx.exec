@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import getLocalResourcePath
 import junit.framework.Assert.assertEquals
 import kotlinx.coroutines.experimental.CompletableDeferred
 import kotlinx.coroutines.experimental.channels.*
@@ -8,6 +9,7 @@ import kotlinx.coroutines.experimental.runBlocking
 import org.amshove.kluent.*
 import org.junit.Ignore
 import org.junit.Test
+import queueOf
 import java.nio.file.Paths
 import java.util.*
 
@@ -260,10 +262,7 @@ class WindowsTests {
             expectedOutputCodes = setOf(1)
         }
 
-        assertEquals(listOf<String>(
-                "env:GROOSTAV_ENV_VALUE is ''",
-                "Process finished with exit code 1"
-        ), lines)
+        assertEquals(listOf<String>("env:GROOSTAV_ENV_VALUE is ''"), lines)
     }
 
     @Test fun `when using dropping buffer should not attempt to cache any output`() = runBlocking<Unit>{
@@ -272,7 +271,7 @@ class WindowsTests {
 
         //act
         val (output, code) = exec {
-            lineBufferSize = 1
+            aggregateOutputBufferLineCount = 1
             command = listOf(
                     "powershell.exe",
                     "-File", simpleScript,
@@ -282,6 +281,8 @@ class WindowsTests {
 
         //assert
         assertEquals(listOf<String>("nextline!"), output)
+
+//        TODO("this test is flapping and i dont know why")
     }
 
     @Test fun `when running with non standard env should do things`() = runBlocking<Unit> {
@@ -296,8 +297,7 @@ class WindowsTests {
         }
 
         assertEquals(listOf<String>(
-                "env:GROOSTAV_ENV_VALUE is 'Testing!'",
-                "Process finished with exit code 0"
+                "env:GROOSTAV_ENV_VALUE is 'Testing!'"
         ), lines)
 
     }
@@ -321,18 +321,20 @@ class WindowsTests {
 
     }
 
-    private fun getLocalResourcePath(localName: String): String {
-        val rsx = WindowsTests::class.java.getResource(localName) ?: throw UnsupportedOperationException("cant find $localName")
-        val resource = Paths.get(rsx.toURI()).toString()
-        return resource
-    }
+    @Test fun `when using raw character output should get sensable characters`() = runBlocking<Unit>{
+        val script = getLocalResourcePath("MultilineScript.ps1")
 
+        val runningProc = execAsync(
+                "powershell.exe",
+                "-ExecutionPolicy", "Bypass",
+                "-File", script,
+                "-Message", "testing!"
+        )
+        val chars = runningProc.standardOutput.toList()
+
+        assertEquals(listOf<Char>('h', 'e', 'l', 'l', 'o', '\n', 'n', 'e', 'x', 't', 'l', 'i', 'n', 'e', '!', '\n'), chars)
+    }
 }
 
 data class DomainModel(val data: String)
 
-private inline fun <T> queueOf(vararg elements: T): Queue<T> {
-    val result = LinkedList<T>()
-    elements.forEach { result.add(it) }
-    return result
-}

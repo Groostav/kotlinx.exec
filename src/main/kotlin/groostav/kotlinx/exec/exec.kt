@@ -24,8 +24,15 @@ fun execAsync(commandFirst: String, vararg commandRest: String): RunningProcess 
 }
 
 suspend fun exec(config: ProcessBuilder.() -> Unit): Pair<List<String>, Int> {
-    val runningProcess = execAsync(processBuilder(config))
-    runningProcess.exitCode.await()
+    val configActual = processBuilder {
+        standardErrorBufferCharCount = 0
+        standardOutputBufferCharCount = 0
+
+        config()
+    }
+    val runningProcess = execAsync(configActual)
+
+    runningProcess.join()
 
     val output = runningProcess
             .filter { it !is ExitCode }
@@ -39,8 +46,9 @@ suspend fun exec(commandFirst: String, vararg commandRest: String): Pair<List<St
 
 suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
     val configActual = processBuilder {
-        lineBufferSize = 0
-//        standardOutputCharBuffer = 0
+        aggregateOutputBufferLineCount = 0
+        standardErrorBufferCharCount = 0
+        standardErrorBufferCharCount = 0
 
         config()
     }
@@ -50,11 +58,20 @@ suspend fun execVoid(commandFirst: String, vararg commandRest: String) = execVoi
     command = listOf(commandFirst) + commandRest.toList()
 }
 
-class InvalidExitValueException(val command: List<String>, val exitValue: Int, val expectedExitCodes: Set<Int>, message: String): RuntimeException(message)
+class InvalidExitValueException(
+        val command: List<String>,
+        val exitValue: Int,
+        val expectedExitCodes: Set<Int>,
+        message: String
+): RuntimeException(message)
+
 internal fun makeExitCodeException(command: List<String>, exitCode: Int, expectedOutputCodes: Set<Int>, lines: List<String>): Throwable {
     val builder = StringBuilder().apply {
         appendln("exec '${command.joinToString(" ")}'")
-        appendln("exited with code $exitCode (expected one of '${expectedOutputCodes.joinToString("', '")}')")
+        val multipleOutputs = expectedOutputCodes.size > 1
+        append("exited with code $exitCode ")
+        val exitCodesScription = expectedOutputCodes.joinToString("', '")
+        appendln("(expected ${if(multipleOutputs) "one of " else ""}'$exitCodesScription')")
 
         if(lines.any()){
             appendln("the most recent standard-error output was:")

@@ -1,8 +1,10 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.experimental.Deferred
+import kotlinx.coroutines.experimental.channels.ChannelIterator
 import kotlinx.coroutines.experimental.channels.ReceiveChannel
 import kotlinx.coroutines.experimental.channels.SendChannel
+import kotlinx.coroutines.experimental.selects.SelectClause1
 
 /**
  * A concurrent proxy to an external operating system process.
@@ -31,10 +33,20 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 
     val processID: Int
 
-    //suspends while cancelling gracefully
+    //suspends while cancelling gracefully, then forcefully if that doesnt work
     suspend fun kill(): Unit
-
     suspend fun join(): Unit
+
+
+    override val isClosedForReceive: Boolean
+    override val isEmpty: Boolean
+    override val onReceive: SelectClause1<ProcessEvent>
+    override val onReceiveOrNull: SelectClause1<ProcessEvent?>
+    override fun cancel(cause: Throwable?): Boolean
+    override fun iterator(): ChannelIterator<ProcessEvent>
+    override fun poll(): ProcessEvent?
+    override suspend fun receive(): ProcessEvent
+    override suspend fun receiveOrNull(): ProcessEvent?
 }
 
 sealed class ProcessEvent

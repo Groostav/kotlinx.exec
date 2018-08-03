@@ -139,17 +139,16 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
 
 enum class State { NoMatch, NewMatch, ContinuedMatch }
 
+internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 
-internal fun <T> ReceiveChannel<T>.backPressureFreeMostRecent(bufferSize: Int): Channel<T> {
-
-    trace { "allocated $bufferSize for $this" }
+    trace { "allocated buffer=$bufferSize for $this" }
 
     val buffer = object: ArrayChannel<T>(bufferSize) {
-        override fun toString() = "bpf-${this@backPressureFreeMostRecent}"
+        override fun toString() = "tail$bufferSize-${this@tail}"
     }
     launch(Unconfined) {
         try {
-            for (item in this@backPressureFreeMostRecent) {
+            for (item in this@tail) {
                 buffer.pushForward(item)
             }
         }
