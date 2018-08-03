@@ -9,7 +9,7 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
         environment().apply { clear(); putAll(config.environment) }
     }
 
-    val runningProcessFactory = Factory()
+    val runningProcessFactory = RunningProcessFactory()
     blockableThread.prestart(2)
 
     val jvmRunningProcess = jvmProcessBuilder.start()

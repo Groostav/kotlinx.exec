@@ -8,11 +8,25 @@ import java.nio.charset.Charset
 // and return it as a list of lines?
 
 data class ProcessBuilder internal constructor(
+
+        /**
+         * The command to execute.
+         */
         var command: List<String> = emptyList(),
+        /**
+         * Environment parameters to be applied for the child process
+         */
         var environment: Map<String, String> = System.getenv(),
 
+        /**
+         * line delimiters used for parsing lines out of standard-error and standard-out
+         * for the the aggregate channel
+         */
         var delimiters: List<String> = listOf("\r", "\n", "\r\n"),
 
+        /**
+         * value that results in flushing values to operating system standard-input buffers.
+         */
         // this sucks, cant use delimeters because you might flush \r separately from \n.
         // which does illicit a different behaviour from powershell.
         var inputFlushMarker: Char = '\n',
@@ -21,11 +35,12 @@ data class ProcessBuilder internal constructor(
         var encoding: Charset = Charsets.UTF_8,
 
         /**
-         * Amount of raw-character output buffered by [RunningProcess.standardOutput]
+         * Amount of raw-character output buffered by [RunningProcess.standardError]
          *
-         * This value controls the number of characters buffered for the standard-output stream.
+         * This value controls the number of characters buffered for the standard-output character stream.
          *
-         * This buffer is only
+         * This buffer is only for the character stream, line-aggregation is done before buffering and is
+         * buffered by the aggregate channel as part of the [aggregateOutputBufferLineCount]
          *
          * Other buffers may be acquired as part of the child APIs,
          * namely the [java.lang.Process.getInputStream]'s representation of standard-output
@@ -36,7 +51,12 @@ data class ProcessBuilder internal constructor(
         var standardErrorBufferCharCount: Int = 8192,
 
         /**
-         * TODO
+         * Amount of raw-character output buffered by [RunningProcess.standardOutput]
+         *
+         * This value controls the number of characters buffered for the standard-error character stream.
+         *
+         * This buffer is only for the character stream, line-aggregation is done before buffering and is
+         * buffered by the aggregate channel as part of the [aggregateOutputBufferLineCount]
          */
         var standardOutputBufferCharCount: Int = 8192,
 
@@ -47,7 +67,7 @@ data class ProcessBuilder internal constructor(
          * that will be kept by the running process. In the event that this buffer is filled,
          * the oldest line will be dropped, giving a behaviour similar to posix `tail`.
          */
-        var aggregateOutputBufferLineCount: Int = standardErrorBufferCharCount / 80,
+        var aggregateOutputBufferLineCount: Int = 200,
 
         /**
          * The amount of time to wait before considering a SIG_INT kill command to have failed.
@@ -74,12 +94,13 @@ data class ProcessBuilder internal constructor(
          *
          * How this set is interpreted:
          *
-         * 1. If a process exits with a code that is in this list, then calls to [RunningProcess.exitCode]
+         * 1. If a process exits with a code that is in this set, then calls to await [RunningProcess.exitCode]
          *    will yield that value.
-         * 2. If the list is empty, all exit codes will be treated as valid and be yielded from
+         * 2. If the set is empty, all exit codes will be treated as valid and be yielded from
          *    [RunningProcess.exitCode]
          * 3. If a process exists with a code that is not in this list
-         *    and the list is not empty, a [InvalidExitValueException] is thrown by [RunningProcess.exitCode].
+         *    and the list is not empty, an [InvalidExitValueException]
+         *    is thrown when awaiting [RunningProcess.exitCode].
          */
         var expectedOutputCodes: Set<Int> = setOf(0),
 
