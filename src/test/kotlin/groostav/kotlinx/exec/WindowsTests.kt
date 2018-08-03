@@ -1,17 +1,20 @@
 package groostav.kotlinx.exec
 
 import getLocalResourcePath
-import junit.framework.Assert.assertEquals
 import kotlinx.coroutines.experimental.CompletableDeferred
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.delay
 import kotlinx.coroutines.experimental.runBlocking
+import kotlinx.coroutines.experimental.selects.select
 import org.amshove.kluent.*
 import org.junit.Ignore
 import org.junit.Test
 import queueOf
-import java.nio.file.Paths
 import java.util.*
+import kotlinx.coroutines.experimental.withTimeoutOrNull
+import org.intellij.lang.annotations.Language
+import java.nio.file.Files
+import kotlin.test.assertEquals
 
 
 class WindowsTests {
@@ -34,7 +37,7 @@ class WindowsTests {
         val messages = runningProcess.map { event -> when(event){
             is StandardError -> DomainModel("Error: ${event.line}")
             is StandardOutput -> DomainModel(event.line)
-            is ExitCode -> DomainModel("exit code: ${event.value}")
+            is ExitCode -> DomainModel("exit code: ${event.code}")
         }}
 
         val exitCode = runningProcess.exitCode.await()
@@ -155,7 +158,7 @@ class WindowsTests {
                 StandardOutput(line = "Input your server name, or 'quit' to exit"),
                 StandardOutput(line = "quit"),
                 StandardOutput(line = "Have a nice day!"),
-                ExitCode(value = 0)
+                ExitCode(code = 0)
         )
 
         // regarding order: there is a race condition here
@@ -333,6 +336,99 @@ class WindowsTests {
         val chars = runningProc.standardOutput.toList()
 
         assertEquals(listOf<Char>('h', 'e', 'l', 'l', 'o', '\n', 'n', 'e', 'x', 't', 'l', 'i', 'n', 'e', '!', '\n'), chars)
+    }
+
+    @Test fun `using Read-Host with Prompt style powershell script should block script`() = runBlocking<Unit> {
+
+        // this is realy unfortunate, and is a negative test.
+        // Powershells concept of 'pipelines' and interactive scripts means that
+        // Read-Host -Prompt "input question" will write _around_ standard-in/standard-out 'pipeline' concepts,
+        // directly mutating the parent console window,
+        // or in our case a chunk of memory we cant access from java-standard APIs.
+        // So this test verifies that using a script with Read-Host -Prompt **does not** work.
+
+        //setup
+        val runningProc = execAsync {
+            command = listOf(
+                    "powershell.exe",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", getLocalResourcePath("ReadHostStyleScript.ps1")
+            )
+            delimiters += ":" //doesnt help, the characters dont show up on the reader!
+        }
+
+        //act
+        var result = emptyList<String>()
+        while( ! runningProc.isClosedForReceive) {
+            val next = select<String> {
+                runningProc.onReceive { it -> it.formattedMessage }
+                runningProc.exitCode.onAwait { it -> "exited" }
+
+                if("hello!" in result) {
+                    onTimeout(200) { "timed-out" }
+                }
+            }
+            result += next
+            if(next == "exited" || next == "timed-out") break;
+        }
+
+        //assert
+        assertEquals(listOf("hello!", "timed-out"), result)
+    }
+
+    @Test fun `using inputPipeline style powershell script should rung normally`() = runBlocking<Unit> {
+
+        // in opposition to the above, powershell does 'wire standard-input' input to the 'input-pipeline',
+        // so we can leverage that here fairly effectively.
+
+        //setup
+        val runningProc = execAsync {
+            command = listOf(
+                    "powershell.exe",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", getLocalResourcePath("ReadPipelineInputStyleScript.ps1")
+            )
+        }
+        val responses = queueOf("hello", "powershell!")
+
+        //act
+        var result = emptyList<String>()
+        while( ! runningProc.isClosedForReceive) {
+            val next = select<String> {
+                runningProc.onReceive { it.formattedMessage }
+                runningProc.exitCode.onAwait { "exited" }
+            }
+            result += next
+
+            println("output=$next")
+
+            val response: String? = when(next){
+                "Go ahead and write things to input..." -> {
+                    val next = responses.poll()
+                    if(next == null){
+                        runningProc.close()
+                        (runningProc as RunningProcessImpl).stdInReader.apply {
+                            flush()
+                            close()
+                            fail; //ok, so closing the input stream signals to powershell $input is finished.
+                        }
+                    }
+                    next
+                }
+                "exited" -> null
+                else -> null
+            }
+
+            println("response=$response")
+
+            if(response != null) {
+                runningProc.send(response)
+            }
+            if(next == "exited" || next == "timed-out") break;
+        }
+
+        //assert
+        assertEquals(listOf("hello!", "timed-out"), result)
     }
 }
 

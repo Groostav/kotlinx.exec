@@ -37,7 +37,7 @@ suspend fun exec(config: ProcessBuilder.() -> Unit): Pair<List<String>, Int> {
 
     val output = runningProcess
             .filter { it !is ExitCode }
-            .map { it.toDefaultString() }
+            .map { it.formattedMessage }
 
     return output.toList() to runningProcess.exitCode.getCompleted()
 }

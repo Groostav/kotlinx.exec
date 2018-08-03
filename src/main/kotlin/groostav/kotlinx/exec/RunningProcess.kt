@@ -7,9 +7,13 @@ import kotlinx.coroutines.experimental.selects.SelectClause2
 import kotlinx.coroutines.experimental.selects.select
 import kotlinx.coroutines.experimental.sync.Mutex
 import kotlinx.coroutines.experimental.sync.withLock
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.Reader
 import java.util.*
 import java.util.concurrent.TimeUnit
 
+@Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE") //renames a couple of the param names for SendChannel & ReceiveChannel
 /**
  * A concurrent proxy to an external operating system process.
  *
@@ -104,8 +108,8 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
     override val isClosedForSend: Boolean
     override val isFull: Boolean
     override val onSend: SelectClause2<String, SendChannel<String>>
-    override fun offer(element: String): Boolean
-    override suspend fun send(element: String)
+    override fun offer(messageLine: String): Boolean
+    override suspend fun send(messageLine: String)
     /**
      * kills the running process and prevents any further input interaction
      * on either the line-based or character-based input channels
@@ -114,10 +118,18 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 
 }
 
-sealed class ProcessEvent
-data class StandardError(val line: String): ProcessEvent()
-data class StandardOutput(val line: String): ProcessEvent()
-data class ExitCode(val value: Int): ProcessEvent()
+sealed class ProcessEvent {
+    abstract val formattedMessage: String
+}
+data class StandardOutput(val line: String): ProcessEvent() {
+    override val formattedMessage get() = line
+}
+data class StandardError(val line: String): ProcessEvent() {
+    override val formattedMessage get() = "ERROR: $line"
+}
+data class ExitCode(val code: Int): ProcessEvent() {
+    override val formattedMessage: String get() = "Process finished with exit code $code"
+}
 
 internal class RunningProcessFactory {
 
@@ -188,6 +200,9 @@ internal class RunningProcessImpl(
 
     // region input
 
+
+    val stdInReader: OutputStream = process.outputStream
+
     private val _standardInput: SendChannel<Char> by lazy { process.outputStream.toSendChannel(config) }
     private val inputLineLock = Mutex()
 
@@ -198,8 +213,7 @@ internal class RunningProcessImpl(
             }
         }
         _standardInput.close()
-    }
-    }
+    }}
 
     // endregion input
 
@@ -323,6 +337,13 @@ internal class RunningProcessImpl(
     override fun offer(element: String): Boolean = inputLines.offer(element)
     override suspend fun send(element: String) = inputLines.send(element)
     override fun close(cause: Throwable?): Boolean {
+        fail; //NFG! process std-in's (apparently) have some kind of 'isOpen' modifier,
+        // powershell functionally expresses this as foreach($next in $input), where
+        // that loop will block until more lines become available, or hasNext=>false
+        // **when the std-in isOpen modifier changes to false**
+        // its elegant, but it means that we cant simply interpret our sendChannel.close()
+        // semantics to mean 'end the program', they need to mean 'close std-in'
+        
         launch(Unconfined) { killWithoutSync() }
         _standardInput.close(cause)
         return inputLines.close(cause)
@@ -379,6 +400,7 @@ internal class RunningProcessImpl(
     override val isEmpty: Boolean get() = aggregateChannel.isEmpty
     override val onReceive: SelectClause1<ProcessEvent> get() = aggregateChannel.onReceive
     override val onReceiveOrNull: SelectClause1<ProcessEvent?> get() = aggregateChannel.onReceiveOrNull
+
     override fun iterator(): ChannelIterator<ProcessEvent> = aggregateChannel.iterator()
     override fun poll(): ProcessEvent? = aggregateChannel.poll()
     override suspend fun receive(): ProcessEvent = aggregateChannel.receive()

@@ -137,9 +137,3 @@ internal fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessB
 
     return result
 }
-
-internal fun ProcessEvent.toDefaultString() = when(this){
-    is StandardError -> "ERROR: $line"
-    is StandardOutput -> line
-    is ExitCode -> "Process finished with exit code $value"
-}

@@ -100,7 +100,7 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
         //update active-rows
         moveNext(next)
 
-        if(activeRows.isEmpty()){
+        if(activeRows.isEmpty() && currentMatchColumn != 0){
             //try a new match
             reset()
             moveNext(next)
@@ -125,7 +125,8 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
 
     private fun reset() {
         currentMatchColumn = -1
-        activeRows += (0 until delimeterMatrix.size)
+        activeRows += (0 until delimeterMatrix.size) //huge performance win from immutable collections here.
+        //or actually a mask here, assuming you have less than 32 delimeters, would do the trick too.
     }
 
     private fun moveNext(next: Char) {
