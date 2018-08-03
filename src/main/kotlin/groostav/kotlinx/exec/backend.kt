@@ -22,21 +22,53 @@ internal inline fun trace(message: () -> String){
     }
 }
 
-internal class RunningProcessImpl(
-        _config: ProcessBuilder,
-        private val process: JProcess,
-        private val processControlWrapper: ProcessControlFacade
-): RunningProcess {
+internal class RunningProcessImpl(_config: ProcessBuilder): RunningProcess {
 
     private val config = _config.copy()
 
-    override val processID: Int = processControlWrapper.pid.value
+    private var _processID: Int? = null
+    override val processID: Int get() = _processID!!
+
+    private lateinit var process: JProcess
+    private lateinit var processControlWrapper: ProcessControlFacade
+
+    //TODO: convert to use a factory, which should reduce the insane field count
+    fun init(process: JProcess, processControl: ProcessControlFacade){
+        this.process = process
+        this.processControlWrapper = processControl
+
+        _processID = processControlWrapper.pid.value
+
+        _standardOutputLines.start(_standardOutputSource.openSubscription().lines(config.delimiters))
+        _standardErrorLines.start(_standardErrorSource.openSubscription().lines(config.delimiters))
+        _standardOutputSource.start(process.inputStream.toPumpedReceiveChannel("stdout-$processID", config))
+        _standardErrorSource.start(process.errorStream.toPumpedReceiveChannel("stderr-$processID", config))
+
+        processControlWrapper.completionEvent.value { result ->
+
+            launch(Unconfined) {
+
+                trace { "$processID exited with $result, closing streams" }
+
+                _standardOutputSource.join()
+                _standardErrorSource.join()
+
+                if (result in config.expectedOutputCodes) {
+                    _exitCode.complete(result)
+                }
+                else {
+                    val errorLines = errorHistory.await().toList()
+                    val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
+                    _exitCode.completeExceptionally(exception)
+                }
+            }
+        }
+    }
 
     // region output
 
-    private val _standardOutputSource: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(
-            process.inputStream.toPumpedReceiveChannel("stdout-$processID", config)
-    )
+    private val _standardOutputSource = SimpleInlineMulticaster<Char>()
+    private val _standardOutputLines = SimpleInlineMulticaster<String>()
     private val _standardOutput: ReceiveChannel<Char>? = run {
         if(config.standardOutputBufferCharCount == 0) null
         else _standardOutputSource.openSubscription().tail(config.standardErrorBufferCharCount)
@@ -44,13 +76,9 @@ internal class RunningProcessImpl(
     override val standardOutput: ReceiveChannel<Char> get() = _standardOutput ?: throw IllegalStateException(
             "no buffer specified for standard-output"
     )
-    private val _standardOutputLines: SimpleInlineMulticaster<String> by lazy {
-        SimpleInlineMulticaster(_standardOutputSource.openSubscription().lines(config.delimiters))
-    }
 
-    private val _standardErrorSource: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(
-            process.errorStream.toPumpedReceiveChannel("stderr-$processID", config)
-    )
+    private val _standardErrorSource = SimpleInlineMulticaster<Char>()
+    private val _standardErrorLines = SimpleInlineMulticaster<String>()
     private val _standardError: ReceiveChannel<Char>? = run {
         if(config.standardErrorBufferCharCount == 0) null
         else _standardErrorSource.openSubscription().tail(config.standardErrorBufferCharCount)
@@ -58,15 +86,12 @@ internal class RunningProcessImpl(
     override val standardError: ReceiveChannel<Char> get() = _standardError ?: throw IllegalStateException(
             "no buffer specified for standard-error"
     )
-    private val _standardErrorLines: SimpleInlineMulticaster<String> by lazy {
-        SimpleInlineMulticaster(_standardErrorSource.openSubscription().lines(config.delimiters))
-    }
 
     // endregion
 
     // region input
 
-    private val _standardInput: SendChannel<Char> = process.outputStream.toSendChannel(config)
+    private val _standardInput: SendChannel<Char> by lazy { process.outputStream.toSendChannel(config) }
     private val inputLineLock = Mutex()
 
     override val standardInput: SendChannel<Char> by lazy { actor<Char> {
@@ -98,37 +123,15 @@ internal class RunningProcessImpl(
         result
     }
 
-    private val _exitCode: Deferred<Int> = CompletableDeferred<Int>().apply {
-        processControlWrapper.completionEvent.value { result ->
-
-            launch(Unconfined) {
-
-                trace { "$processID exited with $result, closing streams" }
-
-                _standardOutputSource.join()
-                _standardErrorSource.join()
-
-                if (result in config.expectedOutputCodes) {
-                    complete(result)
-                }
-                else {
-                    val errorLines = errorHistory.await().toList()
-                    val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
-                    completeExceptionally(exception)
-                }
-            }
-        }
-    }
+    private val _exitCode = CompletableDeferred<Int>()
 
     //user-facing control root.
     override val exitCode: Deferred<Int> = async<Int>(Unconfined) {
         val result = try {
-            fail //todo: if you put a breakpoint here you can get deadlock.
             _exitCode.await()
         }
         catch(ex: CancellationException){
             kill()
-            val x = 4;
             throw ex
         }
         finally {

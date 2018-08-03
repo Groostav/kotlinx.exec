@@ -8,14 +8,17 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
     val jvmProcessBuilder = JProcBuilder(config.command).apply {
         environment().apply { clear(); putAll(config.environment) }
     }
+    val runningProcessImpl = RunningProcessImpl(config)
     blockableThread.prestart(2)
     val jvmRunningProcess = jvmProcessBuilder.start()
 
-    //TODO: using a lateinit flow with `facade.init(jvmRunningProcess)` would allow you to re-order this
-    // and avoid the object allocations in this time-sensitive spot.
     val processControllerFacade: ProcessControlFacade = makeCompositImplementation(jvmRunningProcess)
 
-    return RunningProcessImpl(config, jvmRunningProcess, processControllerFacade)
+    return runningProcessImpl.apply {
+        init(jvmRunningProcess, processControllerFacade)
+    }
+
+
 }
 
 fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess = execAsync(processBuilder(config))
