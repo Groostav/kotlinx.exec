@@ -53,13 +53,14 @@ internal class RunningProcessImpl(_config: ProcessBuilder): RunningProcess {
                 _standardOutputSource.join()
                 _standardErrorSource.join()
 
-                if (result in config.expectedOutputCodes) {
-                    _exitCode.complete(result)
-                }
-                else {
-                    val errorLines = errorHistory.await().toList()
-                    val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
-                    _exitCode.completeExceptionally(exception)
+                when {
+                    killed -> _exitCode.cancel()
+                    result in config.expectedOutputCodes -> _exitCode.complete(result)
+                    else -> {
+                        val errorLines = errorHistory.await().toList()
+                        val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
+                        _exitCode.completeExceptionally(exception)
+                    }
                 }
             }
         }

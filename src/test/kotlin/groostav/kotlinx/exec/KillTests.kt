@@ -47,7 +47,7 @@ class KillTests {
         //assert
         val actual = result.await()
         assertEquals(listOf(StandardOutput("Hello!")), actual)
-        assertThrows<UnsupportedOperationException> { runningProcess.exitCode.await() }
+        assertThrows<JobCancellationException> { runningProcess.exitCode.await() }
     }
 }
 
