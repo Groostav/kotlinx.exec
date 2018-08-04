@@ -30,6 +30,11 @@ repositories {
 dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     compile "org.jetbrains.kotlinx:kotlinx-coroutines-core:0.23.4"
+
+    compile "net.java.dev.jna:jna:4.5.2"
+    compile "net.java.dev.jna:jna-platform:4.0.0"
+
+    //TODO: remove, might leave compiled class
     compile "org.zeroturnaround:zt-exec:1.9"
     compile "org.zeroturnaround:zt-process-killer:1.7"
 

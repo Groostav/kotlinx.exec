@@ -1,13 +1,6 @@
 package groostav.kotlinx.exec
 
-
 internal interface ProcessControlFacade {
-
-    /**
-     * The OS-relevant process ID integer.
-     */
-    //TODO whats the expected behaviour if the process exited?
-    val pid: Maybe<Int> get() = Unsupported
 
     /**
      * attempts to kill the process via the SIG_INT mechanism
@@ -42,6 +35,8 @@ internal interface ProcessControlFacade {
     // by making it pure like this I made that bug into a compile-time exception.
     // it is very functional though
     val completionEvent: Maybe<ResultEventSource> get() = Unsupported
+
+
 }
 
 internal infix fun ProcessControlFacade.thenTry(backup: ProcessControlFacade): ProcessControlFacade {
@@ -60,7 +55,6 @@ internal class CompositeProcessFacade(val facades: List<ProcessControlFacade>): 
         require(facades.all { it !is CompositeProcessFacade } ) { "composite of composites: $this" }
     }
 
-    override val pid: Maybe<Int> get() = firstSupported { it.pid }
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> = firstSupported { it.tryKillGracefullyAsync(includeDescendants) }
     override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> = firstSupported { it.killForcefullyAsync(includeDescendants) }
     override val completionEvent: Maybe<ResultEventSource>

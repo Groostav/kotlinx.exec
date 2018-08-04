@@ -144,10 +144,11 @@ internal class RunningProcessFactory {
     internal fun create(
             config: ProcessBuilder,
             process: Process,
+            processIDProvider: ProcessIDGenerator,
             processControl: ProcessControlFacade
     ): RunningProcessImpl {
 
-        val processID = processControl.pid.value
+        val processID = processIDProvider.pid.value
         val result = RunningProcessImpl(
                 config,
                 processID,

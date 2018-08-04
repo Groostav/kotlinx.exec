@@ -7,8 +7,6 @@ internal class ZeroTurnaroundProcessFacade(val process: Process): ProcessControl
 
     val pidProcess = Processes.newPidProcess(process)
 
-    override val pid: Maybe<Int> = Supported(pidProcess.pid)
-
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
 
         when(pidProcess){
@@ -45,5 +43,8 @@ internal class ZeroTurnaroundProcessFacade(val process: Process): ProcessControl
 
     override val completionEvent: Maybe<ResultEventSource>
         get() = Unsupported
+}
+
+internal class TaskkillProcessFacade(val process: Process){
 
 }

@@ -15,8 +15,9 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
     val jvmRunningProcess = jvmProcessBuilder.start()
 
     val processControllerFacade: ProcessControlFacade = makeCompositImplementation(jvmRunningProcess)
+    val pidProvider = ReflectivePIDGen(jvmRunningProcess)
 
-    return runningProcessFactory.create(config, jvmRunningProcess, processControllerFacade)
+    return runningProcessFactory.create(config, jvmRunningProcess, pidProvider, processControllerFacade)
 }
 
 fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess = execAsync(processBuilder(config))
