@@ -9,7 +9,7 @@ import kotlin.coroutines.experimental.CoroutineContext
  * Returns the input stream as an unbufferred channel by blocking a thread provided by context
  *
  * **this method will put a blocking job** in [context]. Make sure the pool
- * that backs the provided context can handle that!
+ * that backs the provided context can procHandle that!
  *
  * the resulting channel is not buffered. This means it is sensitive to back-pressure.
  * downstream receivers should buffer appropriately!!

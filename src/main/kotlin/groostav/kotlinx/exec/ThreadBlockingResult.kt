@@ -3,7 +3,17 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.experimental.launch
 import java.util.concurrent.atomic.AtomicReference
 
-internal class ThreadBlockingResult(val jvmProcess: java.lang.Process): ProcessControlFacade {
+internal class ThreadBlockingResult(val jvmProcess: Process): ProcessControlFacade {
+
+    init {
+        require(isAvailable)
+        if(JavaVersion >= 9) trace { "WARN: using thread-blocking waitFor on java 9+" }
+    }
+
+    companion object: ProcessControlFacade.Factory {
+        override val isAvailable = true
+        override fun create(process: Process, pid: Int) = ThreadBlockingResult(process)
+    }
 
     private val handlers: AtomicReference<State> = AtomicReference(State.Uninitialized)
 

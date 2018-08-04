@@ -30,12 +30,16 @@ internal interface ProcessControlFacade {
      */
     // regarding funny return type,
     // I accidentally had an implementation that forgot to check the return value.
-    // Because 'addCompletionHandle(handle: Handler): Maybe<Unit>' is impure,
+    // Because 'addCompletionHandle(procHandle: Handler): Maybe<Unit>' is impure,
     // its easy to forget to check that you didn't get an `Unsupported` return code.
     // by making it pure like this I made that bug into a compile-time exception.
     // it is very functional though
     val completionEvent: Maybe<ResultEventSource> get() = Unsupported
 
+    interface Factory {
+        val isAvailable: Boolean
+        fun create(process: Process, pid: Int): ProcessControlFacade
+    }
 
 }
 
@@ -82,11 +86,14 @@ internal class CompositeProcessFacade(val facades: List<ProcessControlFacade>): 
 // - in order to run processes like `ls` to avoid a recursive dependency,
 //   I might need an `internal fun exec0(cmd): List<String?)`, similar to zero-turnaround.
 
-internal fun makeCompositImplementation(jvmRunningProcess: Process): ProcessControlFacade {
-
-    //TODO: look at features, reflect on runtime, maybe use a table? whats the most concise way in kotlin to express a feature map?
-
-    return ZeroTurnaroundProcessFacade(jvmRunningProcess) thenTry ThreadBlockingResult(jvmRunningProcess)
+internal fun makeCompositImplementation(jvmRunningProcess: Process, pid: Int): ProcessControlFacade {
+    val factories = listOf(
+            JEP102ProcessFacade,
+            WindowsProcessControl,
+            ZeroTurnaroundProcessFacade,
+            ThreadBlockingResult
+    )
+    return CompositeProcessFacade(factories.filter { it.isAvailable }.map { it.create(jvmRunningProcess, pid) })
 }
 
 

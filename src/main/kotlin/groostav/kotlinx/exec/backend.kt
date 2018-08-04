@@ -22,6 +22,19 @@ internal inline fun trace(message: () -> String){
     }
 }
 
+//https://github.com/openstreetmap/josm/blob/master/src/org/openstreetmap/josm/tools/Utils.java
+internal val JavaVersion = run {
+    var version = System.getProperty("java.version")
+    if (version.startsWith("1.")) {
+        version = version.substring(2)
+    }
+    // Allow these formats:
+    // 1.8.0_72-ea, 9-ea, 9, 10, 9.0.1
+    val dotPos = version.indexOf('.')
+    val dashPos = version.indexOf('-')
+
+    version.substring(0, if (dotPos > -1) dotPos else if (dashPos > -1) dashPos else version.length).toInt()
+}
 
 internal val blockableThread: CloseableCoroutineDispatcher = ThreadPoolExecutor(
         0,

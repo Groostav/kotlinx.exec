@@ -301,6 +301,8 @@ internal class RunningProcessImpl(
 
                 withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
                     processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
+
+                    fail //TODO: have a kind of deadlock here, _exitCode calls this method, but we acquire a mutex, so its suspended.
                     _exitCode.join()
                 }
 
@@ -309,6 +311,7 @@ internal class RunningProcessImpl(
                 }
             }
 
+            val x = 4;
             processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
         }
     }
