@@ -17,9 +17,11 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
     val pidProvider = makePIDGenerator(jvmRunningProcess)
     val processID = pidProvider.pid.value
 
+    val listenerProvider = makeListenerProvider(jvmRunningProcess, config)
+
     val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
 
-    return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade)
+    return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
 }
 
 fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess = execAsync(processBuilder(config))

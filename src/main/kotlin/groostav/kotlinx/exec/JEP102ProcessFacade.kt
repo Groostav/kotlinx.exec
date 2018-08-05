@@ -53,8 +53,4 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
         val success = killRecursor(procHandle, includeDescendants)
         return if(success) Supported(Unit) else Unsupported
     }
-
-    override val completionEvent = Supported<ResultEventSource> { handler ->
-        process.onExit().thenAccept { handler.invoke(process.exitValue()) }
-    }
 }

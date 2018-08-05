@@ -7,9 +7,6 @@ import kotlinx.coroutines.experimental.selects.SelectClause2
 import kotlinx.coroutines.experimental.selects.select
 import kotlinx.coroutines.experimental.sync.Mutex
 import kotlinx.coroutines.experimental.sync.withLock
-import java.io.InputStream
-import java.io.OutputStream
-import java.io.Reader
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -145,7 +142,8 @@ internal class RunningProcessFactory {
             config: ProcessBuilder,
             process: Process,
             processID: Int,
-            processControl: ProcessControlFacade
+            processControl: ProcessControlFacade,
+            processListenerProvider: ProcessListenerProvider
     ): RunningProcessImpl {
 
         val result = RunningProcessImpl(
@@ -153,6 +151,7 @@ internal class RunningProcessFactory {
                 processID,
                 process,
                 processControl,
+                processListenerProvider,
                 _standardOutputSource,
                 _standardOutputLines,
                 _standardErrorSource,
@@ -161,8 +160,8 @@ internal class RunningProcessFactory {
 
         _standardOutputLines.start(_standardOutputSource.openSubscription().lines(config.delimiters))
         _standardErrorLines.start(_standardErrorSource.openSubscription().lines(config.delimiters))
-        _standardOutputSource.start(process.inputStream.toPumpedReceiveChannel("stdout-$processID", config))
-        _standardErrorSource.start(process.errorStream.toPumpedReceiveChannel("stderr-$processID", config))
+        _standardOutputSource.start(processListenerProvider.standardOutputEvent.value.toReceiveChannel("stdout-$processID", config))
+        _standardErrorSource.start(processListenerProvider.standardErrorEvent.value.toReceiveChannel("stderr-$processID", config))
 
         return result
     }
@@ -173,6 +172,7 @@ internal class RunningProcessImpl(
         override val processID: Int,
         private val process: Process,
         private val processControlWrapper: ProcessControlFacade,
+        private val listenerProvider: ProcessListenerProvider,
         _standardOutputSource: SimpleInlineMulticaster<Char>,
         _standardOutputLines: SimpleInlineMulticaster<String>,
         _standardErrorSource: SimpleInlineMulticaster<Char>,
@@ -185,7 +185,7 @@ internal class RunningProcessImpl(
 
     private val _standardOutput: ReceiveChannel<Char>? = run {
         if(config.standardOutputBufferCharCount == 0) null
-        else _standardOutputSource.openSubscription().tail(config.standardErrorBufferCharCount)
+        else _standardOutputSource.openSubscription().tail(config.standardOutputBufferCharCount)
     }
     override val standardOutput: ReceiveChannel<Char> get() = _standardOutput ?: throw IllegalStateException(
             "no buffer specified for standard-output"
@@ -225,7 +225,7 @@ internal class RunningProcessImpl(
     private val _exitCode = CompletableDeferred<Int>()
 
     init {
-        processControlWrapper.completionEvent.value { result ->
+        listenerProvider.exitCodeEvent.value { result ->
 
             launch(Unconfined) {
 

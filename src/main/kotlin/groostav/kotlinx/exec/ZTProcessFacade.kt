@@ -49,7 +49,4 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
 
         return Supported(Unit)
     }
-
-    override val completionEvent: Maybe<ResultEventSource>
-        get() = Unsupported
 }

@@ -22,19 +22,6 @@ internal interface ProcessControlFacade {
      */
     fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> = Unsupported
 
-    /**
-     * a callback by which we can register completion handles.
-     *
-     * A base polling implementation exists in [SharedPollingResult],
-     * so alternative implementations are expected to do better than polling.
-     */
-    // regarding funny return type,
-    // I accidentally had an implementation that forgot to check the return value.
-    // Because 'addCompletionHandle(procHandle: Handler): Maybe<Unit>' is impure,
-    // its easy to forget to check that you didn't get an `Unsupported` return code.
-    // by making it pure like this I made that bug into a compile-time exception.
-    // it is very functional though
-    val completionEvent: Maybe<ResultEventSource> get() = Unsupported
 
     interface Factory {
         fun create(process: Process, pid: Int): Maybe<ProcessControlFacade>
@@ -42,20 +29,10 @@ internal interface ProcessControlFacade {
 
 }
 
-internal infix fun ProcessControlFacade.thenTry(backup: ProcessControlFacade): ProcessControlFacade {
-
-    fun flatten(facade: ProcessControlFacade): List<ProcessControlFacade> = when(facade){
-        is CompositeProcessFacade -> facade.facades.flatMap { flatten(it) }
-        else -> listOf(facade)
-    }
-
-    return CompositeProcessFacade(flatten(this) + flatten(backup))
-}
-
-internal class CompositeProcessFacade(val facades: List<ProcessControlFacade>): ProcessControlFacade {
+internal class CompositProcessControl(val facades: List<ProcessControlFacade>): ProcessControlFacade {
 
     init {
-        require(facades.all { it !is CompositeProcessFacade } ) { "composite of composites: $this" }
+        require(facades.all { it !is CompositProcessControl } ) { "composite of composites: $this" }
     }
 
     override fun tryKillGracefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
@@ -64,10 +41,6 @@ internal class CompositeProcessFacade(val facades: List<ProcessControlFacade>): 
     override fun killForcefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
         it.killForcefullyAsync(includeDescendants)
     })
-    override val completionEvent: Maybe<ResultEventSource> get() = Supported(facades.firstSupporting {
-        it.completionEvent
-    })
-
 }
 
 //TODO: dont like dependency on zero-turnaround, but its so well packaged...
@@ -93,15 +66,14 @@ internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessC
     val factories = listOf(
             JEP102ProcessFacade,
             WindowsProcessControl,
-            ZeroTurnaroundProcessFacade,
-            ThreadBlockingResult
+            ZeroTurnaroundProcessFacade
     )
     val facades = factories
             .map { it.create(jvmRunningProcess, pid) }
             .filterIsInstance<Supported<ProcessControlFacade>>()
             .map { it.value }
 
-    return CompositeProcessFacade(facades)
+    return CompositProcessControl(facades)
 }
 
 internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
@@ -111,6 +83,10 @@ internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
     )
 
     return factories.firstSupporting { it.create(jvmRunningProcess) }
+}
+
+internal fun makeListenerProvider(jvmRunningProcess: Process, config: ProcessBuilder): ProcessListenerProvider {
+    return ThreadBlockingListenerProvider(jvmRunningProcess, config)
 }
 
 private fun <R, S> List<S>.firstSupporting(call: (S) -> Maybe<R>): R {
