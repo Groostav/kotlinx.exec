@@ -160,8 +160,8 @@ internal class RunningProcessFactory {
 
         _standardOutputLines.start(_standardOutputSource.openSubscription().lines(config.delimiters))
         _standardErrorLines.start(_standardErrorSource.openSubscription().lines(config.delimiters))
-        _standardOutputSource.start(processListenerProvider.standardOutputEvent.value.toReceiveChannel("stdout-$processID", config))
-        _standardErrorSource.start(processListenerProvider.standardErrorEvent.value.toReceiveChannel("stderr-$processID", config))
+        _standardOutputSource.start(process.inputStream.toPumpedReceiveChannel("stdout-$processID", config))
+        _standardErrorSource.start(process.errorStream.toPumpedReceiveChannel("stderr-$processID", config))
 
         return result
     }
@@ -172,7 +172,7 @@ internal class RunningProcessImpl(
         override val processID: Int,
         private val process: Process,
         private val processControlWrapper: ProcessControlFacade,
-        private val listenerProvider: ProcessListenerProvider,
+        private val processListenerProvider: ProcessListenerProvider,
         _standardOutputSource: SimpleInlineMulticaster<Char>,
         _standardOutputLines: SimpleInlineMulticaster<String>,
         _standardErrorSource: SimpleInlineMulticaster<Char>,
@@ -225,23 +225,22 @@ internal class RunningProcessImpl(
     private val _exitCode = CompletableDeferred<Int>()
 
     init {
-        listenerProvider.exitCodeEvent.value { result ->
+        launch(Unconfined) {
 
-            launch(Unconfined) {
+            val result = processListenerProvider.exitCodeEvent.value.await()
 
-                trace { "$processID exited with $result, closing streams" }
+            trace { "$processID exited with $result, closing streams" }
 
-                _standardOutputSource.join()
-                _standardErrorSource.join()
+            _standardOutputSource.join()
+            _standardErrorSource.join()
 
-                when {
-                    killed -> _exitCode.cancel()
-                    result in config.expectedOutputCodes -> _exitCode.complete(result)
-                    else -> {
-                        val errorLines = errorHistory.await().toList()
-                        val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
-                        _exitCode.completeExceptionally(exception)
-                    }
+            when {
+                killed -> _exitCode.cancel()
+                result in config.expectedOutputCodes -> _exitCode.complete(result)
+                else -> {
+                    val errorLines = errorHistory.await().toList()
+                    val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
+                    _exitCode.completeExceptionally(exception)
                 }
             }
         }

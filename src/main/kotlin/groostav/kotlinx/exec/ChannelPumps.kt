@@ -1,8 +1,7 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.Unconfined
 import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.launch
+import kotlinx.coroutines.experimental.channels.Channel.Factory.UNLIMITED
 import java.io.*
 import kotlin.coroutines.experimental.CoroutineContext
 
@@ -15,7 +14,7 @@ import kotlin.coroutines.experimental.CoroutineContext
  * the resulting channel is not buffered. This means it is sensitive to back-pressure.
  * downstream receivers should buffer appropriately!!
  */
-internal fun NewMessageChunkEventSource.toReceiveChannel(
+internal fun InputStream.toPumpedReceiveChannel(
         channelName: String,
         config: ProcessBuilder,
         context: CoroutineContext = blockableThread
@@ -23,12 +22,21 @@ internal fun NewMessageChunkEventSource.toReceiveChannel(
 
     val result = produce(context) {
 
-        this@toReceiveChannel.invoke { messageChunk ->
-            launch(Unconfined){
-                messageChunk.forEach { nextChar ->
-                    send(nextChar)
-                }
+        // note: we ignore the "it is a good idea to buffer" here,
+        // this code expects downstream users to buffer appropriately.
+        val reader = InputStreamReader(this@toPumpedReceiveChannel, config.encoding)
+
+        trace { "SOF on $channelName" }
+
+        while (isActive) {
+            val nextCodePoint = reader.read().takeUnless { it == -1 }
+            if (nextCodePoint == null) {
+                trace { "EOF on $channelName" }
+                break
             }
+            val nextChar = nextCodePoint.toChar()
+
+            send(nextChar)
         }
     }
     return object: ReceiveChannel<Char> by result {
