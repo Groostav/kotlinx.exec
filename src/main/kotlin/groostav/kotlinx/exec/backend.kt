@@ -36,6 +36,8 @@ internal val JavaVersion = run {
     version.substring(0, if (dotPos > -1) dotPos else if (dashPos > -1) dashPos else version.length).toInt()
 }
 
+
+
 internal val blockableThread: CloseableCoroutineDispatcher = ThreadPoolExecutor(
         0,
         Integer.MAX_VALUE,
@@ -71,6 +73,12 @@ internal fun CoroutineDispatcher.prestart(jobs: Int){
     trace { "prestarted $jobs threads on $this" }
 }
 
+// return value wrapper to indicate support for the provided method
+// (alternative to things like "UnsupportedOperationException" or "NoClassDefFoundError")
+// main providers of classes returning 'Unsupported':
+//   - OS specific features
+//   - java version specific features
+// could probably make this monadic...
 internal sealed class Maybe<out T> {
     abstract val value: T
 }
@@ -79,3 +87,8 @@ internal object Unsupported : Maybe<Nothing>() { override val value: Nothing get
 
 internal typealias ResultHandler = (Int) -> Unit
 internal typealias ResultEventSource = (ResultHandler) -> Unit
+
+internal fun <T> supportedIf(condition: Boolean, resultIfTrue: () -> T): Maybe<T> = when(condition){
+    true -> Supported(resultIfTrue())
+    false -> Unsupported
+}

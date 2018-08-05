@@ -11,9 +11,30 @@ internal interface ProcessIDGenerator {
      */
     //TODO whats the expected behaviour if the process exited?
     val pid: Maybe<Int> get() = Unsupported
+
+    interface Factory {
+        fun create(process: Process): Maybe<ProcessIDGenerator>
+    }
+}
+
+internal class JEP102ProcessIDGenerator(private val process: Process): ProcessIDGenerator {
+
+    init { require(JavaVersion >= 9) }
+
+    companion object: ProcessIDGenerator.Factory {
+        override fun create(process: Process) = supportedIf(JavaVersion >= 9) { JEP102ProcessIDGenerator(process) }
+    }
+
+    override val pid: Supported<Int> = Supported(process.pid().toInt())
+    //TODO: RE: `toInt`, why did they use long? do they have implementations with pid=2^31 + 1?
+
 }
 
 internal class ReflectiveNativePIDGen(private val process: Process): ProcessIDGenerator {
+
+    companion object: ProcessIDGenerator.Factory {
+        override fun create(process: Process) = supportedIf(JavaVersion < 9){ ReflectiveNativePIDGen(process) }
+    }
 
     override val pid: Supported<Int> by lazy {
 

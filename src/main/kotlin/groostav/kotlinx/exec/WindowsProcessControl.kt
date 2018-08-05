@@ -8,13 +8,11 @@ import kotlinx.coroutines.experimental.launch
 internal class WindowsProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
 
     init {
-        require(isAvailable)
         if(JavaVersion >= 9) trace { "WARN: using Windows Process Control on Java 9+" }
     }
 
     companion object: ProcessControlFacade.Factory {
-        override val isAvailable: Boolean by lazy { Platform.isWindows() }
-        override fun create(process: Process, pid: Int) = WindowsProcessControl(process, pid)
+        override fun create(process: Process, pid: Int) = supportedIf(Platform.isWindows()) { WindowsProcessControl(process, pid) }
     }
 
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Supported<Unit> {

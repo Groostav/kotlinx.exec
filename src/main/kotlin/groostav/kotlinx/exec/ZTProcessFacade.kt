@@ -6,13 +6,12 @@ import org.zeroturnaround.process.WindowsProcess
 internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): ProcessControlFacade {
 
     init {
-        require(isAvailable)
         if(JavaVersion >= 9) trace { "WARN: using ZeroTurnaroundProcess on Java 9+" }
     }
 
     companion object: ProcessControlFacade.Factory  {
-        override val isAvailable: Boolean = Class.forName("org.zeroturnaround.process.WindowsProcess") != null
-        override fun create(process: Process, pid: Int) = ZeroTurnaroundProcessFacade(process, pid)
+        val ztOnClassPath: Boolean = Class.forName("org.zeroturnaround.process.Processes") != null
+        override fun create(process: Process, pid: Int) = supportedIf(ztOnClassPath) { ZeroTurnaroundProcessFacade(process, pid) }
     }
 
     private val pidProcess = Processes.newPidProcess(pid)

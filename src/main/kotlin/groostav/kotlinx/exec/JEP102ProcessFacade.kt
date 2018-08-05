@@ -4,13 +4,10 @@ import kotlin.streams.asSequence
 
 internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade {
 
-    init { require(isAvailable) }
-
     val procHandle = process.toHandle()
 
     companion object: ProcessControlFacade.Factory {
-        override val isAvailable = JavaVersion >= 9
-        override fun create(process: Process, pid: Int) = JEP102ProcessFacade(process)
+        override fun create(process: Process, pid: Int) = supportedIf(JavaVersion >= 9) { JEP102ProcessFacade(process) }
     }
 
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
@@ -20,7 +17,8 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
             if( ! handle.supportsNormalTermination()) return false
 
             //recurse on children
-            val successfulInfanticide = includeChildren && handle.children().asSequence().fold(true){ accum, next ->
+            val childSequence = handle.children().asSequence()
+            val successfulInfanticide = includeChildren && childSequence.fold(true){ accum, next ->
                 accum && killRecursor(next, includeChildren)
             }
 
@@ -40,7 +38,8 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
         fun killRecursor(handle: ProcessHandle, includeChildren: Boolean): Boolean{
 
             //recurse on children
-            val successfulInfanticide = includeChildren && handle.children().asSequence().fold(true){ accum, next ->
+            val childSequence = handle.children().asSequence()
+            val successfulInfanticide = includeChildren && childSequence.fold(true){ accum, next ->
                 accum && killRecursor(next, includeChildren)
             }
 

@@ -37,8 +37,7 @@ internal interface ProcessControlFacade {
     val completionEvent: Maybe<ResultEventSource> get() = Unsupported
 
     interface Factory {
-        val isAvailable: Boolean
-        fun create(process: Process, pid: Int): ProcessControlFacade
+        fun create(process: Process, pid: Int): Maybe<ProcessControlFacade>
     }
 
 }
@@ -59,22 +58,26 @@ internal class CompositeProcessFacade(val facades: List<ProcessControlFacade>): 
         require(facades.all { it !is CompositeProcessFacade } ) { "composite of composites: $this" }
     }
 
-    override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> = firstSupported { it.tryKillGracefullyAsync(includeDescendants) }
-    override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> = firstSupported { it.killForcefullyAsync(includeDescendants) }
-    override val completionEvent: Maybe<ResultEventSource>
-        get() = firstSupported { it.completionEvent }
+    override fun tryKillGracefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
+        it.tryKillGracefullyAsync(includeDescendants)
+    })
+    override fun killForcefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
+        it.killForcefullyAsync(includeDescendants)
+    })
+    override val completionEvent: Maybe<ResultEventSource> get() = Supported(facades.firstSupporting {
+        it.completionEvent
+    })
 
-    private fun <R> firstSupported(call: (ProcessControlFacade) -> Maybe<R>): Maybe<R> {
-        return facades.asSequence().map(call).firstOrNull { it != Unsupported }
-                ?: throw UnsupportedOperationException("none of $facades supports $call")
-    }
 }
 
 //TODO: dont like dependency on zero-turnaround, but its so well packaged...
 //
-// on windows: interestingly, they use a combination the cmd tools taskkill and wmic, and a reflection hack + JNA Win-Kernel32 call to manage the process
-//   - note that oshi (https://github.com/oshi/oshi, EPL license) has some COM object support... why cant I just load wmi.dll from JNA?
-// on linux: they dont support the deletion of children (???), and its pure shell commands (of course, since the shell is so nice)
+// on windows: interestingly, they use a combination the cmd tools taskkill and wmic,
+// and a reflection hack + JNA Win-Kernel32 call to manage the process
+//   - note that oshi (https://github.com/oshi/oshi, EPL license) has some COM object support...
+// why cant I just load wmi.dll from JNA?
+// on linux: they dont support the deletion of children (???),
+// and its pure shell commands (of course, since the shell is so nice)
 // what about android or even IOS? *nix == BSD support means... what? is there even a use-case here?
 //
 // so I think cross-platform support is a little trickey,
@@ -86,14 +89,33 @@ internal class CompositeProcessFacade(val facades: List<ProcessControlFacade>): 
 // - in order to run processes like `ls` to avoid a recursive dependency,
 //   I might need an `internal fun exec0(cmd): List<String?)`, similar to zero-turnaround.
 
-internal fun makeCompositImplementation(jvmRunningProcess: Process, pid: Int): ProcessControlFacade {
+internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessControlFacade {
     val factories = listOf(
             JEP102ProcessFacade,
             WindowsProcessControl,
             ZeroTurnaroundProcessFacade,
             ThreadBlockingResult
     )
-    return CompositeProcessFacade(factories.filter { it.isAvailable }.map { it.create(jvmRunningProcess, pid) })
+    val facades = factories
+            .map { it.create(jvmRunningProcess, pid) }
+            .filterIsInstance<Supported<ProcessControlFacade>>()
+            .map { it.value }
+
+    return CompositeProcessFacade(facades)
 }
 
+internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
+    val factories = listOf(
+            JEP102ProcessIDGenerator,
+            ReflectiveNativePIDGen
+    )
 
+    return factories.firstSupporting { it.create(jvmRunningProcess) }
+}
+
+private fun <R, S> List<S>.firstSupporting(call: (S) -> Maybe<R>): R {
+    val candidate = this.asSequence().map(call).filterIsInstance<Supported<R>>().firstOrNull()
+            ?: throw UnsupportedOperationException("none of $this supports $call")
+
+    return candidate.value
+}

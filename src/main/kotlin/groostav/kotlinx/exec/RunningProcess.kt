@@ -144,11 +144,10 @@ internal class RunningProcessFactory {
     internal fun create(
             config: ProcessBuilder,
             process: Process,
-            processIDProvider: ProcessIDGenerator,
+            processID: Int,
             processControl: ProcessControlFacade
     ): RunningProcessImpl {
 
-        val processID = processIDProvider.pid.value
         val result = RunningProcessImpl(
                 config,
                 processID,
@@ -294,26 +293,24 @@ internal class RunningProcessImpl(
             if (_exitCode.isCompleted) return
 
             killed = true
+        }
 
-            trace { "killing $processID" }
+        trace { "killing $processID" }
 
-            if (gracefulTimeousMillis > 0) {
+        if (gracefulTimeousMillis > 0) {
 
-                withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
-                    processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
+            withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
+                processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
 
-                    fail //TODO: have a kind of deadlock here, _exitCode calls this method, but we acquire a mutex, so its suspended.
-                    _exitCode.join()
-                }
-
-                if (_exitCode.isCompleted) {
-                    return
-                }
+                _exitCode.join()
             }
 
-            val x = 4;
-            processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
+            if (_exitCode.isCompleted) {
+                return
+            }
         }
+
+        processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
     }
 
 
@@ -378,7 +375,7 @@ internal class RunningProcessImpl(
                     }
                     when(next) {
                         null -> continue@loop
-                        is ExitCode -> return@produce
+                        is ExitCode -> send(next).also { return@produce }
                         else -> send(next)
                     } as Any
                 }

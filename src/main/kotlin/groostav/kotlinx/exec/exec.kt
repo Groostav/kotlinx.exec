@@ -14,10 +14,12 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
 
     val jvmRunningProcess = jvmProcessBuilder.start()
 
-    val pidProvider = ReflectiveNativePIDGen(jvmRunningProcess)
-    val processControllerFacade: ProcessControlFacade = makeCompositImplementation(jvmRunningProcess, pidProvider.pid.value)
+    val pidProvider = makePIDGenerator(jvmRunningProcess)
+    val processID = pidProvider.pid.value
 
-    return runningProcessFactory.create(config, jvmRunningProcess, pidProvider, processControllerFacade)
+    val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
+
+    return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade)
 }
 
 fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess = execAsync(processBuilder(config))

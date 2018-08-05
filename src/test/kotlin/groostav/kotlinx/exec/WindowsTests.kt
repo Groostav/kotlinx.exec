@@ -26,11 +26,9 @@ class WindowsTests {
 
     @Test fun `when running simple echo statement should properly redirect`() = runBlocking<Unit> {
 
-        val processSpec = ProcessBuilder().apply {
+        val runningProcess = execAsync {
             command = listOf("cmd", "/C", "echo", "hello command line!")
         }
-
-        val runningProcess = execAsync(processSpec)
 
         val messages = runningProcess.map { event -> when(event){
             is StandardError -> DomainModel("Error: ${event.line}")
