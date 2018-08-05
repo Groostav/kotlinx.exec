@@ -160,8 +160,8 @@ internal class RunningProcessFactory {
 
         _standardOutputLines.start(_standardOutputSource.openSubscription().lines(config.delimiters))
         _standardErrorLines.start(_standardErrorSource.openSubscription().lines(config.delimiters))
-        _standardOutputSource.start(process.inputStream.toPumpedReceiveChannel("stdout-$processID", config))
-        _standardErrorSource.start(process.errorStream.toPumpedReceiveChannel("stderr-$processID", config))
+        _standardOutputSource.start(processListenerProvider.standardOutputChannel.value)
+        _standardErrorSource.start(processListenerProvider.standardErrorChannel.value)
 
         return result
     }
@@ -227,7 +227,7 @@ internal class RunningProcessImpl(
     init {
         launch(Unconfined) {
 
-            val result = processListenerProvider.exitCodeEvent.value.await()
+            val result = processListenerProvider.exitCodeDeferred.value.await()
 
             trace { "$processID exited with $result, closing streams" }
 
