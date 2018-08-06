@@ -50,5 +50,11 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
 
         return Supported(Unit)
     }
+
+    //also, implementing a WindowsListener.addExitCodeHandle with RegisterWaitForSingleObject function sounds good,
+    // https://docs.microsoft.com/en-us/windows/desktop/api/winbase/nf-winbase-registerwaitforsingleobject
+    // but it looks like that just punts the problem from the jvm into kernel 32, which still uses the same
+    // (blocking thread) strategy.
+    // => dont bother, no matter the API we're still polling the bastard.
 }
 
