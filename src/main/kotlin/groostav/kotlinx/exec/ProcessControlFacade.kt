@@ -1,13 +1,6 @@
 package groostav.kotlinx.exec
 
-
 internal interface ProcessControlFacade {
-
-    /**
-     * The OS-relevant process ID integer.
-     */
-    //TODO whats the expected behaviour if the process exited?
-    val pid: Maybe<Int> get() = Unsupported
 
     /**
      * attempts to kill the process via the SIG_INT mechanism
@@ -29,54 +22,35 @@ internal interface ProcessControlFacade {
      */
     fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> = Unsupported
 
-    /**
-     * a callback by which we can register completion handles.
-     *
-     * A base polling implementation exists in [SharedPollingResult],
-     * so alternative implementations are expected to do better than polling.
-     */
-    // regarding funny return type,
-    // I accidentally had an implementation that forgot to check the return value.
-    // Because 'addCompletionHandle(handle: Handler): Maybe<Unit>' is impure,
-    // its easy to forget to check that you didn't get an `Unsupported` return code.
-    // by making it pure like this I made that bug into a compile-time exception.
-    // it is very functional though
-    val completionEvent: Maybe<ResultEventSource> get() = Unsupported
-}
 
-internal infix fun ProcessControlFacade.thenTry(backup: ProcessControlFacade): ProcessControlFacade {
-
-    fun flatten(facade: ProcessControlFacade): List<ProcessControlFacade> = when(facade){
-        is CompositeProcessFacade -> facade.facades.flatMap { flatten(it) }
-        else -> listOf(facade)
+    interface Factory {
+        fun create(process: Process, pid: Int): Maybe<ProcessControlFacade>
     }
 
-    return CompositeProcessFacade(flatten(this) + flatten(backup))
 }
 
-internal class CompositeProcessFacade(val facades: List<ProcessControlFacade>): ProcessControlFacade {
+internal class CompositProcessControl(val facades: List<ProcessControlFacade>): ProcessControlFacade {
 
     init {
-        require(facades.all { it !is CompositeProcessFacade } ) { "composite of composites: $this" }
+        require(facades.all { it !is CompositProcessControl } ) { "composite of composites: $this" }
     }
 
-    override val pid: Maybe<Int> get() = firstSupported { it.pid }
-    override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> = firstSupported { it.tryKillGracefullyAsync(includeDescendants) }
-    override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> = firstSupported { it.killForcefullyAsync(includeDescendants) }
-    override val completionEvent: Maybe<ResultEventSource>
-        get() = firstSupported { it.completionEvent }
-
-    private fun <R> firstSupported(call: (ProcessControlFacade) -> Maybe<R>): Maybe<R> {
-        return facades.asSequence().map(call).firstOrNull { it != Unsupported }
-                ?: throw UnsupportedOperationException("none of $facades supports $call")
-    }
+    override fun tryKillGracefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
+        it.tryKillGracefullyAsync(includeDescendants)
+    })
+    override fun killForcefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
+        it.killForcefullyAsync(includeDescendants)
+    })
 }
 
 //TODO: dont like dependency on zero-turnaround, but its so well packaged...
 //
-// on windows: interestingly, they use a combination the cmd tools taskkill and wmic, and a reflection hack + JNA Win-Kernel32 call to manage the process
-//   - note that oshi (https://github.com/oshi/oshi, EPL license) has some COM object support... why cant I just load wmi.dll from JNA?
-// on linux: they dont support the deletion of children (???), and its pure shell commands (of course, since the shell is so nice)
+// on windows: interestingly, they use a combination the cmd tools taskkill and wmic,
+// and a reflection hack + JNA Win-Kernel32 call to manage the process
+//   - note that oshi (https://github.com/oshi/oshi, EPL license) has some COM object support...
+// why cant I just load wmi.dll from JNA?
+// on linux: they dont support the deletion of children (???),
+// and its pure shell commands (of course, since the shell is so nice)
 // what about android or even IOS? *nix == BSD support means... what? is there even a use-case here?
 //
 // so I think cross-platform support is a little trickey,
@@ -88,11 +62,36 @@ internal class CompositeProcessFacade(val facades: List<ProcessControlFacade>): 
 // - in order to run processes like `ls` to avoid a recursive dependency,
 //   I might need an `internal fun exec0(cmd): List<String?)`, similar to zero-turnaround.
 
-internal fun makeCompositImplementation(jvmRunningProcess: Process): ProcessControlFacade {
+internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessControlFacade {
+    val factories = listOf(
+            JEP102ProcessFacade,
+            WindowsProcessControl,
+            ZeroTurnaroundProcessFacade
+    )
+    val facades = factories
+            .map { it.create(jvmRunningProcess, pid) }
+            .filterIsInstance<Supported<ProcessControlFacade>>()
+            .map { it.value }
 
-    //TODO: look at features, reflect on runtime, maybe use a table? whats the most concise way in kotlin to express a feature map?
-
-    return ZeroTurnaroundProcessFacade(jvmRunningProcess) thenTry ThreadBlockingResult(jvmRunningProcess)
+    return CompositProcessControl(facades)
 }
 
+internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
+    val factories = listOf(
+            JEP102ProcessIDGenerator,
+            ReflectiveNativePIDGen
+    )
 
+    return factories.firstSupporting { it.create(jvmRunningProcess) }
+}
+
+internal fun makeListenerProvider(jvmRunningProcess: Process, pid: Int, config: ProcessBuilder): ProcessListenerProvider {
+    return PollingListenerProvider(jvmRunningProcess, pid, config)
+}
+
+private fun <R, S> List<S>.firstSupporting(call: (S) -> Maybe<R>): R {
+    val candidate = this.asSequence().map(call).filterIsInstance<Supported<R>>().firstOrNull()
+            ?: throw UnsupportedOperationException("none of $this supports $call")
+
+    return candidate.value
+}

@@ -1,17 +1,15 @@
 package groostav.kotlinx.exec
 
+import assertThrows
 import getLocalResourcePath
-import kotlinx.coroutines.experimental.CompletableDeferred
+import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.delay
-import kotlinx.coroutines.experimental.runBlocking
 import kotlinx.coroutines.experimental.selects.select
 import org.amshove.kluent.*
 import org.junit.Ignore
 import org.junit.Test
 import queueOf
 import java.util.*
-import kotlinx.coroutines.experimental.withTimeoutOrNull
 import org.intellij.lang.annotations.Language
 import java.nio.file.Files
 import kotlin.test.assertEquals
@@ -28,11 +26,9 @@ class WindowsTests {
 
     @Test fun `when running simple echo statement should properly redirect`() = runBlocking<Unit> {
 
-        val processSpec = ProcessBuilder().apply {
+        val runningProcess = execAsync {
             command = listOf("cmd", "/C", "echo", "hello command line!")
         }
-
-        val runningProcess = execAsync(processSpec)
 
         val messages = runningProcess.map { event -> when(event){
             is StandardError -> DomainModel("Error: ${event.line}")
@@ -82,10 +78,10 @@ class WindowsTests {
 
         process.kill()
 
-        val stdout = process.standardOutput.toList()
-        val result = process.exitCode.await()
+        val stdout = process.map { it.formattedMessage }.toList()
+        val result = assertThrows<JobCancellationException> { process.exitCode.await() }
 
-        result shouldEqual 1
+        result shouldNotBe null
         stdout shouldContain "running!"
         stdout.size shouldBeGreaterThan ((5000-1) / 500)
     }

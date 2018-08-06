@@ -7,9 +7,6 @@ import kotlinx.coroutines.experimental.selects.SelectClause2
 import kotlinx.coroutines.experimental.selects.select
 import kotlinx.coroutines.experimental.sync.Mutex
 import kotlinx.coroutines.experimental.sync.withLock
-import java.io.InputStream
-import java.io.OutputStream
-import java.io.Reader
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -144,15 +141,17 @@ internal class RunningProcessFactory {
     internal fun create(
             config: ProcessBuilder,
             process: Process,
-            processControl: ProcessControlFacade
+            processID: Int,
+            processControl: ProcessControlFacade,
+            processListenerProvider: ProcessListenerProvider
     ): RunningProcessImpl {
 
-        val processID = processControl.pid.value
         val result = RunningProcessImpl(
                 config,
                 processID,
                 process,
                 processControl,
+                processListenerProvider,
                 _standardOutputSource,
                 _standardOutputLines,
                 _standardErrorSource,
@@ -161,8 +160,8 @@ internal class RunningProcessFactory {
 
         _standardOutputLines.start(_standardOutputSource.openSubscription().lines(config.delimiters))
         _standardErrorLines.start(_standardErrorSource.openSubscription().lines(config.delimiters))
-        _standardOutputSource.start(process.inputStream.toPumpedReceiveChannel("stdout-$processID", config))
-        _standardErrorSource.start(process.errorStream.toPumpedReceiveChannel("stderr-$processID", config))
+        _standardOutputSource.start(processListenerProvider.standardOutputChannel.value)
+        _standardErrorSource.start(processListenerProvider.standardErrorChannel.value)
 
         return result
     }
@@ -173,6 +172,7 @@ internal class RunningProcessImpl(
         override val processID: Int,
         private val process: Process,
         private val processControlWrapper: ProcessControlFacade,
+        private val processListenerProvider: ProcessListenerProvider,
         _standardOutputSource: SimpleInlineMulticaster<Char>,
         _standardOutputLines: SimpleInlineMulticaster<String>,
         _standardErrorSource: SimpleInlineMulticaster<Char>,
@@ -185,7 +185,7 @@ internal class RunningProcessImpl(
 
     private val _standardOutput: ReceiveChannel<Char>? = run {
         if(config.standardOutputBufferCharCount == 0) null
-        else _standardOutputSource.openSubscription().tail(config.standardErrorBufferCharCount)
+        else _standardOutputSource.openSubscription().tail(config.standardOutputBufferCharCount)
     }
     override val standardOutput: ReceiveChannel<Char> get() = _standardOutput ?: throw IllegalStateException(
             "no buffer specified for standard-output"
@@ -225,23 +225,22 @@ internal class RunningProcessImpl(
     private val _exitCode = CompletableDeferred<Int>()
 
     init {
-        processControlWrapper.completionEvent.value { result ->
+        launch(Unconfined) {
 
-            launch(Unconfined) {
+            val result = processListenerProvider.exitCodeDeferred.value.await()
 
-                trace { "$processID exited with $result, closing streams" }
+            trace { "$processID exited with $result, closing streams" }
 
-                _standardOutputSource.join()
-                _standardErrorSource.join()
+            _standardOutputSource.join()
+            _standardErrorSource.join()
 
-                when {
-                    killed -> _exitCode.cancel()
-                    result in config.expectedOutputCodes -> _exitCode.complete(result)
-                    else -> {
-                        val errorLines = errorHistory.await().toList()
-                        val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
-                        _exitCode.completeExceptionally(exception)
-                    }
+            when {
+                killed -> _exitCode.cancel()
+                result in config.expectedOutputCodes -> _exitCode.complete(result)
+                else -> {
+                    val errorLines = errorHistory.await().toList()
+                    val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
+                    _exitCode.completeExceptionally(exception)
                 }
             }
         }
@@ -293,23 +292,24 @@ internal class RunningProcessImpl(
             if (_exitCode.isCompleted) return
 
             killed = true
+        }
 
-            trace { "killing $processID" }
+        trace { "killing $processID" }
 
-            if (gracefulTimeousMillis > 0) {
+        if (gracefulTimeousMillis > 0) {
 
-                withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
-                    processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
-                    _exitCode.join()
-                }
+            withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
+                processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
 
-                if (_exitCode.isCompleted) {
-                    return
-                }
+                _exitCode.join()
             }
 
-            processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
+            if (_exitCode.isCompleted) {
+                return
+            }
         }
+
+        processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
     }
 
 
@@ -374,7 +374,7 @@ internal class RunningProcessImpl(
                     }
                     when(next) {
                         null -> continue@loop
-                        is ExitCode -> return@produce
+                        is ExitCode -> send(next).also { return@produce }
                         else -> send(next)
                     } as Any
                 }

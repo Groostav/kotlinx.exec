@@ -22,6 +22,21 @@ internal inline fun trace(message: () -> String){
     }
 }
 
+//https://github.com/openstreetmap/josm/blob/master/src/org/openstreetmap/josm/tools/Utils.java
+internal val JavaVersion = run {
+    var version = System.getProperty("java.version")
+    if (version.startsWith("1.")) {
+        version = version.substring(2)
+    }
+    // Allow these formats:
+    // 1.8.0_72-ea, 9-ea, 9, 10, 9.0.1
+    val dotPos = version.indexOf('.')
+    val dashPos = version.indexOf('-')
+
+    version.substring(0, if (dotPos > -1) dotPos else if (dashPos > -1) dashPos else version.length).toInt()
+}
+
+
 
 internal val blockableThread: CloseableCoroutineDispatcher = ThreadPoolExecutor(
         0,
@@ -58,6 +73,12 @@ internal fun CoroutineDispatcher.prestart(jobs: Int){
     trace { "prestarted $jobs threads on $this" }
 }
 
+// return value wrapper to indicate support for the provided method
+// (alternative to things like "UnsupportedOperationException" or "NoClassDefFoundError")
+// main providers of classes returning 'Unsupported':
+//   - OS specific features
+//   - java version specific features
+// could probably make this monadic...
 internal sealed class Maybe<out T> {
     abstract val value: T
 }
@@ -66,3 +87,8 @@ internal object Unsupported : Maybe<Nothing>() { override val value: Nothing get
 
 internal typealias ResultHandler = (Int) -> Unit
 internal typealias ResultEventSource = (ResultHandler) -> Unit
+
+internal fun <T> supportedIf(condition: Boolean, resultIfTrue: () -> T): Maybe<T> = when(condition){
+    true -> Supported(resultIfTrue())
+    false -> Unsupported
+}
