@@ -272,6 +272,7 @@ internal class RunningProcessImpl(
             throw ex
         }
         finally {
+            shutdownZipper.waitFor(ShutdownItem.ExitCodeJoin)
             trace { "exitCode pid=$processID in finally block, killed=$killed" }
         }
 
@@ -281,6 +282,7 @@ internal class RunningProcessImpl(
 
     override suspend fun join(): Unit {
         exitCode.join()
+        shutdownZipper.waitFor(ShutdownItem.ProcessJoin)
         trace { "process joined" }
     }
 

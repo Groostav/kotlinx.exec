@@ -1,38 +1,48 @@
 package groostav.kotlinx.exec
+import kotlinx.coroutines.experimental.channels.RendezvousChannel
+import kotlinx.coroutines.experimental.launch
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.experimental.Continuation
 import kotlin.coroutines.experimental.intrinsics.suspendCoroutineOrReturn
 import kotlin.coroutines.experimental.intrinsics.COROUTINE_SUSPENDED
 
 
-private class ShutdownEntry<T>(val item: T, val continuation: Continuation<Unit>?)
+private class ShutdownEntry<T>(val item: T, val continuations: List<Continuation<Unit>>)
 
-class ShutdownZipper<T>(values: List<T>) {
+class ShutdownZipper<T>(val initialValues: List<T>) {
 
-    private val elements = AtomicReference(values.map { ShutdownEntry(it, null) })
+    private val elements = AtomicReference(initialValues.map { ShutdownEntry(it, emptyList()) })
 
-    fail; //NFG, because there is a race between the entering coroutine and
-    // the coroutines that are resumed by it.
     suspend fun waitFor(item: T) = suspendCoroutineOrReturn<Unit> { continuation ->
+
+        require(item in initialValues)
 
         var readyDependants: List<ShutdownEntry<T>> = emptyList()
 
-        val newState = elements.updateAndGet { elements ->
+        val elements = elements.updateAndGet { elements ->
 
-            val headEntry = elements.first()
+            val headEntry = elements.firstOrNull()
 
-            val remaining = if(headEntry.item == item) {
-                require(headEntry.continuation == null)
-                val elements = elements.drop(1)
+            val remaining = when {
+                fail; //sorry, my brains gone, this thing is a pain in the ass.
+                // i got it green bar by using an extra flag, but im pretty sure that messes up the state,
+                
+                item !in elements.map { it.item } -> {
+                    readyDependants = emptyList()
+                    elements
+                }
+                headEntry?.item == item -> {
+                    require(headEntry!!.continuations.isEmpty())
+                    readyDependants = emptyList()
+                    readyDependants += ShutdownEntry(item, listOf(continuation))
+                    readyDependants += elements.drop(1).takeWhile { it.continuations.any() }
 
-                readyDependants = elements.takeWhile { it.continuation != null }
-
-                elements.drop(readyDependants.size) //could use sublist, but then we hang on to old continuations
-            }
-            else {
-                elements.map { entry ->
+                    elements.drop(readyDependants.size) //could use sublist, but then we hang on to old continuations
+                }
+                else -> elements.map { entry ->
+                    readyDependants = emptyList()
                     when (entry.item) {
-                        item -> ShutdownEntry(item, continuation)
+                        item -> ShutdownEntry(item, entry.continuations + continuation)
                         else -> entry
                     }
                 }
@@ -41,11 +51,39 @@ class ShutdownZipper<T>(values: List<T>) {
             remaining
         }
 
-        readyDependants.forEach { it.continuation!!.resume(Unit) }
+        //note: this continuation is likely in this list.
+        readyDependants.flatMap { it.continuations }.forEach { it.resume(Unit) }
 
-        val result = if (item !in newState.map { it.item }) Unit else COROUTINE_SUSPENDED
-
-        result;
+        if(item !in elements.map { it.item }) Unit else COROUTINE_SUSPENDED
     }
 }
+//
+//class BadShutdownZipper<T>(values: List<T>) {
+//
+//    private val elements = AtomicReference(values.map { ShutdownEntry(it, null) })
+//    private val channel = RendezvousChannel<T>()
+//
+//    init {
+//        launch {
+//            var index = 0
+//            for(element in channel){
+//                val elements = elements.get()
+//                while(true){
+//                    val next = elements[index].continuations
+//                    if(next == null) break
+//                    next.resume(Unit)
+//                    index += 1
+//                }
+//            }
+//        }
+//    }
+//
+//    suspend fun waitFor(item: T) = suspendCoroutineOrReturn<Unit> { continuation ->
+//        elements.updateAndGet { elements ->
+//            elements.map { if(it.item == item) ShutdownEntry(item, continuation) else it }
+//        }
+//        launch { channel.send(item) }
+//        COROUTINE_SUSPENDED
+//    }
+//}
 

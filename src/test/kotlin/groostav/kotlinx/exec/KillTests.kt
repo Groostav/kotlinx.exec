@@ -72,4 +72,20 @@ class KillTests {
         //assert
         assertEquals(listOf("procJoin", "exitCodeJoin", "aggregateChannelJoin"), results)
     }
+
+    @Test fun `when calling join twice shouldnt deadlock`() = runBlocking {
+        //setup
+        val runningProcess = execAsync {
+            command = emptyScriptCommand()
+        }
+
+        //act
+        runningProcess.join()
+        runningProcess.join()
+
+        //assert
+        assertTrue(runningProcess.exitCode.isCompleted)
+        assertFalse(runningProcess.exitCode.isActive)
+        assertTrue(runningProcess.isClosedForReceive)
+    }
 }

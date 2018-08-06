@@ -6,6 +6,7 @@ import kotlinx.coroutines.experimental.runBlocking
 import org.junit.Test
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ShutdownZipperTests {
 
@@ -68,5 +69,60 @@ class ShutdownZipperTests {
                 "SevenTimes"
         )
         assertEquals(expected, results)
+    }
+
+    @Test fun `when using shutdown reentrantly zipper should properly execute`() = runBlocking {
+
+        val singleThread = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val zipper = ShutdownZipper(listOf("only"))
+        var results: List<String> = emptyList()
+
+        //act
+        val firstWaiting = launch(singleThread) {
+            zipper.waitFor("only")
+            results += "first"
+        }
+        val firstWaitingAgain = launch(singleThread) {
+            zipper.waitFor("only")
+            results += "first-again"
+        }
+
+        firstWaiting.join()
+        firstWaitingAgain.join()
+
+        //assert
+        // this system has no way of knowing which came first,
+        // so we'll use set logic here
+        assertEquals(setOf("first", "first-again"), results.toSet())
+    }
+
+    @Test fun `when using shutdown reentrantly again zipper should properly execute`() = runBlocking {
+
+        val singleThread = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val zipper = ShutdownZipper(listOf("first", "second"))
+        var results: List<String> = emptyList()
+
+        //act
+        val firstWaiting = launch(singleThread) {
+            zipper.waitFor("first")
+            results += "first"
+        }
+        val firstWaitingAgain = launch(singleThread) {
+            zipper.waitFor("first")
+            results += "first-again"
+        }
+        val secondWaiting = launch(singleThread) {
+            zipper.waitFor("second")
+            results += "second"
+        }
+
+        firstWaiting.join()
+        secondWaiting.join()
+        firstWaitingAgain.join()
+
+        //assert
+        // this system has no way of knowing which came first,
+        // so we'll use set logic here
+        assertEquals(setOf("first", "first-again", "second"), results.toSet())
     }
 }
