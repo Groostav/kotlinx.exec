@@ -82,7 +82,8 @@ internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
 }
 
 internal fun makeListenerProvider(jvmRunningProcess: Process, pid: Int, config: ProcessBuilder): ProcessListenerProvider {
-    return PollingListenerProvider(jvmRunningProcess, pid, config)
+//    return PollingListenerProvider(jvmRunningProcess, pid, config)
+    return ThreadBlockingListenerProvider(jvmRunningProcess, pid, config)
 }
 
 private fun <R, S> List<S>.firstSupporting(call: (S) -> Maybe<R>): R {

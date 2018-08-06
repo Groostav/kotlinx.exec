@@ -265,6 +265,7 @@ class WindowsTests {
     }
 
     @Test fun `when using dropping buffer should not attempt to cache any output`() = runBlocking<Unit>{
+
         //setup
         val simpleScript = getLocalResourcePath("MultilineScript.ps1")
 
@@ -280,8 +281,6 @@ class WindowsTests {
 
         //assert
         assertEquals(listOf<String>("nextline!"), output)
-
-//        TODO("this test is flapping and i dont know why")
     }
 
     @Test fun `when running with non standard env should do things`() = runBlocking<Unit> {

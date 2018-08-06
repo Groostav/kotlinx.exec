@@ -2,10 +2,12 @@ package groostav.kotlinx.exec
 
 import assertThrows
 import completableScriptCommand
+import emptyScriptCommand
 import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.toList
 import org.junit.Test
 import promptScriptCommand
+import java.util.*
 import kotlin.test.*
 
 class KillTests {
@@ -49,8 +51,25 @@ class KillTests {
         assertEquals(listOf(StandardOutput("Hello!")), actual)
         assertThrows<JobCancellationException> { runningProcess.exitCode.await() }
     }
-}
 
-fun testing(any: Any){
-    val x = 4;
+    @Test fun `when exiting normally should perform orderly shutdown`() = runBlocking {
+        //setup
+        val process = execAsync { command = completableScriptCommand() }
+
+        val results = Collections.synchronizedList(ArrayList<String>())
+
+        //act
+        val procJoin = launch { process.join(); results += "procJoin" }
+        val exitCodeJoin = launch { process.exitCode.join(); results += "exitCodeJoin" }
+        val aggregateChannelJoin = launch { process.toList(); results += "aggregateChannelJoin" }
+
+        process.send("OK")
+        process.close()
+
+
+        procJoin.join(); exitCodeJoin.join(); aggregateChannelJoin.join()
+
+        //assert
+        assertEquals(listOf("procJoin", "exitCodeJoin", "aggregateChannelJoin"), results)
+    }
 }

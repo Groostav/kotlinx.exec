@@ -1,6 +1,6 @@
 
 Write-Verbose "Completable Script running!"
 
-$Input = Read-Host
+$input.Remove()
 
 exit 0

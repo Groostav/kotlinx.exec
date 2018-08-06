@@ -1,13 +1,6 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.CommonPool
 import java.nio.charset.Charset
-import kotlin.coroutines.experimental.CoroutineContext
-
-
-//TODO: regarding ZeroTurnarounds own "run this and get me a list of std-out"  style java builder,
-// should we add a third method here to cover that same use case? Simply suspend until all output is availabe,
-// and return it as a list of lines?
 
 data class ProcessBuilder internal constructor(
 
@@ -116,9 +109,7 @@ data class ProcessBuilder internal constructor(
          * Setting this value to zero will disable standard-error buffering for the purposes
          * of stack-trace generation entirely.
          */
-        var linesForExceptionError: Int = 15,
-
-        internal val dispatcher: CoroutineContext = CommonPool
+        var linesForExceptionError: Int = 15
 )
 
 internal fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {

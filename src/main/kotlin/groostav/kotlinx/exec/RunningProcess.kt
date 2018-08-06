@@ -1,5 +1,7 @@
 package groostav.kotlinx.exec
 
+import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.updateAndGet
 import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.selects.SelectClause1
@@ -9,6 +11,8 @@ import kotlinx.coroutines.experimental.sync.Mutex
 import kotlinx.coroutines.experimental.sync.withLock
 import java.util.*
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.experimental.Continuation
+import kotlin.coroutines.experimental.intrinsics.suspendCoroutineOrReturn
 
 @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE") //renames a couple of the param names for SendChannel & ReceiveChannel
 /**
@@ -277,7 +281,10 @@ internal class RunningProcessImpl(
     }
 
 
-    override suspend fun join(): Unit = exitCode.join()
+    override suspend fun join(): Unit {
+        exitCode.join()
+        trace { "process joined" }
+    }
 
     override suspend fun kill(): Unit {
         killWithoutSync()
@@ -343,6 +350,9 @@ internal class RunningProcessImpl(
 
     //endregion
 
+    val shutdownZipper = ShutdownZipper()
+
+
     //region ReceiveChannel
 
     private val aggregateChannel: ReceiveChannel<ProcessEvent> = when(config.aggregateOutputBufferLineCount){
@@ -350,6 +360,8 @@ internal class RunningProcessImpl(
             val actual = produce<ProcessEvent>(Unconfined){
                 val code = exitCode.await()
                 send(ExitCode(code))
+
+                shutdownZipper.waitFor(ShutdownItem.AggregateChannel)
             }
             object: ReceiveChannel<ProcessEvent> by actual{
                 override fun toString() = "aggregate[size=0, delay=$exitCode]"
@@ -361,22 +373,27 @@ internal class RunningProcessImpl(
             val outputLines = _standardOutputLines.openSubscription()
 
             val actual = produce<ProcessEvent> {
-
-                loop@ while (isActive) {
-                    val next = select<ProcessEvent?> {
-                        if (!errorLines.isClosedForReceive) errorLines.onReceiveOrNull { errorMessage ->
-                            errorMessage?.let { StandardError(it) }
+                try {
+                    loop@ while (isActive) {
+                        val next = select<ProcessEvent?> {
+                            if (!errorLines.isClosedForReceive) errorLines.onReceiveOrNull { errorMessage ->
+                                errorMessage?.let { StandardError(it) }
+                            }
+                            if (!outputLines.isClosedForReceive) outputLines.onReceiveOrNull { outputMessage ->
+                                outputMessage?.let { StandardOutput(it) }
+                            }
+                            exitCode.onAwait { ExitCode(it) }
                         }
-                        if (!outputLines.isClosedForReceive) outputLines.onReceiveOrNull { outputMessage ->
-                            outputMessage?.let { StandardOutput(it) }
-                        }
-                        exitCode.onAwait { ExitCode(it) }
+                        when (next) {
+                            null -> { }
+                            is ExitCode -> { send(next); break@loop }
+                            else -> send(next)
+                        } as Any
                     }
-                    when(next) {
-                        null -> continue@loop
-                        is ExitCode -> send(next).also { return@produce }
-                        else -> send(next)
-                    } as Any
+                }
+                finally {
+                    queueForShutdown()
+                    trace { "aggregate channel done" }
                 }
             }
 
