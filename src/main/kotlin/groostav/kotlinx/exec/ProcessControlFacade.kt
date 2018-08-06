@@ -68,11 +68,7 @@ internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessC
             WindowsProcessControl,
             ZeroTurnaroundProcessFacade
     )
-    val facades = factories
-            .map { it.create(jvmRunningProcess, pid) }
-            .filterIsInstance<Supported<ProcessControlFacade>>()
-            .map { it.value }
-
+    val facades = factories.filterSupporting { it.create(jvmRunningProcess, pid) }
     return CompositProcessControl(facades)
 }
 
@@ -94,4 +90,10 @@ private fun <R, S> List<S>.firstSupporting(call: (S) -> Maybe<R>): R {
             ?: throw UnsupportedOperationException("none of $this supports $call")
 
     return candidate.value
+}
+
+private fun <R, S> List<S>.filterSupporting(call: (S) -> Maybe<R>): List<R> {
+    return this.map { call(it) }
+            .filterIsInstance<Supported<R>>()
+            .map { it.value }
 }

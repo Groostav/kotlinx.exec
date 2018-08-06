@@ -5,15 +5,11 @@ import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.selects.select
 import org.junit.Ignore
 import org.junit.Test
-import java.util.*
-import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.locks.LockSupport
-import kotlin.coroutines.experimental.CoroutineContext
-import kotlin.coroutines.experimental.EmptyCoroutineContext
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 
 
 class CoroutineTests {
@@ -117,5 +113,50 @@ class CoroutineTests {
         val r = result.await()
 
         assertEquals(4, r)
+    }
+
+    @Test fun `messing around with quasi suspendable eventloop`() = runBlocking {
+
+        val loop = EventLoop(Thread.currentThread())
+
+        val x = async(loop){ 4 }
+        val y = async(loop){ 5 }
+
+        while(true) {
+            val nextDelay = (loop as EventLoop).processNextEvent()
+            if(nextDelay == Long.MAX_VALUE) break;
+            if(nextDelay > 0) delay(nextDelay, TimeUnit.NANOSECONDS)
+        }
+
+        val (rx, ry) = x.await() to y.await()
+
+        assertEquals(4, rx)
+        assertEquals(5, ry)
+    }
+
+    @Test fun `when using unconfined context should be able to do imperitive style thread switch`() = runBlocking {
+
+        var initialThread: String = ""
+        var finalThread: String = ""
+
+        launch(Unconfined){
+            initialThread = Thread.currentThread().name
+            delay(1)
+            finalThread = Thread.currentThread().name
+        }.join()
+
+        assertNotEquals(initialThread, finalThread)
+        assertNotEquals("", initialThread)
+        assertNotEquals("", finalThread)
+
+        // I wrote this test thinking about single threaded dispatchers,
+        // thinking that I could ue an event loop to improve the exception call-stack (or debugger 'pause')
+        // in `exec` or `execVoid` --those with clear loop.enter() points, though we could infer it for the async one...
+        // but this was naive:
+        // 1. what do you do about pools? You'd have to drop the thread portion of the EventLoop
+        //      --granted elizarov is clearly angling to do that, better him than me.
+        // 2. stack-traces cannot be saved! Once suspended, **the stack trace is gone!!**,
+        //      I know this, but I consistently forget it.
+        // so, event loops: neat tool, useless to me here.
     }
 }
