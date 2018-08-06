@@ -1,8 +1,6 @@
 package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
-import com.sun.jna.platform.win32.Kernel32
-import com.sun.jna.platform.win32.WinNT
 import kotlinx.coroutines.experimental.Unconfined
 import kotlinx.coroutines.experimental.channels.consumeEach
 import kotlinx.coroutines.experimental.launch

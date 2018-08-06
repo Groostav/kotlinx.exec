@@ -1,7 +1,5 @@
 package groostav.kotlinx.exec
 
-import kotlin.streams.asSequence
-
 internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade {
 
     val procHandle = process.toHandle()
@@ -53,4 +51,17 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
         val success = killRecursor(procHandle, includeDescendants)
         return if(success) Supported(Unit) else Unsupported
     }
+}
+
+internal class JEP102ProcessIDGenerator(private val process: Process): ProcessIDGenerator {
+
+    init { require(JavaVersion >= 9) }
+
+    companion object: ProcessIDGenerator.Factory {
+        override fun create(process: Process) = supportedIf(JavaVersion >= 9) { JEP102ProcessIDGenerator(process) }
+    }
+
+    override val pid: Supported<Int> = Supported(process.pid().toInt())
+    //TODO: RE: `toInt`, why did they use long? do they have implementations with pid=2^31 + 1?
+
 }

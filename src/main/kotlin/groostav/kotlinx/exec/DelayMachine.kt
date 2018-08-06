@@ -8,6 +8,9 @@ import kotlinx.coroutines.experimental.withTimeoutOrNull
 import kotlinx.coroutines.experimental.yield
 import java.util.concurrent.atomic.AtomicInteger
 
+
+//TODO: casually running tests shows that many tests take 2x or 3x the time with this reader strategy.
+// why?
 internal class DelayMachine(
         val delayWindow: IntRange,
         val otherSignals: ConflatedBroadcastChannel<Unit>,

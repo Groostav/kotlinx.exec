@@ -8,6 +8,10 @@ import kotlinx.coroutines.experimental.selects.SelectClause2
 import kotlinx.coroutines.experimental.selects.select
 import kotlinx.coroutines.experimental.sync.Mutex
 import kotlinx.coroutines.experimental.sync.withLock
+import java.io.InputStream
+import java.io.InputStreamReader
+import java.io.Reader
+import java.nio.CharBuffer
 import java.util.*
 import java.util.concurrent.*
 import kotlin.coroutines.experimental.CoroutineContext
@@ -94,3 +98,45 @@ internal fun <T> supportedIf(condition: Boolean, resultIfTrue: () -> T): Maybe<T
     true -> Supported(resultIfTrue())
     false -> Unsupported
 }
+
+internal class NamedTracingProcessReader private constructor(
+        src: InputStream,
+        val name: String,
+        val config: ProcessBuilder
+): Reader() {
+
+    //TODO: there doesnt seem to be any way to control buffering here.
+    val src = InputStreamReader(src, config.encoding)
+
+    init {
+        trace { "SOF on $this" }
+    }
+
+    override fun skip(n: Long): Long = src.skip(n)
+    override fun ready(): Boolean = src.ready()
+    override fun reset() = src.reset()
+    override fun close() = src.close()
+    override fun markSupported(): Boolean = src.markSupported()
+    override fun mark(readAheadLimit: Int) = src.mark(readAheadLimit)
+    override fun read(target: CharBuffer?): Int = src.read(target)
+
+    override fun read(): Int =
+            src.read().also { if(it == EOF_VALUE){ trace { "EOF on $this" } } }
+    override fun read(cbuf: CharArray?): Int =
+            src.read(cbuf).also { if(it == EOF_VALUE){ trace { "EOF on $this" } } }
+    override fun read(cbuf: CharArray?, off: Int, len: Int): Int =
+            src.read(cbuf, off, len).also { if(it == EOF_VALUE){ trace { "EOF on $this" } } }
+
+    override fun toString() = name
+
+    companion object {
+
+        fun forStandardError(process: java.lang.Process, pid: Int, config: ProcessBuilder) =
+                NamedTracingProcessReader(process.errorStream, "stderr-$pid", config)
+
+        fun forStandardOutput(process: java.lang.Process, pid: Int, config: ProcessBuilder) =
+                NamedTracingProcessReader(process.inputStream, "stdout-$pid", config)
+    }
+}
+
+internal const val EOF_VALUE: Int = -1

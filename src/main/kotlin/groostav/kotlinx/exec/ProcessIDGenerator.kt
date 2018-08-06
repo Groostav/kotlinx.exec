@@ -17,19 +17,6 @@ internal interface ProcessIDGenerator {
     }
 }
 
-internal class JEP102ProcessIDGenerator(private val process: Process): ProcessIDGenerator {
-
-    init { require(JavaVersion >= 9) }
-
-    companion object: ProcessIDGenerator.Factory {
-        override fun create(process: Process) = supportedIf(JavaVersion >= 9) { JEP102ProcessIDGenerator(process) }
-    }
-
-    override val pid: Supported<Int> = Supported(process.pid().toInt())
-    //TODO: RE: `toInt`, why did they use long? do they have implementations with pid=2^31 + 1?
-
-}
-
 internal class ReflectiveNativePIDGen(private val process: Process): ProcessIDGenerator {
 
     companion object: ProcessIDGenerator.Factory {
