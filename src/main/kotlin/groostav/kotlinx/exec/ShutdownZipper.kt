@@ -3,27 +3,19 @@ import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.updateAndGet
 import kotlin.coroutines.experimental.Continuation
 import kotlin.coroutines.experimental.intrinsics.suspendCoroutineOrReturn
+import kotlin.coroutines.experimental.intrinsics.COROUTINE_SUSPENDED
 
 enum class ShutdownItem { ProcessJoin, ExitCodeJoin, AggregateChannel }
 
-sealed class ShutdownEntry {
-    abstract val item: ShutdownItem
-    operator abstract fun component1(): ShutdownItem
-    operator abstract fun component2(): Continuation<Unit>?
-
-    data class Waiting(override val item: ShutdownItem, val continuation: Continuation<Unit>): ShutdownEntry()
-    data class Pending(override val item: ShutdownItem): ShutdownEntry(){
-        override fun component2(): Continuation<Unit>? = null
-    }
-}
+class ShutdownEntry(val item: ShutdownItem, val continuation: Continuation<Unit>?)
 
 class ShutdownZipper {
 
     //ordered map
-    private val initial = listOf<ShutdownEntry>(
-            ShutdownEntry.Pending(ShutdownItem.ExitCodeJoin),
-            ShutdownEntry.Pending(ShutdownItem.AggregateChannel),
-            ShutdownEntry.Pending(ShutdownItem.ProcessJoin)
+    private val initial = listOf(
+            ShutdownEntry(ShutdownItem.ExitCodeJoin, null),
+            ShutdownEntry(ShutdownItem.AggregateChannel, null),
+            ShutdownEntry(ShutdownItem.ProcessJoin, null)
     )
 
     private val elements = atomic(initial)
@@ -37,19 +29,18 @@ class ShutdownZipper {
             val headEntry = elements.first()
 
             val remaining = if(headEntry.item == item) {
-                require(headEntry is ShutdownEntry.Pending)
+                require(headEntry.continuation == null)
                 elements.drop(1)
 
-                readyDependants = elements.takeWhile { it is ShutdownEntry.Waiting }
-                        .filterIsInstance<ShutdownEntry.Waiting>()
-                        .map { it.continuation }
+                readyDependants = elements.takeWhile { it.continuation != null }
+                        .map { it.continuation!! }
 
-                elements.dropWhile { it !is ShutdownEntry.Pending }
+                elements.drop(readyDependants.size) //could use sublist, but then we hang on to old continuations
             }
             else {
                 elements.map { entry ->
-                    when {
-                        entry.item == item -> ShutdownEntry.Waiting(item, continuation)
+                    when (entry.item) {
+                        item -> ShutdownEntry(item, continuation)
                         else -> entry
                     }
                 }
@@ -60,7 +51,7 @@ class ShutdownZipper {
 
         readyDependants.forEach { it.resume(Unit) }
 
-        if (item !in newState.map { it.item }) return@suspendCoroutineOrReturn Unit
+        return@suspendCoroutineOrReturn if (item !in newState.map { it.item }) Unit else COROUTINE_SUSPENDED
     }
 }
 
