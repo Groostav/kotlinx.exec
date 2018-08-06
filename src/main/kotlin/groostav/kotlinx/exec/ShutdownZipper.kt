@@ -1,28 +1,21 @@
 package groostav.kotlinx.exec
-import kotlinx.atomicfu.atomic
-import kotlinx.atomicfu.updateAndGet
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.experimental.Continuation
 import kotlin.coroutines.experimental.intrinsics.suspendCoroutineOrReturn
 import kotlin.coroutines.experimental.intrinsics.COROUTINE_SUSPENDED
 
-enum class ShutdownItem { ProcessJoin, ExitCodeJoin, AggregateChannel }
 
-class ShutdownEntry(val item: ShutdownItem, val continuation: Continuation<Unit>?)
+private class ShutdownEntry<T>(val item: T, val continuation: Continuation<Unit>?)
 
-class ShutdownZipper {
+class ShutdownZipper<T>(values: List<T>) {
 
-    //ordered map
-    private val initial = listOf(
-            ShutdownEntry(ShutdownItem.ExitCodeJoin, null),
-            ShutdownEntry(ShutdownItem.AggregateChannel, null),
-            ShutdownEntry(ShutdownItem.ProcessJoin, null)
-    )
+    private val elements = AtomicReference(values.map { ShutdownEntry(it, null) })
 
-    private val elements = atomic(initial)
+    fail; //NFG, because there is a race between the entering coroutine and
+    // the coroutines that are resumed by it.
+    suspend fun waitFor(item: T) = suspendCoroutineOrReturn<Unit> { continuation ->
 
-    suspend fun waitFor(item: ShutdownItem) = suspendCoroutineOrReturn<Unit> { continuation ->
-
-        var readyDependants: List<Continuation<Unit>> = emptyList()
+        var readyDependants: List<ShutdownEntry<T>> = emptyList()
 
         val newState = elements.updateAndGet { elements ->
 
@@ -30,10 +23,9 @@ class ShutdownZipper {
 
             val remaining = if(headEntry.item == item) {
                 require(headEntry.continuation == null)
-                elements.drop(1)
+                val elements = elements.drop(1)
 
                 readyDependants = elements.takeWhile { it.continuation != null }
-                        .map { it.continuation!! }
 
                 elements.drop(readyDependants.size) //could use sublist, but then we hang on to old continuations
             }
@@ -49,9 +41,11 @@ class ShutdownZipper {
             remaining
         }
 
-        readyDependants.forEach { it.resume(Unit) }
+        readyDependants.forEach { it.continuation!!.resume(Unit) }
 
-        return@suspendCoroutineOrReturn if (item !in newState.map { it.item }) Unit else COROUTINE_SUSPENDED
+        val result = if (item !in newState.map { it.item }) Unit else COROUTINE_SUSPENDED
+
+        result;
     }
 }
 

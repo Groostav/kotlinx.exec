@@ -1,7 +1,5 @@
 package groostav.kotlinx.exec
 
-import kotlinx.atomicfu.atomic
-import kotlinx.atomicfu.updateAndGet
 import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.selects.SelectClause1
@@ -350,8 +348,8 @@ internal class RunningProcessImpl(
 
     //endregion
 
-    val shutdownZipper = ShutdownZipper()
-
+    enum class ShutdownItem { ExitCodeJoin, AggregateChannel, ProcessJoin } //order matters
+    val shutdownZipper = ShutdownZipper(ShutdownItem.values().asList())
 
     //region ReceiveChannel
 
@@ -392,7 +390,7 @@ internal class RunningProcessImpl(
                     }
                 }
                 finally {
-                    queueForShutdown()
+                    shutdownZipper.waitFor(ShutdownItem.AggregateChannel)
                     trace { "aggregate channel done" }
                 }
             }

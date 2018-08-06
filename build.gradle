@@ -1,6 +1,6 @@
 buildscript {
     ext.kotlin_version = '1.2.31'
-    ext.atomicfu_version = '0.11.0'
+//    ext.atomicfu_version = '0.11.0'
 
     repositories {
         mavenCentral()
@@ -9,7 +9,7 @@ buildscript {
     dependencies {
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
         classpath 'com.jfrog.bintray.gradle:gradle-bintray-plugin:1.+'
-        classpath "org.jetbrains.kotlinx:atomicfu-gradle-plugin:$atomicfu_version"
+//        classpath "org.jetbrains.kotlinx:atomicfu-gradle-plugin:$atomicfu_version"
     }
 }
 
@@ -22,7 +22,7 @@ version '0.3'
 
 apply plugin: 'java'
 apply plugin: 'kotlin'
-apply plugin: 'kotlinx-atomicfu'
+//apply plugin: 'kotlinx-atomicfu'
 
 sourceCompatibility = 1.8
 
@@ -32,7 +32,7 @@ repositories {
 }
 dependencies {
 
-    compileOnly "org.jetbrains.kotlinx:atomicfu:$atomicfu_version"
+//    compileOnly "org.jetbrains.kotlinx:atomicfu:$atomicfu_version"
 
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     compile "org.jetbrains.kotlinx:kotlinx-coroutines-core:0.23.4"
@@ -60,21 +60,21 @@ kotlin {
     }
 }
 
-atomicFU {
-    inputFiles = sourceSets.main.output.classesDirs
-    outputDir = file("$buildDir/classes-post-atomicfu/main")
-    classPath = sourceSets.main.runtimeClasspath
-    variant = "BOTH" // default="FU", "VH"=Java 9 VarHandle, "BOTH" to produce multi-version code
-}
-
-atomicFU.dependsOn compileKotlin
-testClasses.dependsOn atomicFU
-jar.dependsOn atomicFU
-
-jar {
-    mainSpec.sourcePaths.clear() // hack to clear existing paths
-    from files(atomicFU.outputDir, sourceSets.main.output.resourcesDir)
-}
+//atomicFU {
+//    inputFiles = sourceSets.main.output.classesDirs
+//    outputDir = file("$buildDir/classes-post-atomicfu/main")
+//    classPath = sourceSets.main.runtimeClasspath
+//    variant = "BOTH" // default="FU", "VH"=Java 9 VarHandle, "BOTH" to produce multi-version code
+//}
+//
+//atomicFU.dependsOn compileKotlin
+//testClasses.dependsOn atomicFU
+//jar.dependsOn atomicFU
+//
+//jar {
+//    mainSpec.sourcePaths.clear() // hack to clear existing paths
+//    from files(atomicFU.outputDir, sourceSets.main.output.resourcesDir)
+//}
 
 task sourcesJar(type: Jar, dependsOn: classes) {
     classifier = 'sources'
