@@ -8,8 +8,8 @@ import org.junit.Test
 
 class BufferAllocationTests {
 
-    @Test fun `when things are set to zero should allocate no buffer`() = runBlocking<Unit> {
-        TODO()
+    @Test fun `todo`() = runBlocking<Unit> {
+        TODO("when things are set to zero should allocate no buffer")
     }
 
 

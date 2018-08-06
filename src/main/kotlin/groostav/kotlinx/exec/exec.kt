@@ -10,7 +10,7 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
     }
 
     val runningProcessFactory = RunningProcessFactory()
-    blockableThread.prestart(2)
+    BlockableDispatcher.prestart(2)
 
     val jvmRunningProcess = jvmProcessBuilder.start()
 

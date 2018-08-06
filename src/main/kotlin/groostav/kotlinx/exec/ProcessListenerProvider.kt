@@ -1,6 +1,7 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.experimental.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.experimental.channels.ReceiveChannel
 import kotlinx.coroutines.experimental.channels.produce
 import java.io.InputStream
@@ -20,15 +21,15 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
 
     override val standardErrorChannel by lazy {
         val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)
-        Supported(standardErrorReader.toPumpedReceiveChannel(blockableThread))
+        Supported(standardErrorReader.toPumpedReceiveChannel(BlockableDispatcher))
     }
     override val standardOutputChannel by lazy {
         val standardOutputReader = NamedTracingProcessReader.forStandardOutput(process, pid, config)
-        Supported(standardOutputReader.toPumpedReceiveChannel(blockableThread))
+        Supported(standardOutputReader.toPumpedReceiveChannel(BlockableDispatcher))
     }
     override val exitCodeDeferred by lazy {
         val result = CompletableDeferred<Int>()
-        launch(blockableThread){
+        launch(BlockableDispatcher){
             try { result.complete(process.waitFor()) } catch (ex: Exception) { result.completeExceptionally(ex) }
         }
         Supported(result)
@@ -44,7 +45,7 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
  * the resulting channel is not buffered. This means it is sensitive to back-pressure.
  * downstream receivers should buffer appropriately!!
  */
-internal fun Reader.toPumpedReceiveChannel(context: CoroutineContext = blockableThread): ReceiveChannel<Char> {
+internal fun Reader.toPumpedReceiveChannel(context: CoroutineContext = BlockableDispatcher): ReceiveChannel<Char> {
 
     val result = produce(context) {
 
@@ -68,64 +69,61 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     private val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)
     private val standardOutputReader = NamedTracingProcessReader.forStandardOutput(process, pid, config)
 
-    val PollPeriodMillis = Integer.getInteger("groostav.kotlinx.exec.PollPeriodMillis") ?: 10
+    val PollPeriodWindow = getIntRange("groostav.kotlinx.exec.PollPeriodMillis")?.also {
+        require(it.start > 0)
+        require(it.endInclusive >= it.start)
+    } ?: (5 .. 100)
 
-    override val standardErrorChannel by lazy {
-        Supported(standardErrorReader.toPolledReceiveChannel(CommonPool, PollPeriodMillis))
-    }
-    override val standardOutputChannel by lazy {
-        Supported(standardOutputReader.toPolledReceiveChannel(CommonPool, PollPeriodMillis))
-    }
-    override val exitCodeDeferred by lazy {
-        val result = CompletableDeferred<Int>()
-        launch(CommonPool){
-            while(process.isAlive){
-                delay(PollPeriodMillis)
+    val otherSignals = ConflatedBroadcastChannel<Unit>()
+    @Volatile var manualEOF = false
+
+    override val standardErrorChannel =
+        Supported(standardErrorReader.toPolledReceiveChannel(CommonPool, DelayMachine(PollPeriodWindow, otherSignals)))
+    override val standardOutputChannel =
+        Supported(standardOutputReader.toPolledReceiveChannel(CommonPool, DelayMachine(PollPeriodWindow, otherSignals)))
+    override val exitCodeDeferred = run {
+        val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
+        Supported(async(CommonPool) {
+
+            try {
+                delayMachine.waitForByPollingPeriodically { process.isAlive }
+                process.waitFor()
             }
-            try { result.complete(process.waitFor()) } catch (ex: Exception) { result.completeExceptionally(ex) }
-        }
-        Supported(result)
-    }
-}
-
-internal fun Reader.toPolledReceiveChannel(
-        context: CoroutineContext,
-        pollPeriodMillis: Int
-): ReceiveChannel<Char> {
-
-    require(pollPeriodMillis > 0)
-
-    val self = this;
-
-    val result = produce(context) {
-
-        reading@ while (isActive) {
-
-            while( ! ready()){ //omfg, ready() returns false, where read() == -1,
-                //in other words this !ready might indicate that the stream is EOF
-                fail //rageragerage
-                //there really is no way to do this... :rage99:
-                delay(pollPeriodMillis)
+            finally {
+                manualEOF = true
             }
+        })
+    }
 
-            while(ready()){
-                val nextCodePoint = read().takeUnless { it == EOF_VALUE }
-                if (nextCodePoint == null) {
-                    val x = 4;
-                    break@reading
+
+    internal fun Reader.toPolledReceiveChannel(
+            context: CoroutineContext,
+            delayMachine: DelayMachine
+    ): ReceiveChannel<Char> {
+
+        val result = produce(context) {
+
+            reading@ while (isActive) {
+
+                delayMachine.waitForByPollingPeriodically { ! ready() && ! manualEOF }
+
+                while(ready() || manualEOF){
+                    val nextCodePoint = read().takeUnless { it == EOF_VALUE }
+                    if (nextCodePoint == null) {
+                        break@reading
+                    }
+                    val nextChar = nextCodePoint.toChar()
+
+                    send(nextChar)
                 }
-                val nextChar = nextCodePoint.toChar()
-
-                send(nextChar)
             }
         }
-
-        val x = 4;
-    }
-    return object: ReceiveChannel<Char> by result {
-        override fun toString() = "pollchan-${this@toPolledReceiveChannel}"
+        return object: ReceiveChannel<Char> by result {
+            override fun toString() = "pollchan-${this@toPolledReceiveChannel}"
+        }
     }
 }
+
 
 private const val EOF_VALUE: Int = -1
 
