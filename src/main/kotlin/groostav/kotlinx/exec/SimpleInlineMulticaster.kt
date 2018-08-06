@@ -34,8 +34,8 @@ class SimpleInlineMulticaster<T>(val name: String) {
         val newState = state.updateAndGet {
             when(it){
                 is State.Registration -> State.Running(it.subs)
-                is State.Running -> throw IllegalStateException()
-                is State.Closed -> throw IllegalStateException()
+                is State.Running -> throw IllegalStateException("already started")
+                is State.Closed -> throw IllegalStateException("already started")
             }
         }
 
@@ -86,7 +86,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
                 is State.Registration<T> -> {
 
                     val subscription = object: RendezvousChannel<T>() {
-                        val id = subId.incrementAndGet()
+                        val id = it.subs.size+1
                         override fun toString() = "sub$id-$name"
                     }
 

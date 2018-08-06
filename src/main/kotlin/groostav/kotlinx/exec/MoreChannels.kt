@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import groostav.kotlinx.exec.sub.stuff
 import kotlinx.coroutines.experimental.Unconfined
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.launch
@@ -20,7 +21,18 @@ internal fun ReceiveChannel<Char>.lines(
 
             val newState = stateMachine.translate(nextChar)
 
-            doThings(newState, buffer, nextChar)
+            when (newState) {
+                State.NoMatch -> {
+                    buffer.append(nextChar)
+                }
+                State.NewMatch -> {
+                    val line = buffer.takeAndClear()
+                    send(line)
+                }
+                State.ContinuedMatch -> {
+                    //noop, drop the character.
+                }
+            }
         }
         if (!buffer.isEmpty()) {
             send(buffer.takeAndClear())
@@ -35,21 +47,6 @@ internal fun ReceiveChannel<Char>.lines(
 }
 
 private fun StringBuilder.takeAndClear(): String = toString().also { setLength(0) }
-
-private suspend fun ProducerScope<String>.doThings(newState: State, buffer: StringBuilder, nextChar: Char) {
-    when (newState) {
-        State.NoMatch -> {
-            buffer.append(nextChar)
-        }
-        State.NewMatch -> {
-            val line = buffer.takeAndClear()
-            send(line)
-        }
-        State.ContinuedMatch -> {
-            //noop, drop the character.
-        }
-    }
-}
 
 private class LineSeparatingStateMachine(delimiters: List<String>) {
     val delimeterMatrix: Array<CharArray> = delimiters.map { it.toCharArray() }.toTypedArray()

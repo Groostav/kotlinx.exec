@@ -410,7 +410,7 @@ class WindowsTests {
             println("response=$response")
 
             when(response){
-                "[EOF]" -> runningProc.close()
+                "[EOF]" -> runningProc.close() //you may also write runningProc.inputstream.close()
                 is String -> runningProc.send(response)
                 null -> {}
             }
@@ -424,7 +424,7 @@ class WindowsTests {
                         "processing hello!",
                         "Go ahead and write things to input...",
                         "processing powershell!!",
-                        "Go ahead and write things to input...",
+                        "Go ahead and write things to input...", //send EOF signal
                         "done!",
                         "exited"
                 ),
