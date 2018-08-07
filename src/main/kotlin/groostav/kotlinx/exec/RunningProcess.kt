@@ -9,8 +9,6 @@ import kotlinx.coroutines.experimental.sync.Mutex
 import kotlinx.coroutines.experimental.sync.withLock
 import java.util.*
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.experimental.Continuation
-import kotlin.coroutines.experimental.intrinsics.suspendCoroutineOrReturn
 
 @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE") //renames a couple of the param names for SendChannel & ReceiveChannel
 /**
@@ -225,6 +223,7 @@ internal class RunningProcessImpl(
     private var killed: Boolean = false
 
     private val _exitCode = async(Unconfined) {
+
         val result = processListenerProvider.exitCodeDeferred.value.await()
 
         trace { "$processID exited with $result, closing streams" }
@@ -369,16 +368,25 @@ internal class RunningProcessImpl(
 
             val actual = produce<ProcessEvent>(Unconfined) {
                 try {
+                    var stderrWasNull = false
+                    var stdoutWasNull = false
+
                     loop@ while (isActive) {
+
                         val next = select<ProcessEvent?> {
-                            if (!errorLines.isClosedForReceive) errorLines.onReceiveOrNull { errorMessage ->
+                            if (!stderrWasNull) errorLines.onReceiveOrNull { errorMessage ->
+                                if(errorMessage == null){ stderrWasNull = true }
                                 errorMessage?.let { StandardError(it) }
                             }
-                            if (!outputLines.isClosedForReceive) outputLines.onReceiveOrNull { outputMessage ->
+                            if (!stdoutWasNull) outputLines.onReceiveOrNull { outputMessage ->
+                                if(outputMessage == null){ stdoutWasNull = true }
                                 outputMessage?.let { StandardOutput(it) }
                             }
                             _exitCode.onAwait { ExitCode(it) }
                         }
+
+                        testing(next)
+
                         when (next) {
                             null -> { }
                             is ExitCode -> { send(next); break@loop }
@@ -400,6 +408,10 @@ internal class RunningProcessImpl(
             // +1 for exitCode. If the configuration has statically known math
             // (eg 54 lines for `ls` of a directory with 54 items).
         }
+    }
+
+    fun testing(x: Any?){
+        val y = 4;
     }
 
     override val isClosedForReceive: Boolean get() = aggregateChannel.isClosedForReceive

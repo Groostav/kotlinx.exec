@@ -1,11 +1,9 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.CompletableDeferred
-import kotlinx.coroutines.experimental.Unconfined
+import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.ReceiveChannel
 import kotlinx.coroutines.experimental.channels.RendezvousChannel
 import kotlinx.coroutines.experimental.channels.consumeEach
-import kotlinx.coroutines.experimental.launch
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -74,7 +72,10 @@ class SimpleInlineMulticaster<T>(val name: String) {
         if(previous is State.Running){
             trace { "${this@SimpleInlineMulticaster} saw EOF, closing subs" }
             sourceJob.complete(Unit)
-            previous.subs.forEach { it.close() }
+            for (it in previous.subs) {
+                it.close()
+                val x = 4;
+            }
             trace { "all subs of ${this@SimpleInlineMulticaster} closed" }
         }
     }
