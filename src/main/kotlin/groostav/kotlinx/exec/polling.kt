@@ -1,11 +1,14 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.CommonPool
-import kotlinx.coroutines.experimental.async
+import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.experimental.channels.ReceiveChannel
 import kotlinx.coroutines.experimental.channels.produce
+import kotlinx.coroutines.experimental.channels.take
+import kotlinx.coroutines.experimental.selects.select
 import java.io.Reader
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.experimental.CoroutineContext
 
 internal class PollingListenerProvider(val process: Process, val pid: Int, val config: ProcessBuilder): ProcessListenerProvider {
@@ -21,10 +24,12 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     val otherSignals = ConflatedBroadcastChannel<Unit>()
     @Volatile var manualEOF = false
 
-    override val standardErrorChannel =
-            Supported(standardErrorReader.toPolledReceiveChannel(CommonPool, DelayMachine(PollPeriodWindow, otherSignals)))
-    override val standardOutputChannel =
-            Supported(standardOutputReader.toPolledReceiveChannel(CommonPool, DelayMachine(PollPeriodWindow, otherSignals)))
+    override val standardErrorChannel = Supported(
+            standardErrorReader.toPolledReceiveChannel(CommonPool, DelayMachine(PollPeriodWindow, otherSignals))
+    )
+    override val standardOutputChannel = Supported(
+            standardOutputReader.toPolledReceiveChannel(CommonPool, DelayMachine(PollPeriodWindow, otherSignals))
+    )
     override val exitCodeDeferred = run {
         val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
         Supported(async(CommonPool) {
@@ -32,14 +37,16 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
             try {
                 delayMachine.waitForByPollingPeriodically { process.isAlive }
                 process.waitFor()
-            } finally {
+            }
+            finally {
                 manualEOF = true
+                delayMachine.signalPollResult()
             }
         })
     }
 
 
-    internal fun Reader.toPolledReceiveChannel(
+    private fun Reader.toPolledReceiveChannel(
             context: CoroutineContext,
             delayMachine: DelayMachine
     ): ReceiveChannel<Char> {
@@ -60,9 +67,62 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
                     send(nextChar)
                 }
             }
+
+            trace { "polling of ${this@toPolledReceiveChannel} completed" }
         }
         return object: ReceiveChannel<Char> by result {
             override fun toString() = "pollchan-${this@toPolledReceiveChannel}"
         }
     }
+}
+
+//TODO: casually running tests shows that many tests take 2x or 3x the time with this reader strategy.
+// why?
+private class DelayMachine(
+        private val delayWindow: IntRange,
+        private val otherSignals: ConflatedBroadcastChannel<Unit>,
+        private val delayFactor: Float = 1.5f
+) {
+
+    init {
+        require(delayWindow.start > 0)
+        require(delayWindow.endInclusive >= delayWindow.start)
+        require(delayFactor > 1.0f)
+    }
+
+    private val backoff = AtomicInteger(0)
+    private val otherSignalsSubscription = otherSignals.openSubscription()
+
+    suspend fun waitForByPollingPeriodically(condition: () -> Boolean){
+        while(condition()) {
+            val backoff = backoff.updateAndGet { updateBackoff(it, delayWindow) }
+
+            select<Unit> {
+                onTimeout(backoff.toLong(), TimeUnit.MILLISECONDS) { Unit }
+                otherSignalsSubscription.onReceiveOrNull { Unit }
+            }
+
+            yield() //if, for whatever reason, we're getting flodded with other signals,
+            // this ensures we yield to previously equeued jobs on our dispatcher
+        }
+        signalPollResult()
+    }
+
+    private fun updateBackoff(currentPollPeriodMillis: Int, pollPeriodMillis: IntRange): Int {
+        return (currentPollPeriodMillis * 1.5).toInt()
+                .coerceAtLeast(currentPollPeriodMillis + 1)
+                .coerceAtMost(pollPeriodMillis.endInclusive)
+    }
+
+    fun signalPollResult(){
+        backoff.set(delayWindow.start)
+        otherSignals.offer(Unit)
+    }
+}
+
+internal fun getIntRange(key: String): IntRange? = System.getProperty(key)?.let {
+    val match = Regex("(-?\\d+)\\s*\\.\\.\\s*(-?\\d+)").matchEntire(it.trim())
+            ?: throw UnsupportedOperationException("couldn't parse $it as IntRange (please use format '#..#' eg '1..234')")
+    val (start, end) = match.groupValues.apply { require(size == 3) }.takeLast(2).map { it.toInt() }
+    start .. end
 }

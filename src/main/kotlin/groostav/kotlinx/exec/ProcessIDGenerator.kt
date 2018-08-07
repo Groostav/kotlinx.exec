@@ -17,6 +17,15 @@ internal interface ProcessIDGenerator {
     }
 }
 
+internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
+    val factories = listOf(
+            JEP102ProcessIDGenerator,
+            ReflectiveNativePIDGen
+    )
+
+    return factories.firstSupporting { it.create(jvmRunningProcess) }
+}
+
 internal class ReflectiveNativePIDGen(private val process: Process): ProcessIDGenerator {
 
     companion object: ProcessIDGenerator.Factory {

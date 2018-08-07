@@ -23,6 +23,8 @@ class ShutdownZipper<T>(val initialValues: List<T>) {
 
     suspend fun waitFor(suiter: T) = suspendCoroutineOrReturn<Unit> { continuation ->
 
+        trace { "wait for $suiter" }
+
         val change = lock.withLock {
 
             val head = values.getOrNull(index)

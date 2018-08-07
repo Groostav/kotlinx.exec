@@ -71,30 +71,3 @@ internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessC
     val facades = factories.filterSupporting { it.create(jvmRunningProcess, pid) }
     return CompositProcessControl(facades)
 }
-
-internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
-    val factories = listOf(
-            JEP102ProcessIDGenerator,
-            ReflectiveNativePIDGen
-    )
-
-    return factories.firstSupporting { it.create(jvmRunningProcess) }
-}
-
-internal fun makeListenerProvider(jvmRunningProcess: Process, pid: Int, config: ProcessBuilder): ProcessListenerProvider {
-//    return PollingListenerProvider(jvmRunningProcess, pid, config)
-    return ThreadBlockingListenerProvider(jvmRunningProcess, pid, config)
-}
-
-private fun <R, S> List<S>.firstSupporting(call: (S) -> Maybe<R>): R {
-    val candidate = this.asSequence().map(call).filterIsInstance<Supported<R>>().firstOrNull()
-            ?: throw UnsupportedOperationException("none of $this supports $call")
-
-    return candidate.value
-}
-
-private fun <R, S> List<S>.filterSupporting(call: (S) -> Maybe<R>): List<R> {
-    return this.map { call(it) }
-            .filterIsInstance<Supported<R>>()
-            .map { it.value }
-}

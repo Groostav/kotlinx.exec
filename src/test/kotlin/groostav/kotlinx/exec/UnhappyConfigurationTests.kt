@@ -8,7 +8,6 @@ import kotlin.test.assertEquals
 
 class UnhappyConfigurationTests {
 
-
     @Test fun `when attempting to read from unbufferred channel should get exception`() = runBlocking<Unit> {
         //setup
         val runningProcess = execAsync {

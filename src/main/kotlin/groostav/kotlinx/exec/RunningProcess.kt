@@ -357,8 +357,8 @@ internal class RunningProcessImpl(
 
     private val aggregateChannel: ReceiveChannel<ProcessEvent> = when(config.aggregateOutputBufferLineCount){
         0 -> {
-            val actual = produce<ProcessEvent>(Unconfined){
-                val code = exitCode.await()
+            val actual = produce<ProcessEvent>(Unconfined, capacity = 1){
+                val code = _exitCode.await()
                 send(ExitCode(code))
 
                 shutdownZipper.waitFor(ShutdownItem.AggregateChannel)
@@ -382,7 +382,7 @@ internal class RunningProcessImpl(
                             if (!outputLines.isClosedForReceive) outputLines.onReceiveOrNull { outputMessage ->
                                 outputMessage?.let { StandardOutput(it) }
                             }
-                            exitCode.onAwait { ExitCode(it) }
+                            _exitCode.onAwait { ExitCode(it) }
                         }
                         when (next) {
                             null -> { }

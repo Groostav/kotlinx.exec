@@ -41,8 +41,6 @@ internal val JavaVersion = run {
     version.substring(0, if (dotPos > -1) dotPos else if (dashPos > -1) dashPos else version.length).toInt()
 }
 
-
-
 object BlockableDispatcher: CoroutineContext by ThreadPoolExecutor(
         0,
         Integer.MAX_VALUE,
@@ -106,6 +104,7 @@ internal class NamedTracingProcessReader private constructor(
 ): Reader() {
 
     //TODO: there doesnt seem to be any way to control buffering here.
+    //how can we stricly conform to buffer sizes from the user?
     val src = InputStreamReader(src, config.encoding)
 
     init {
@@ -140,3 +139,18 @@ internal class NamedTracingProcessReader private constructor(
 }
 
 internal const val EOF_VALUE: Int = -1
+
+
+
+internal fun <R, S> List<S>.firstSupporting(call: (S) -> Maybe<R>): R {
+    val candidate = this.asSequence().map(call).filterIsInstance<Supported<R>>().firstOrNull()
+            ?: throw UnsupportedOperationException("none of $this supports $call")
+
+    return candidate.value
+}
+
+internal fun <R, S> List<S>.filterSupporting(call: (S) -> Maybe<R>): List<R> {
+    return this.map { call(it) }
+            .filterIsInstance<Supported<R>>()
+            .map { it.value }
+}
