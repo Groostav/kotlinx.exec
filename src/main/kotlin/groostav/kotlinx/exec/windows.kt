@@ -1,6 +1,9 @@
 package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
+import com.sun.jna.Pointer
+import com.sun.jna.platform.win32.Kernel32
+import com.sun.jna.platform.win32.WinNT
 import kotlinx.coroutines.experimental.Unconfined
 import kotlinx.coroutines.experimental.channels.consumeEach
 import kotlinx.coroutines.experimental.launch
@@ -8,7 +11,8 @@ import kotlinx.coroutines.experimental.launch
 internal class WindowsProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
 
     init {
-        if(JavaVersion >= 9) trace { "WARN: using Windows Process Control on Java 9+" }
+        //normally we warn about java-9 here, but it doesnt support kill gracefully...
+        //TODO how do we reconcile the reflection hack with kill gracefully on java 10+?
     }
 
     companion object: ProcessControlFacade.Factory {
@@ -54,5 +58,29 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
     // but it looks like that just punts the problem from the jvm into kernel 32, which still uses the same
     // (blocking thread) strategy.
     // => dont bother, no matter the API we're still polling the bastard.
+}
+
+internal class WindowsReflectiveNativePIDGen(private val process: Process): ProcessIDGenerator {
+
+    init {
+        if(JavaVersion >= 9) trace { "WARN: using Windows reflection-based PID generator on java-9" }
+    }
+
+    companion object: ProcessIDGenerator.Factory {
+        override fun create(process: Process) = supportedIf(JavaProcessOS == ProcessOS.Windows){
+            WindowsReflectiveNativePIDGen(process)
+        }
+    }
+
+    private val field = Process::class.java.getDeclaredField("handle").apply { isAccessible = true }
+
+    override val pid: Supported<Int> by lazy {
+
+        val handlePeer = field.getLong(process)
+        val handle = WinNT.HANDLE(Pointer.createConstant(handlePeer))
+        val pid = Kernel32.INSTANCE.GetProcessId(handle)
+
+        Supported(pid)
+    }
 }
 

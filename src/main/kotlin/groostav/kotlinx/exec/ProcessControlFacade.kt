@@ -43,25 +43,6 @@ internal class CompositProcessControl(val facades: List<ProcessControlFacade>): 
     })
 }
 
-//TODO: dont like dependency on zero-turnaround, but its so well packaged...
-//
-// on windows: interestingly, they use a combination the cmd tools taskkill and wmic,
-// and a reflection hack + JNA Win-Kernel32 call to manage the process
-//   - note that oshi (https://github.com/oshi/oshi, EPL license) has some COM object support...
-// why cant I just load wmi.dll from JNA?
-// on linux: they dont support the deletion of children (???),
-// and its pure shell commands (of course, since the shell is so nice)
-// what about android or even IOS? *nix == BSD support means... what? is there even a use-case here?
-//
-// so I think cross-platform support is a little trickey,
-// - java-9 supports some of these features themselves, namely `onComplete` (via `CompletableFuture`) and PID.
-//    - see http://www.baeldung.com/java-9-process-api
-// - each OS provides a pretty good mechanism for killing parent processes, kill process-trees might be more involved.
-// - dont know who would want this library on android or IOS, so we might skip compatibility there.
-// - despite lack of android support, targeting JDK-6 is still probably a good idea.
-// - in order to run processes like `ls` to avoid a recursive dependency,
-//   I might need an `internal fun exec0(cmd): List<String?)`, similar to zero-turnaround.
-
 internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessControlFacade {
     val factories = listOf(
             JEP102ProcessFacade,

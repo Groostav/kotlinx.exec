@@ -12,7 +12,6 @@ import kotlin.test.*
 
 class KillTests {
 
-
     @Test fun `when killing a process should exit without finishing`() = runBlocking<Unit>{
         //setup
         val runningProcess = execAsync {
@@ -65,7 +64,6 @@ class KillTests {
 
         process.send("OK")
         process.close()
-
 
         procJoin.join(); exitCodeJoin.join(); aggregateChannelJoin.join()
 

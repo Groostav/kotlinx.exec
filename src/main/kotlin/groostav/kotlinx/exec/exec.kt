@@ -10,16 +10,16 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
     }
 
     val runningProcessFactory = RunningProcessFactory()
-    BlockableDispatcher.prestart(2)
+
+    val listenerProviderFactory = makeListenerProviderFactory()
 
     val jvmRunningProcess = jvmProcessBuilder.start()
 
     val pidProvider = makePIDGenerator(jvmRunningProcess)
     val processID = pidProvider.pid.value
 
-    val listenerProvider = makeListenerProvider(jvmRunningProcess, processID, config)
-
     val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
+    val listenerProvider = listenerProviderFactory.create(jvmRunningProcess, processID, config)
 
     return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
 }

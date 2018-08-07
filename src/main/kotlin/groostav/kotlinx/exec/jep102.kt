@@ -57,8 +57,6 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
 
 internal class JEP102ProcessIDGenerator(private val process: Process): ProcessIDGenerator {
 
-    init { require(JavaVersion >= 9) }
-
     companion object: ProcessIDGenerator.Factory {
         override fun create(process: Process) = supportedIf(JavaVersion >= 9) { JEP102ProcessIDGenerator(process) }
     }

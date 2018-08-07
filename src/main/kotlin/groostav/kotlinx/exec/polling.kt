@@ -6,6 +6,7 @@ import kotlinx.coroutines.experimental.channels.ReceiveChannel
 import kotlinx.coroutines.experimental.channels.produce
 import kotlinx.coroutines.experimental.channels.take
 import kotlinx.coroutines.experimental.selects.select
+import java.io.Closeable
 import java.io.Reader
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -13,37 +14,39 @@ import kotlin.coroutines.experimental.CoroutineContext
 
 internal class PollingListenerProvider(val process: Process, val pid: Int, val config: ProcessBuilder): ProcessListenerProvider {
 
+    companion object: ProcessListenerProvider.Factory {
+        override fun create(process: Process, pid: Int, config: ProcessBuilder) = PollingListenerProvider(process, pid, config)
+    }
+
     private val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)
     private val standardOutputReader = NamedTracingProcessReader.forStandardOutput(process, pid, config)
 
     val PollPeriodWindow = getIntRange("groostav.kotlinx.exec.PollPeriodMillis")?.also {
         require(it.start > 0)
         require(it.endInclusive >= it.start)
-    } ?: (5 .. 100)
+    } ?: (2 .. 34) //30fps = 33.3ms period
 
-    val otherSignals = ConflatedBroadcastChannel<Unit>()
-    @Volatile var manualEOF = false
+    private val otherSignals = ConflatedBroadcastChannel<Unit>()
+    private @Volatile var manualEOF = false
 
     override val standardErrorChannel = Supported(
             standardErrorReader.toPolledReceiveChannel(CommonPool, DelayMachine(PollPeriodWindow, otherSignals))
+
     )
     override val standardOutputChannel = Supported(
             standardOutputReader.toPolledReceiveChannel(CommonPool, DelayMachine(PollPeriodWindow, otherSignals))
-    )
-    override val exitCodeDeferred = run {
-        val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
-        Supported(async(CommonPool) {
 
-            try {
+    )
+    override val exitCodeDeferred = Supported(
+            async(CommonPool) {
+                val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
                 delayMachine.waitForByPollingPeriodically { process.isAlive }
-                process.waitFor()
-            }
-            finally {
+                val result = process.exitValue()
                 manualEOF = true
                 delayMachine.signalPollResult()
+                result
             }
-        })
-    }
+    )
 
 
     private fun Reader.toPolledReceiveChannel(
@@ -76,8 +79,6 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     }
 }
 
-//TODO: casually running tests shows that many tests take 2x or 3x the time with this reader strategy.
-// why?
 private class DelayMachine(
         private val delayWindow: IntRange,
         private val otherSignals: ConflatedBroadcastChannel<Unit>,
@@ -102,21 +103,21 @@ private class DelayMachine(
                 otherSignalsSubscription.onReceiveOrNull { Unit }
             }
 
-            yield() //if, for whatever reason, we're getting flodded with other signals,
-            // this ensures we yield to previously equeued jobs on our dispatcher
+            yield() //if, for whatever reason, we're getting flooded with other signals,
+            // this ensures we yield to previously enqueued jobs on our dispatcher
         }
         signalPollResult()
+    }
+
+    fun signalPollResult(){
+        backoff.set(delayWindow.start)
+        otherSignals.offer(Unit)
     }
 
     private fun updateBackoff(currentPollPeriodMillis: Int, pollPeriodMillis: IntRange): Int {
         return (currentPollPeriodMillis * 1.5).toInt()
                 .coerceAtLeast(currentPollPeriodMillis + 1)
                 .coerceAtMost(pollPeriodMillis.endInclusive)
-    }
-
-    fun signalPollResult(){
-        backoff.set(delayWindow.start)
-        otherSignals.offer(Unit)
     }
 }
 

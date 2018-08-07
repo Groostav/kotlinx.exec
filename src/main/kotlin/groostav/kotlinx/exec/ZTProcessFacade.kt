@@ -10,7 +10,7 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
     }
 
     companion object: ProcessControlFacade.Factory  {
-        val ztOnClassPath: Boolean = Class.forName("org.zeroturnaround.process.Processes") != null
+        val ztOnClassPath: Boolean = Try { Class.forName("org.zeroturnaround.process.Processes") } != null
         override fun create(process: Process, pid: Int) = supportedIf(ztOnClassPath) { ZeroTurnaroundProcessFacade(process, pid) }
     }
 

@@ -1,25 +1,30 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.ConflatedBroadcastChannel
+import kotlinx.coroutines.experimental.Deferred
 import kotlinx.coroutines.experimental.channels.ReceiveChannel
-import kotlinx.coroutines.experimental.channels.produce
-import java.io.InputStream
-import java.io.InputStreamReader
-import java.io.Reader
-import java.nio.CharBuffer
-import kotlin.coroutines.experimental.CoroutineContext
+import java.lang.Process
+import java.lang.Boolean.getBoolean
+
 
 internal interface ProcessListenerProvider {
 
     val standardErrorChannel: Maybe<ReceiveChannel<Char>> get() = Unsupported
     val standardOutputChannel: Maybe<ReceiveChannel<Char>> get() = Unsupported
     val exitCodeDeferred: Maybe<Deferred<Int>> get() = Unsupported
+
+    interface Factory {
+        fun create(process: Process, pid: Int, config: ProcessBuilder): ProcessListenerProvider
+    }
 }
 
+internal val UseBlockableThreads = getBoolean("groostav.kotlinx.exec.UseBlockableThreads")
 
-internal fun makeListenerProvider(jvmRunningProcess: Process, pid: Int, config: ProcessBuilder): ProcessListenerProvider {
-    return PollingListenerProvider(jvmRunningProcess, pid, config)
-//    return ThreadBlockingListenerProvider(jvmRunningProcess, pid, config)
+internal fun makeListenerProviderFactory(): ProcessListenerProvider.Factory {
+    return when {
+        UseBlockableThreads -> ThreadBlockingListenerProvider.also {
+            ThreadBlockingListenerProvider.BlockableDispatcher.prestart(3)
+        }
+        else -> PollingListenerProvider
+    }
 }
 
