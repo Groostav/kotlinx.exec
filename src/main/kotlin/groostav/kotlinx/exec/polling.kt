@@ -56,18 +56,21 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
 
         val result = produce(context) {
 
+            val chunkBuffer = CharArray(128)
+
             reading@ while (isActive) {
 
                 delayMachine.waitForByPollingPeriodically { !ready() && !manualEOF }
 
                 while (ready() || manualEOF) {
-                    val nextCodePoint = read().takeUnless { it == EOF_VALUE }
-                    if (nextCodePoint == null) {
+                    val readByteCount = read(chunkBuffer)
+                    if (readByteCount == EOF_VALUE) {
                         break@reading
                     }
-                    val nextChar = nextCodePoint.toChar()
 
-                    send(nextChar)
+                    for(index in 0 until readByteCount) {
+                        send(chunkBuffer[index])
+                    }
                 }
             }
 

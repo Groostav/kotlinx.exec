@@ -74,7 +74,6 @@ class SimpleInlineMulticaster<T>(val name: String) {
             sourceJob.complete(Unit)
             for (it in previous.subs) {
                 it.close()
-                val x = 4;
             }
             trace { "all subs of ${this@SimpleInlineMulticaster} closed" }
         }

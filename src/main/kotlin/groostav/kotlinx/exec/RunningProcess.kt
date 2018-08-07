@@ -385,8 +385,6 @@ internal class RunningProcessImpl(
                             _exitCode.onAwait { ExitCode(it) }
                         }
 
-                        testing(next)
-
                         when (next) {
                             null -> { }
                             is ExitCode -> { send(next); break@loop }
@@ -408,10 +406,6 @@ internal class RunningProcessImpl(
             // +1 for exitCode. If the configuration has statically known math
             // (eg 54 lines for `ls` of a directory with 54 items).
         }
-    }
-
-    fun testing(x: Any?){
-        val y = 4;
     }
 
     override val isClosedForReceive: Boolean get() = aggregateChannel.isClosedForReceive
