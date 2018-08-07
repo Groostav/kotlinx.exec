@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 
 class CoroutineTests {
@@ -158,5 +159,85 @@ class CoroutineTests {
         // 2. stack-traces cannot be saved! Once suspended, **the stack trace is gone!!**,
         //      I know this, but I consistently forget it.
         // so, event loops: neat tool, useless to me here.
+    }
+
+    private enum class Side { Left, Right }
+    infix fun Deferred<Boolean>.orAsync(right: Deferred<Boolean>) = async<Boolean> {
+        val left: Deferred<Boolean> = this@orAsync
+        //note: I didnt take a context object.
+        //`infix` might not be possible...
+
+        // 'short circuit'
+        if(left.isCompleted && left.getCompleted()) return@async true
+        if(right.isCompleted && right.getCompleted()) return@async true
+
+        //we have no choice but to wait for one of them to return
+        val (side, sideTrue) = select<Pair<Side, Boolean>> {
+            left.onAwait { Side.Left to it }
+            right.onAwait { Side.Right to it }
+        }
+
+        return@async when {
+            //if that value was true, we're done
+            sideTrue -> true
+            //else wait for the other to complete
+            side == Side.Left -> right.await()
+            side == Side.Right -> left.await()
+            else -> TODO()
+        }
+    }
+
+    @Test fun `when using async or and one of the two operands returns true`() = runBlocking {
+        val left = CompletableDeferred<Boolean>()
+        val right = CompletableDeferred<Boolean>()
+
+        val result = left orAsync right
+
+        delay(10)
+
+        left.complete(true)
+
+        assertTrue(result.await())
+    }
+    // I should brush up on those funny monadic law based testing systems,
+    // the ability to define a behaviour and a set of inputs here would be nice...
+
+
+    infix fun Deferred<Boolean>.orAsyncLazy(right: suspend () -> Boolean) = async<Boolean> {
+        val left: Deferred<Boolean> = this@orAsyncLazy
+
+        // 'short circuit'
+        if(left.isCompleted && left.getCompleted()) return@async true
+        val leftValue = left.await()
+
+        return@async leftValue || right()
+    }
+
+    @Test fun `when using orAsyncLazy should not start until left completes`() = runBlocking {
+        val left = CompletableDeferred<Boolean>()
+        val right: suspend () -> Nothing = { TODO("blam: you evaluated right eagerly!") }
+
+        val result = left orAsyncLazy { right() }
+
+        delay(10)
+
+        left.complete(true)
+
+        assertTrue(result.await())
+    }
+
+    @Test fun `when using orAsyncLazy should evaluate right when left is false`() = runBlocking {
+        val left = CompletableDeferred<Boolean>()
+        var evaluatedRight: Boolean = false
+        val right: suspend () -> Boolean = right@ { evaluatedRight = true; return@right true }
+
+        val result = left orAsyncLazy { right() }
+
+        delay(10)
+
+        left.complete(false)
+
+        assertTrue(result.await())
+        assertTrue(evaluatedRight)
     }
 }

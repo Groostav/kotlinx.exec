@@ -24,14 +24,14 @@ internal class DelayMachine(
     }
 
     val backoff = AtomicInteger(0)
-    val signals = ConflatedBroadcastChannel<Unit>()//TODO: replace with BroadcastChannel(0)
 
     suspend fun waitForByPollingPeriodically(condition: () -> Boolean){
         while(condition()) {
             val backoff = backoff.updateAndGet { updateBackoff(it, delayWindow) }
 
             withTimeoutOrNull(backoff){
-                signals.openSubscription().take(2)
+                //TODO we can re-use the subscription, there isnt any good reason to do it like this.
+                otherSignals.openSubscription().take(2)
             }
 
             yield()
@@ -47,7 +47,7 @@ internal class DelayMachine(
 
     private fun signalPollResult(){
         backoff.set(delayWindow.start)
-        signals.offer(Unit)
+        otherSignals.offer(Unit)
     }
 }
 

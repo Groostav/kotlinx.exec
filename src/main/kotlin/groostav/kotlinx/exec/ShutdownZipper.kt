@@ -1,64 +1,70 @@
 package groostav.kotlinx.exec
 
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.coroutines.experimental.Continuation
 import kotlin.coroutines.experimental.intrinsics.suspendCoroutineOrReturn
 import kotlin.coroutines.experimental.intrinsics.COROUTINE_SUSPENDED
 
-private class ShutdownEntry<T>(val item: T, val continuations: List<Continuation<Unit>>)
-
 class ShutdownZipper<T>(val initialValues: List<T>) {
 
-    val state = AtomicReference(ZipSet(initialValues))
+    //TODO use optimistic locking scheme!
+    private var values = initialValues.map { ShutdownEntry(it, arrayListOf()) }
+    private val lock = ReentrantLock()
 
-    suspend fun waitFor(item: T) = suspendCoroutineOrReturn<Unit> { continuation ->
+    val ordinal = initialValues.withIndex().associate { (index, item) -> item to index }
+    @Volatile var index = 0
 
-        var success: Boolean = false
-        var resumables: List<Continuation<Unit>> = emptyList()
+    private sealed class Result<out T> {
+        data class ENQUEUED<T>(val nowReady: List<ShutdownEntry<T>>) : Result<T>()
+        object ALREADY_COMPLETED : Result<Nothing>()
+    }
+    private class ShutdownEntry<T>(val item: T, val continuations: MutableList<Continuation<Unit>>)
 
-        state.getAndUpdate {
-            val (newState, attemptResumables, attemptSuccess) = it.remove(item)
-            success = attemptSuccess
-            resumables = attemptResumables
-            newState
+    suspend fun waitFor(suiter: T) = suspendCoroutineOrReturn<Unit> { continuation ->
+
+        val change = lock.withLock {
+
+            val head = values.getOrNull(index)
+
+            val suiterOrdinal = ordinal.getValue(suiter)
+            val headOrdinal = head?.let { ordinal.getValue(it.item) } ?: suiterOrdinal
+
+            //TODO convert to more lock-free
+            // first implementation: could replace index & head semantics with lock-free-linked-list,
+            // call 'val head = peek' here,
+            // and then... how do you removeWhile {} atomically?
+            // keep the lock
+
+            val result = when{
+                head == null -> Result.ALREADY_COMPLETED
+                head.item == suiter -> {
+                    head.continuations += continuation
+                    val completables = values.drop(index).takeWhile { it.continuations.any() }
+                    index += completables.size
+                    Result.ENQUEUED(nowReady = completables)
+                }
+                suiterOrdinal < headOrdinal -> Result.ALREADY_COMPLETED
+                suiterOrdinal > headOrdinal -> {
+                    values[suiterOrdinal].continuations += continuation
+                    Result.ENQUEUED(nowReady = emptyList())
+                }
+
+                else -> TODO("index=$index, suiter=$suiter, value=$values")
+            }
+
+            result
         }
 
-        when {
-            ! success -> Unit
-            else -> {
-                resumables.forEach { it.resume(Unit) }
+        return@suspendCoroutineOrReturn when(change){
+            is Result.ENQUEUED -> {
+                change.nowReady.flatMap { it.continuations }.forEach { it.resume(Unit) }
                 COROUTINE_SUSPENDED
             }
+            is Result.ALREADY_COMPLETED -> Unit
         }
 
     }
-
-
-    class ZipSet<T> (initialValues: List<T>) {
-
-        private val currentIndex: Int = 0
-        private val table = initialValues.map { ShutdownEntry(it, emptyList()) }
-
-        fun remove(item: T, continuation: Continuation<Unit>): Triple<ZipSet<T>, List<Continuation<Unit>>, Boolean> {
-
-            val head = table[currentIndex]
-
-            when {
-                head.item == item -> {
-                    val resumables = head.continuations + continuation
-                    return Triple()
-                }
-            }
-
-
-            TODO("currentIndex += 1")
-        }
-
-        companion object {
-            operator fun <T> invoke(): ZipSet<T> = TODO()
-        }
-    }
-
 }
 
 //

@@ -70,7 +70,7 @@ class KillTests {
         procJoin.join(); exitCodeJoin.join(); aggregateChannelJoin.join()
 
         //assert
-        assertEquals(listOf("procJoin", "exitCodeJoin", "aggregateChannelJoin"), results)
+        assertEquals(listOf("exitCodeJoin", "aggregateChannelJoin", "procJoin"), results)
     }
 
     @Test fun `when calling join twice shouldnt deadlock`() = runBlocking {
@@ -86,6 +86,9 @@ class KillTests {
         //assert
         assertTrue(runningProcess.exitCode.isCompleted)
         assertFalse(runningProcess.exitCode.isActive)
-        assertTrue(runningProcess.isClosedForReceive)
+
+        // TODO: I'd like this, but elizarov's own notes say its not a requirement
+        // https://stackoverflow.com/questions/48999564/kotlin-wait-for-channel-isclosedforreceive
+//        assertTrue(runningProcess.isClosedForReceive)
     }
 }
