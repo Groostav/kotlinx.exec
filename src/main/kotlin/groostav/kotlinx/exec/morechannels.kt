@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import groostav.kotlinx.exec.sub.stuff
 import kotlinx.coroutines.experimental.Unconfined
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.launch

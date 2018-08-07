@@ -1,5 +1,7 @@
 package groostav.kotlinx.exec
 
+import kotlin.streams.asSequence
+
 internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade {
 
     val procHandle = process.toHandle()
