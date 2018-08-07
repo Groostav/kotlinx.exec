@@ -71,6 +71,8 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
                     for(index in 0 until readByteCount) {
                         send(chunkBuffer[index])
                     }
+                    yield() //manual EOF could be fired before reader can move,
+                    // so to avoid flooding we yield here
                 }
             }
 

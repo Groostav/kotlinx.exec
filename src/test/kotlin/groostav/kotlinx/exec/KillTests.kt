@@ -48,7 +48,7 @@ class KillTests {
         //assert
         val actual = result.await()
         assertEquals(listOf(StandardOutput("Hello!")), actual)
-        assertThrows<JobCancellationException> { runningProcess.exitCode.await() }
+        assertThrows<CancellationException> { runningProcess.exitCode.await() }
     }
 
     @Test fun `when exiting normally should perform orderly shutdown`() = runBlocking {
