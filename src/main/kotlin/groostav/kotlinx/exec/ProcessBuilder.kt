@@ -109,26 +109,41 @@ data class ProcessBuilder internal constructor(
          * Setting this value to zero will disable standard-error buffering for the purposes
          * of stack-trace generation entirely.
          */
-        var linesForExceptionError: Int = 15
+        var linesForExceptionError: Int = 15,
+
+        //used to point at caller of exec() through suspension context
+        internal var source: ExecEntryPoint? = null
 )
 
-internal fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
-    val result = ProcessBuilder().apply(configureBlock).let { it.copy(
-            command = it.command.toList(),
-            delimiters = it.delimiters.toList(),
-            expectedOutputCodes = it.expectedOutputCodes.toSet(),
-            environment = if(it.environment === System.getenv()) it.environment else it.environment.toMap()
-    )}
+internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
+
+    val initial = ProcessBuilder().apply(configureBlock)
+    val initialCommandList = initial.command.toList()
+
+    val result = initial.copy (
+            command = initialCommandList,
+            delimiters = initial.delimiters.toList(),
+            expectedOutputCodes = initial.expectedOutputCodes.toSet(),
+            environment = if(initial.environment === System.getenv()) initial.environment else initial.environment.toMap()
+
+            //dont deep-copy source, since its internal
+    )
 
     result.apply {
-        require(command.any()) { "cannot exec empty command: $this" }
-        require(command.all { '\u0000' !in it }) { "cannot exec command with null character: $this"}
+        require(initialCommandList.any()) { "cannot exec empty command: $this" }
+        require(initialCommandList.all { '\u0000' !in it }) { "cannot exec command with null character: $this"}
         require(standardErrorBufferCharCount >= 0) { "cannot exec with output buffer size less than zero: $this"}
         require(delimiters.all { it.any()}) { "cannot parse output lines with empty delimeter: $this" }
         require(aggregateOutputBufferLineCount >= 0)
         require(standardErrorBufferCharCount >= 0)
         require(standardOutputBufferCharCount >= 0)
+
+        require(source != null) { "internal error: no known start point for trace" }
     }
 
     return result
 }
+
+interface ExecEntryPoint
+class AsynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint
+class SynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint

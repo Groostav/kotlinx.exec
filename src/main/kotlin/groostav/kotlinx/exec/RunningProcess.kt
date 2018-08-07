@@ -135,8 +135,6 @@ internal class RunningProcessFactory {
 
     val _standardOutputLines = SimpleInlineMulticaster<String>("stdout-lines")
     val _standardErrorLines = SimpleInlineMulticaster<String>("stderr-lines")
-    val _standardOutputSource = SimpleInlineMulticaster<Char>("stdout")
-    val _standardErrorSource = SimpleInlineMulticaster<Char>("stderr")
 
     internal fun create(
             config: ProcessBuilder,
@@ -145,6 +143,9 @@ internal class RunningProcessFactory {
             processControl: ProcessControlFacade,
             processListenerProvider: ProcessListenerProvider
     ): RunningProcessImpl {
+
+        val _standardOutputSource = SimpleInlineMulticaster<Char>("stdout$processID")
+        val _standardErrorSource = SimpleInlineMulticaster<Char>("stderr$processID")
 
         val result = RunningProcessImpl(
                 config,
@@ -222,7 +223,7 @@ internal class RunningProcessImpl(
     private val killLock = Mutex()
     private var killed: Boolean = false
 
-    private val _exitCode = async(Unconfined) {
+    private val _exitCode = async(Unconfined + CoroutineName("process(PID=$processID)._exitcode")) {
 
         val result = processListenerProvider.exitCodeDeferred.value.await()
 
@@ -231,18 +232,10 @@ internal class RunningProcessImpl(
         _standardOutputSource.join()
         _standardErrorSource.join()
 
-        when {
-            killed -> throw CancellationException()
-            result in config.expectedOutputCodes -> result
-            else -> {
-                val errorLines = errorHistory.await().toList()
-                val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
-                throw exception
-            }
-        }
+        result
     }
 
-    private val errorHistory = async<Queue<String>>(Unconfined) {
+    private val errorHistory = async<Queue<String>>(Unconfined + CoroutineName("process(PID=$processID).errorHistory")) {
         val result = LinkedList<String>()
         if (config.linesForExceptionError > 0) {
             _standardErrorLines.openSubscription().consumeEach {
@@ -256,12 +249,22 @@ internal class RunningProcessImpl(
     }
 
     //user-facing control root.
-    override val exitCode: Deferred<Int> = async<Int>(Unconfined) {
-        val result = try {
-            _exitCode.await()
+    override val exitCode: Deferred<Int> = async<Int>(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
+        return@async try {
+            val result = _exitCode.await()
+
+            when {
+                killed -> throw CancellationException()
+                result in config.expectedOutputCodes -> result
+                else -> {
+                    val errorLines = errorHistory.await().toList()
+                    val exception = makeExitCodeException(config, result, errorLines)
+                    throw exception
+                }
+            }
         }
-        catch(ex: CancellationException){
-            killWithoutSync()
+        catch (ex: CancellationException) {
+            killOnceWithoutSync()
             _exitCode.join()
             throw ex
         }
@@ -269,8 +272,6 @@ internal class RunningProcessImpl(
             shutdownZipper.waitFor(ShutdownItem.ExitCodeJoin)
             trace { "exitCode pid=$processID in finally block, killed=$killed" }
         }
-
-        if(killed) throw CancellationException() else result
     }
 
 
@@ -281,11 +282,12 @@ internal class RunningProcessImpl(
     }
 
     override suspend fun kill(): Unit {
-        killWithoutSync()
+        killOnceWithoutSync()
         exitCode.join()
     }
 
-    private suspend fun killWithoutSync() {
+    //must be reentrant, this method is called in `finally{}` logic
+    private suspend fun killOnceWithoutSync() {
 
         val gracefulTimeousMillis = config.gracefulTimeousMillis
 
@@ -351,14 +353,15 @@ internal class RunningProcessImpl(
 
     private val aggregateChannel: ReceiveChannel<ProcessEvent> = when(config.aggregateOutputBufferLineCount){
         0 -> {
-            val actual = produce<ProcessEvent>(Unconfined, capacity = 1){
+            val name = "aggregate[NoBufferedOutput, delay=$_exitCode]"
+            val actual = produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name"), capacity = 1){
                 val code = _exitCode.await()
                 send(ExitCode(code))
 
                 shutdownZipper.waitFor(ShutdownItem.AggregateChannel)
             }
             object: ReceiveChannel<ProcessEvent> by actual{
-                override fun toString() = "aggregate[size=0, delay=$exitCode]"
+                override fun toString() = name
             }
         }
         else -> {
@@ -366,7 +369,9 @@ internal class RunningProcessImpl(
             val errorLines = _standardErrorLines.openSubscription()
             val outputLines = _standardOutputLines.openSubscription()
 
-            val actual = produce<ProcessEvent>(Unconfined) {
+            val name = "aggregate[out=$outputLines,err=$errorLines]"
+
+            val actual = produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name")) {
                 try {
                     var stderrWasNull = false
                     var stdoutWasNull = false
@@ -399,7 +404,7 @@ internal class RunningProcessImpl(
             }
 
             val namedAggregate = object: ReceiveChannel<ProcessEvent> by actual {
-                override fun toString() = "aggregate[out=$outputLines,err=$errorLines]"
+                override fun toString(): String = name
             }
 
             namedAggregate.tail(config.aggregateOutputBufferLineCount + 1)
@@ -418,9 +423,7 @@ internal class RunningProcessImpl(
     override suspend fun receive(): ProcessEvent = aggregateChannel.receive()
     override suspend fun receiveOrNull(): ProcessEvent? = aggregateChannel.receiveOrNull()
     override fun cancel(cause: Throwable?): Boolean {
-        launch(Unconfined) { killWithoutSync() }
-        _standardError?.cancel(cause)
-        _standardOutput?.cancel(cause)
+        launch(Unconfined + CoroutineName("process(PID=$processID).cancel-kill")) { killOnceWithoutSync() }
         return aggregateChannel.cancel(cause)
     }
 

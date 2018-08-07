@@ -14,38 +14,44 @@ fun getLocalResourcePath(localName: String): String {
     return resource
 }
 
-//TODO make platform agnostic, add EmptyScript.sh
-val EmptyScript = getLocalResourcePath("EmptyScript.ps1")
-val CompletableScript = getLocalResourcePath("CompletableScript.ps1")
-val PromptScript = getLocalResourcePath("PromptScript.ps1")
+
+//TODO make this as platform agnostic as possible, at least support ubuntu/centOS
 
 fun emptyScriptCommand() = listOf(
         "powershell.exe",
-        "-File", EmptyScript,
+        "-File", getLocalResourcePath("EmptyScript.ps1"),
         "-ExecutionPolicy", "Bypass"
 )
 fun completableScriptCommand() = listOf(
         "powershell.exe",
-        "-File", CompletableScript,
+        "-File", getLocalResourcePath("CompletableScript.ps1"),
         "-ExecutionPolicy", "Bypass"
 )
 fun promptScriptCommand() = listOf(
         "powershell.exe",
-        "-File", PromptScript,
+        "-File", getLocalResourcePath("PromptScript.ps1"),
+        "-ExecutionPolicy", "Bypass"
+)
+fun exitCodeOneCommand() = listOf(
+        "powershell.exe",
+        "-File", getLocalResourcePath("ExitCodeOne.ps1"),
         "-ExecutionPolicy", "Bypass"
 )
 
 
 
-inline fun <reified T: Exception> assertThrows(action: () -> Any?): T? {
-    val errorPrefix = "expected action to throw ${T::class.simpleName}"
+inline fun <reified X: Exception> assertThrows(action: () -> Any?): X? {
+    val errorPrefix = "expected action to throw ${X::class.simpleName}"
     try {
         action()
     }
     catch(ex: Exception){
-        if(ex is T) return ex
+        if(ex is X) return ex
         else throw IllegalStateException("$errorPrefix, but it threw ${ex::class.simpleName}", ex)
     }
 
     throw IllegalStateException("$errorPrefix, but it did not.")
 }
+
+internal inline fun <reified X: Exception> Catch(action: () -> Any?): X? =
+        try { action(); null } catch(ex: Exception){ if(ex is X) ex else throw ex }

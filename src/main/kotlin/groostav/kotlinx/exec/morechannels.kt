@@ -1,14 +1,17 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.experimental.CommonPool
+import kotlinx.coroutines.experimental.CoroutineName
 import kotlinx.coroutines.experimental.Unconfined
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.launch
+import java.util.*
 
 //TODO: why isn't this part of kotlinx.coroutines already? Something they know I dont?
 internal fun ReceiveChannel<Char>.lines(
         delimiters: List<String> = listOf("\r", "\n", "\r\n")
 ): ReceiveChannel<String> {
-    val result = produce<String>(Unconfined){
+    val result = produce<String>(Unconfined + CoroutineName("lines{$this@lines}")){
 
         trace { "starting lines-${this@lines}" }
 
@@ -50,7 +53,7 @@ private fun StringBuilder.takeAndClear(): String = toString().also { setLength(0
 private class LineSeparatingStateMachine(delimiters: List<String>) {
     val delimeterMatrix: Array<CharArray> = delimiters.map { it.toCharArray() }.toTypedArray()
     var currentMatchColumn: Int = -1
-    val activeRows: MutableSet<Int> = (0 until delimeterMatrix.size).toHashSet()
+    val activeRows: BitSet = BitSet().apply { set(0, delimiters.size) }
 
     var previousState: State = State.NoMatch
 
@@ -67,7 +70,7 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
         // any of the rows at that index match the current character.
 
         // for example, given we have delimeters d1="\r\n" and d2="\n",
-        // and we'er parsing the string "a\r\nb", we would do
+        // and we're parsing the string "a\r\nb", we would do
         //
         // initialization:
         //   activeRows initialized to setOf(indexOf(d1), indexOf(d2)) == setOf(0, 1)
@@ -96,7 +99,7 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
         //update active-rows
         moveNext(next)
 
-        if(activeRows.isEmpty() && currentMatchColumn != 0){
+        if(activeRows.isEmpty && currentMatchColumn != 0){
             //try a new match
             reset()
             moveNext(next)
@@ -121,16 +124,30 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
 
     private fun reset() {
         currentMatchColumn = -1
-        activeRows += (0 until delimeterMatrix.size) //huge performance win from immutable collections here.
-        //or actually a mask here, assuming you have less than 32 delimeters, would do the trick too.
+        activeRows.set(0, delimeterMatrix.size)
     }
 
     private fun moveNext(next: Char) {
         currentMatchColumn += 1
+
         activeRows.removeIf { activeRowIndex ->
             val row = delimeterMatrix[activeRowIndex]
             row.size == currentMatchColumn || row[currentMatchColumn] != next
         }
+    }
+}
+
+//this did not yield any performance improvement over a hash-set :(
+private inline fun BitSet.removeIf(predicate: (Int) -> Boolean){
+    var currentSetIndex = 0
+    while(true) {
+        currentSetIndex = this.nextSetBit(currentSetIndex)
+        if(currentSetIndex == -1) break;
+
+        if (predicate(currentSetIndex)) {
+            clear(currentSetIndex)
+        }
+        currentSetIndex += 1
     }
 }
 
@@ -144,7 +161,7 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 
     trace { "allocated buffer=$bufferSize for $buffer" }
 
-    launch(Unconfined) {
+    launch(Unconfined + CoroutineName(buffer.toString())) {
         try {
             for (item in this@tail) {
                 buffer.pushForward(item)
@@ -159,20 +176,10 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 }
 
 private suspend inline fun <T> ArrayChannel<T>.pushForward(next: T){
-    try {
-        while (!offer(next)) {
-            val bumpedElement = receiveOrNull()
-            if (bumpedElement != null){
-                trace { "WARN: back-pressure forced drop '$bumpedElement' from ${this@pushForward}" }
-            }
+    while (! isClosedForSend && !offer(next)) {
+        val bumpedElement = receiveOrNull()
+        if (bumpedElement != null){
+            trace { "WARN: back-pressure forced drop '$bumpedElement' from ${this@pushForward}" }
         }
-    }
-    catch(ex: ClosedSendChannelException){
-        // means we cant take anymore ever, so throw for cancellation of parent
-        throw ex
-    }
-    catch(ex: ClosedReceiveChannelException){
-        // ignore, this means we couldnt drop the element and wont be able to make space,
-        // but space might still open up.
     }
 }

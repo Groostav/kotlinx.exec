@@ -3,7 +3,7 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.experimental.channels.*
 import java.lang.ProcessBuilder as JProcBuilder
 
-internal fun execAsync(config: ProcessBuilder): RunningProcess {
+internal fun execAsync(config: ProcessBuilder, origin: Exception = Exception()): RunningProcess {
 
     val jvmProcessBuilder = JProcBuilder(config.command).apply {
         environment().apply { clear(); putAll(config.environment) }
@@ -24,17 +24,27 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
     return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
 }
 
-fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess = execAsync(processBuilder(config))
+fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
+    val configActual = processBuilder {
+        config()
+
+        source = AsynchronousExecutionStart(command.toList())
+    }
+    return execAsync(configActual)
+}
 fun execAsync(commandFirst: String, vararg commandRest: String): RunningProcess = execAsync {
     command = listOf(commandFirst) + commandRest.toList()
 }
 
 suspend fun exec(config: ProcessBuilder.() -> Unit): Pair<List<String>, Int> {
+
     val configActual = processBuilder {
         standardErrorBufferCharCount = 0
         standardOutputBufferCharCount = 0
 
         config()
+
+        source = SynchronousExecutionStart(command.toList())
     }
     val runningProcess = execAsync(configActual)
 
@@ -57,6 +67,8 @@ suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
         standardErrorBufferCharCount = 0
 
         config()
+
+        source = SynchronousExecutionStart(command.toList())
     }
     return execAsync(configActual).exitCode.await()
 }
@@ -64,26 +76,51 @@ suspend fun execVoid(commandFirst: String, vararg commandRest: String) = execVoi
     command = listOf(commandFirst) + commandRest.toList()
 }
 
-class InvalidExitValueException(
+class InvalidExitValueException internal constructor(
         val command: List<String>,
         val exitValue: Int,
         val expectedExitCodes: Set<Int>,
-        message: String
-): RuntimeException(message)
+        message: String,
+        stackTraceApplier: InvalidExitValueException.() -> Unit
+): RuntimeException(message) {
 
-internal fun makeExitCodeException(command: List<String>, exitCode: Int, expectedOutputCodes: Set<Int>, lines: List<String>): Throwable {
+    init {
+        stackTraceApplier()
+        if(stackTrace == null) super.fillInStackTrace()
+    }
+
+    override fun fillInStackTrace(): Throwable = this.also {
+        //noop, this is handled by init
+    }
+}
+
+internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentOutput: List<String>): Throwable {
     val builder = StringBuilder().apply {
-        appendln("exec '${command.joinToString(" ")}'")
-        val multipleOutputs = expectedOutputCodes.size > 1
+        appendln("exec '${config.command.joinToString(" ")}'")
+        val multipleOutputs = config.expectedOutputCodes.size > 1
         append("exited with code $exitCode ")
-        val exitCodesScription = expectedOutputCodes.joinToString("', '")
+        val exitCodesScription = config.expectedOutputCodes.joinToString("', '")
         appendln("(expected ${if(multipleOutputs) "one of " else ""}'$exitCodesScription')")
 
-        if(lines.any()){
+        if(recentOutput.any()){
             appendln("the most recent standard-error output was:")
-            lines.forEach { appendln(it) }
+            recentOutput.forEach { appendln(it) }
         }
     }
 
-    return InvalidExitValueException(command, exitCode, expectedOutputCodes, builder.toString())
+    val result = InvalidExitValueException(config.command, exitCode, config.expectedOutputCodes, builder.toString()){
+        val source = config.source
+        when(source){
+            is AsynchronousExecutionStart -> {
+                initCause(source)
+            }
+            is SynchronousExecutionStart -> {
+                stackTrace = source.stackTrace
+            }
+        }
+    }
+
+    require(result.stackTrace != null)
+
+    return result
 }

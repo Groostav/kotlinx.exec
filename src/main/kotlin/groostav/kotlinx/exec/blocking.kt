@@ -19,16 +19,19 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
     }
 
     override val standardErrorChannel = run {
-//        val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)
-//        Supported(standardErrorReader.toPumpedReceiveChannel(BlockableDispatcher))
-        TODO()
+        val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)
+        val context = BlockableDispatcher + CoroutineName("blocking-process.stderr")
+        Supported(standardErrorReader.toPumpedReceiveChannel(context))
     }
     override val standardOutputChannel = run {
-//        val standardOutputReader = NamedTracingProcessReader.forStandardOutput(process, pid, config)
-//        Supported(standardOutputReader.toPumpedReceiveChannel(BlockableDispatcher))
-        TODO()
+        val standardOutputReader = NamedTracingProcessReader.forStandardOutput(process, pid, config)
+        val context = BlockableDispatcher + CoroutineName("blocking-process.stdout")
+        Supported(standardOutputReader.toPumpedReceiveChannel(context))
     }
-    override val exitCodeDeferred = Supported(async(Unconfined) { process.waitFor() })
+    override val exitCodeDeferred = run {
+        val context = BlockableDispatcher + CoroutineName("blocking-process.WaitFor")
+        Supported(async(context) { process.waitFor() })
+    }
 
     /**
      * Returns the input stream as an unbufferred channel by blocking a thread provided by context
@@ -85,7 +88,7 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
 
             val latch = CountDownLatch(jobs)
             for(jobId in 1 .. jobs){
-                launch(this) { latch.countDown() }
+                launch(this + CoroutineName("Prestarting-job$jobId-${this@BlockableDispatcher}")) { latch.countDown() }
             }
 
             latch.await()

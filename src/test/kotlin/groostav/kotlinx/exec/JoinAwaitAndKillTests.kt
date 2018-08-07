@@ -1,16 +1,19 @@
 package groostav.kotlinx.exec
 
+import Catch
 import assertThrows
 import completableScriptCommand
 import emptyScriptCommand
+import exitCodeOneCommand
 import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.channels.toList
 import org.junit.Test
 import promptScriptCommand
 import java.util.*
 import kotlin.test.*
 
-class KillTests {
+class JoinAwaitAndKillTests {
 
     @Test fun `when killing a process should exit without finishing`() = runBlocking<Unit>{
         //setup
@@ -89,4 +92,31 @@ class KillTests {
         // https://stackoverflow.com/questions/48999564/kotlin-wait-for-channel-isclosedforreceive
 //        assertTrue(runningProcess.isClosedForReceive)
     }
+
+    @Test fun `when running process with unexpected exit code should exit appropriately`() = runBlocking {
+        //setup
+        val runningProcess = execAsync {
+            command = exitCodeOneCommand()
+        }
+
+        //act
+        val joinResult = runningProcess.join()                                                      // exits normally
+        val exitCodeResult = Catch<InvalidExitValueException> { runningProcess.exitCode.await() }   // throws exception
+        val aggregateChannelList = runningProcess.toList()                                          // produces list with exit code
+        val errorChannel = runningProcess.standardError.toList()                                    // exits normally
+        val stdoutChannel = runningProcess.standardOutput.toList()                                  // exits normally
+
+        //assert
+        assertEquals(Unit, joinResult)
+        assertNotNull(exitCodeResult)
+        assertTrue(exitCodeResult is InvalidExitValueException)
+        assertEquals(aggregateChannelList.map { it::class.simpleName }.first(), StandardError::class.simpleName)
+        assertEquals(aggregateChannelList.last(), ExitCode(1))
+        assertTrue("Script is exiting with code 1" in errorChannel.joinToString(""))
+        assertEquals(listOf(), stdoutChannel)
+
+
+    }
 }
+
+

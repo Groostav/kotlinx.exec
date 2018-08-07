@@ -42,7 +42,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             this.source = source
             trace { "publishing src=$source to $this, locked-in subs: ${newState.subs.joinToString()}" }
 
-            launch(Unconfined) {
+            launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
                 try {
                     source.consumeEach { next ->
                         for (sub in newState.subs) {

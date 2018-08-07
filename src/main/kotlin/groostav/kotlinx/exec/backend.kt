@@ -125,3 +125,7 @@ internal fun <R, S> List<S>.filterSupporting(call: (S) -> Maybe<R>): List<R> {
 
 
 internal inline fun <T> Try(block: () -> T) = try { block() } catch (e: Exception) { null }
+
+internal fun testing(x: Any?){
+    val y = 4;
+}

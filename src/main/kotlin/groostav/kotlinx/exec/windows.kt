@@ -4,6 +4,7 @@ import com.sun.jna.Platform
 import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.WinNT
+import kotlinx.coroutines.experimental.CoroutineName
 import kotlinx.coroutines.experimental.Unconfined
 import kotlinx.coroutines.experimental.channels.consumeEach
 import kotlinx.coroutines.experimental.launch
@@ -32,7 +33,7 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         if(includeDescendants) command += "/T"
         command += listOf("/PID", "$pid")
 
-        launch(Unconfined) {
+        launch(Unconfined + CoroutineName("process(PID=$pid).killGracefully")) {
             execAsync { this.command = command }.consumeEach { trace { it.formattedMessage } }
         }
 
@@ -46,7 +47,7 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         command += "/F"
         command += listOf("/PID", "$pid")
 
-        launch(Unconfined) {
+        launch(Unconfined + CoroutineName("process(PID=$pid).killForcefully")) {
             execAsync { this.command = command }.consumeEach { trace { it.formattedMessage } }
         }
 

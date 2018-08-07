@@ -29,16 +29,17 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     private val otherSignals = ConflatedBroadcastChannel<Unit>()
     private @Volatile var manualEOF = false
 
-    override val standardErrorChannel = Supported(
-            standardErrorReader.toPolledReceiveChannel(Unconfined, DelayMachine(PollPeriodWindow, otherSignals))
+    override val standardErrorChannel = run {
+        val context = Unconfined + CoroutineName("polling-process.stderr")
+        Supported(standardErrorReader.toPolledReceiveChannel(context, DelayMachine(PollPeriodWindow, otherSignals)))
+    }
+    override val standardOutputChannel = run {
+        val context = Unconfined + CoroutineName("polling-process.stdout")
+        Supported(standardOutputReader.toPolledReceiveChannel(context, DelayMachine(PollPeriodWindow, otherSignals)))
+    }
 
-    )
-    override val standardOutputChannel = Supported(
-            standardOutputReader.toPolledReceiveChannel(Unconfined, DelayMachine(PollPeriodWindow, otherSignals))
-
-    )
     override val exitCodeDeferred = Supported(
-            async(Unconfined) {
+            async(Unconfined + CoroutineName("polling-process.waitFor")) {
                 val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
                 delayMachine.waitForByPollingPeriodically { process.isAlive }
                 val result = process.exitValue()

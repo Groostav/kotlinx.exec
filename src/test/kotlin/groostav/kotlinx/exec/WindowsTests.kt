@@ -13,8 +13,12 @@ import java.util.*
 import org.intellij.lang.annotations.Language
 import java.nio.file.Files
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 
 
+// Wow, so powershell takes 10X longer to start (~1 second) than cmd (~100ms)
+// I suppose thats .netframework startup time, which is supposidly faster than the jvm, but it sure ain't fast.
+// TODO: convert everything here to use .bat, except the things which specifically illustrate powershell features?
 class WindowsTests {
 
     @Ignore("functional")
@@ -221,6 +225,7 @@ class WindowsTests {
     }
 
     @Test fun `when command returns non-zero exit code should throw by default`() = runBlocking<Unit>{
+
         val simpleScript = getLocalResourcePath("SimpleScript.ps1")
 
         val thrown = try {
@@ -229,6 +234,42 @@ class WindowsTests {
                     "-ThrowError",
                     "-ExecutionPolicy", "Bypass"
             )
+            null
+        }
+        //note, a scripts 'thrown error' is simply 'exit code 1' in powershell semantics
+        catch(ex: InvalidExitValueException){ ex }
+
+        assertEquals("""
+            |exec 'powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass'
+            |exited with code 1 (expected '0')
+            |the most recent standard-error output was:
+            |this is an important message!
+            |At $simpleScript:12 char:5
+            |+     throw "this is an important message!"
+            |+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            |    + CategoryInfo          : OperationStopped: (this is an important message!:String) [], RuntimeException
+            |    + FullyQualifiedErrorId : this is an important message!
+            |${" "}
+            |
+        """.trimMargin().lines(), thrown?.message?.lines())
+        assertEquals(
+                //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
+                "groostav.kotlinx.exec.ExecKt.exec(exec.kt:LINE_NUM)",
+                thrown?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
+        )
+    }
+
+    @Test fun `when async command returns non-zero exit code should throw by default`() = runBlocking<Unit>{
+
+        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
+
+        val thrown = try {
+            val running = execAsync("powershell.exe",
+                    "-File", simpleScript,
+                    "-ThrowError",
+                    "-ExecutionPolicy", "Bypass"
+            )
+            running.exitCode.await()
             null
         }
         catch(ex: InvalidExitValueException){ ex }
@@ -246,7 +287,12 @@ class WindowsTests {
             |${" "}
             |
         """.trimMargin().lines(), thrown?.message?.lines())
-//        TODO("this test is a flapper, put a breakpoint on the `lines()` extension function -> this test fails")
+        assertNotNull(thrown?.cause)
+        assertEquals(
+                //assert that cause points to exec.exec() at its top --not into the belly of some coroutine
+                "groostav.kotlinx.exec.ExecKt.execAsync(exec.kt:LINE_NUM)",
+                thrown?.cause?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
+        )
     }
 
     @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
