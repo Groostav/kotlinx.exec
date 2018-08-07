@@ -1,10 +1,8 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.CompletableDeferred
-import kotlinx.coroutines.experimental.asCoroutineDispatcher
+import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.ReceiveChannel
 import kotlinx.coroutines.experimental.channels.produce
-import kotlinx.coroutines.experimental.launch
 import java.io.Reader
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.SynchronousQueue
@@ -20,21 +18,15 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
                 ThreadBlockingListenerProvider(process, pid, config)
     }
 
-    override val standardErrorChannel by lazy {
+    override val standardErrorChannel = run {
         val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)
         Supported(standardErrorReader.toPumpedReceiveChannel(BlockableDispatcher))
     }
-    override val standardOutputChannel by lazy {
+    override val standardOutputChannel = run {
         val standardOutputReader = NamedTracingProcessReader.forStandardOutput(process, pid, config)
         Supported(standardOutputReader.toPumpedReceiveChannel(BlockableDispatcher))
     }
-    override val exitCodeDeferred by lazy {
-        val result = CompletableDeferred<Int>()
-        launch(BlockableDispatcher){
-            try { result.complete(process.waitFor()) } catch (ex: Exception) { result.completeExceptionally(ex) }
-        }
-        Supported(result)
-    }
+    override val exitCodeDeferred = Supported(async(Unconfined) { process.waitFor() })
 
     /**
      * Returns the input stream as an unbufferred channel by blocking a thread provided by context

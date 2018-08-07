@@ -224,26 +224,21 @@ internal class RunningProcessImpl(
     private val killLock = Mutex()
     private var killed: Boolean = false
 
-    private val _exitCode = CompletableDeferred<Int>()
+    private val _exitCode = async(Unconfined) {
+        val result = processListenerProvider.exitCodeDeferred.value.await()
 
-    init {
-        launch(Unconfined) {
+        trace { "$processID exited with $result, closing streams" }
 
-            val result = processListenerProvider.exitCodeDeferred.value.await()
+        _standardOutputSource.join()
+        _standardErrorSource.join()
 
-            trace { "$processID exited with $result, closing streams" }
-
-            _standardOutputSource.join()
-            _standardErrorSource.join()
-
-            when {
-                killed -> _exitCode.cancel()
-                result in config.expectedOutputCodes -> _exitCode.complete(result)
-                else -> {
-                    val errorLines = errorHistory.await().toList()
-                    val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
-                    _exitCode.completeExceptionally(exception)
-                }
+        when {
+            killed -> throw CancellationException()
+            result in config.expectedOutputCodes -> result
+            else -> {
+                val errorLines = errorHistory.await().toList()
+                val exception = makeExitCodeException(config.command, result, config.expectedOutputCodes, errorLines)
+                throw exception
             }
         }
     }
@@ -372,7 +367,7 @@ internal class RunningProcessImpl(
             val errorLines = _standardErrorLines.openSubscription()
             val outputLines = _standardOutputLines.openSubscription()
 
-            val actual = produce<ProcessEvent> {
+            val actual = produce<ProcessEvent>(Unconfined) {
                 try {
                     loop@ while (isActive) {
                         val next = select<ProcessEvent?> {
