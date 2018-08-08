@@ -1,6 +1,15 @@
+buildscript {
+    ext.kotlin_version = '1.2.31'
 
-group 'groostav'
-version '0.3'
+    repositories {
+        mavenCentral()
+        jcenter()
+    }
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath 'com.jfrog.bintray.gradle:gradle-bintray-plugin:1.+'
+    }
+}
 
 apply plugin: 'java'
 apply plugin: 'kotlin'
@@ -40,22 +49,6 @@ kotlin {
         coroutines "enable"
     }
 }
-
-//atomicFU {
-//    inputFiles = sourceSets.main.output.classesDirs
-//    outputDir = file("$buildDir/classes-post-atomicfu/main")
-//    classPath = sourceSets.main.runtimeClasspath
-//    variant = "BOTH" // default="FU", "VH"=Java 9 VarHandle, "BOTH" to produce multi-version code
-//}
-//
-//atomicFU.dependsOn compileKotlin
-//testClasses.dependsOn atomicFU
-//jar.dependsOn atomicFU
-//
-//jar {
-//    mainSpec.sourcePaths.clear() // hack to clear existing paths
-//    from files(atomicFU.outputDir, sourceSets.main.output.resourcesDir)
-//}
 
 task sourcesJar(type: Jar, dependsOn: classes) {
     classifier = 'sources'
