@@ -1,3 +1,3 @@
 rootProject.name = 'kotlinx-exec'
 
-include 'core'
+include 'core', 'jdk8'
