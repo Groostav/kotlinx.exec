@@ -73,7 +73,7 @@ internal class WindowsReflectiveNativePIDGen(private val process: Process): Proc
         }
     }
 
-    private val field = Process::class.java.getDeclaredField("handle").apply { isAccessible = true }
+    private val field = process::class.java.getDeclaredField("handle").apply { isAccessible = true }
 
     override val pid: Supported<Int> by lazy {
 
