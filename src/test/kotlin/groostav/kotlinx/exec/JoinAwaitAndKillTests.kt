@@ -49,7 +49,7 @@ class JoinAwaitAndKillTests {
 
         //assert
         val actual = result.await()
-        assertEquals(listOf(StandardOutput("Hello!")), actual)
+        assertEquals(listOf(StandardOutput("Hello!"), ExitCode(1)), actual)
         assertThrows<CancellationException> { runningProcess.exitCode.await() }
     }
 
