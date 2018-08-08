@@ -7,13 +7,10 @@ import org.junit.Ignore
 import org.junit.Test
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
-import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
+import kotlin.test.*
 
 
-class CoroutineTests {
+class KotlinTests {
 
     @Ignore("unbelievable, select {} does simply abandon you!")
     @Test fun `using an empty select clause doenst just abandon you`() = runBlocking {
@@ -239,5 +236,19 @@ class CoroutineTests {
 
         assertTrue(result.await())
         assertTrue(evaluatedRight)
+    }
+
+    @Test fun `when using simple integer progression as set should get reasonable responses`(){
+        val oneToSevenStepTwoSet = (1 .. 7 step 2).asSet()
+
+        assertTrue(1 in oneToSevenStepTwoSet)
+        assertTrue(3 in oneToSevenStepTwoSet)
+        assertTrue(5 in oneToSevenStepTwoSet)
+        assertTrue(7 in oneToSevenStepTwoSet)
+        assertTrue(oneToSevenStepTwoSet.all { it in oneToSevenStepTwoSet })
+        assertFalse(0 in oneToSevenStepTwoSet)
+        assertFalse(2 in oneToSevenStepTwoSet)
+        assertFalse(6 in oneToSevenStepTwoSet)
+        assertFalse(8 in oneToSevenStepTwoSet)
     }
 }

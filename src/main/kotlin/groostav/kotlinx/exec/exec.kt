@@ -3,6 +3,8 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.experimental.channels.*
 import java.lang.ProcessBuilder as JProcBuilder
 
+data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
+
 internal fun execAsync(config: ProcessBuilder, origin: Exception = Exception()): RunningProcess {
 
     val jvmProcessBuilder = JProcBuilder(config.command).apply {
@@ -36,7 +38,7 @@ fun execAsync(commandFirst: String, vararg commandRest: String): RunningProcess 
     command = listOf(commandFirst) + commandRest.toList()
 }
 
-suspend fun exec(config: ProcessBuilder.() -> Unit): Pair<List<String>, Int> {
+suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult {
 
     val configActual = processBuilder {
         standardErrorBufferCharCount = 0
@@ -54,10 +56,10 @@ suspend fun exec(config: ProcessBuilder.() -> Unit): Pair<List<String>, Int> {
             .filter { it !is ExitCode }
             .map { it.formattedMessage }
 
-    return output.toList() to runningProcess.exitCode.getCompleted()
+    return ProcessResult(output.toList(), runningProcess.exitCode.getCompleted())
 }
 
-suspend fun exec(commandFirst: String, vararg commandRest: String): Pair<List<String>, Int>
+suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResult
         = exec { command = listOf(commandFirst) + commandRest }
 
 suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
@@ -72,7 +74,7 @@ suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
     }
     return execAsync(configActual).exitCode.await()
 }
-suspend fun execVoid(commandFirst: String, vararg commandRest: String) = execVoid {
+suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = execVoid {
     command = listOf(commandFirst) + commandRest.toList()
 }
 

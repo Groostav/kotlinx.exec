@@ -4,9 +4,8 @@ import Catch
 import assertThrows
 import completableScriptCommand
 import emptyScriptCommand
-import exitCodeOneCommand
+import errorAndExitCodeOneCommand
 import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.channels.toList
 import org.junit.Test
 import promptScriptCommand
@@ -93,10 +92,10 @@ class JoinAwaitAndKillTests {
 //        assertTrue(runningProcess.isClosedForReceive)
     }
 
-    @Test fun `when running process with unexpected exit code should exit appropriately`() = runBlocking {
+    @Test fun `when async running process with unexpected exit code should exit appropriately`() = runBlocking {
         //setup
         val runningProcess = execAsync {
-            command = exitCodeOneCommand()
+            command = errorAndExitCodeOneCommand()
         }
 
         //act
@@ -114,8 +113,20 @@ class JoinAwaitAndKillTests {
         assertEquals(aggregateChannelList.last(), ExitCode(1))
         assertTrue("Script is exiting with code 1" in errorChannel.joinToString(""))
         assertEquals(listOf(), stdoutChannel)
+    }
 
+    @Test fun `when synchronously running process with unexpected exit code should exit appropriately`() = runBlocking {
+        //setup & act
+        val invalidExitValue = Catch<InvalidExitValueException> {
+            exec {
+                command = errorAndExitCodeOneCommand()
+            }
+        }
 
+        //assert
+        assertNotNull(invalidExitValue)
+        assertEquals(errorAndExitCodeOneCommand(), invalidExitValue!!.command)
+        assertEquals(1, invalidExitValue.exitValue)
     }
 }
 

@@ -32,7 +32,7 @@ fun promptScriptCommand() = listOf(
         "-File", getLocalResourcePath("PromptScript.ps1"),
         "-ExecutionPolicy", "Bypass"
 )
-fun exitCodeOneCommand() = listOf(
+fun errorAndExitCodeOneCommand() = listOf(
         "powershell.exe",
         "-File", getLocalResourcePath("ExitCodeOne.ps1"),
         "-ExecutionPolicy", "Bypass"

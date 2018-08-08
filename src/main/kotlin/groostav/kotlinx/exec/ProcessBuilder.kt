@@ -96,8 +96,10 @@ data class ProcessBuilder internal constructor(
          * 3. If a process exists with a code that is not in this list
          *    and the list is not empty, an [InvalidExitValueException]
          *    is thrown when awaiting [RunningProcess.exitCode].
+         *
+         *
          */
-        var expectedOutputCodes: Set<Int> = setOf(0),
+        var expectedOutputCodes: Set<Int> = setOf(0), //see also
 
         /**
          * Number of lines to be kept for generation of the exception on a bad exit code.
@@ -114,6 +116,8 @@ data class ProcessBuilder internal constructor(
         //used to point at caller of exec() through suspension context
         internal var source: ExecEntryPoint? = null
 )
+
+val ANY_EXIT_CODE = (0..Int.MAX_VALUE).asSet()
 
 internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
 
@@ -147,3 +151,4 @@ internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): P
 interface ExecEntryPoint
 class AsynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint
 class SynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint
+

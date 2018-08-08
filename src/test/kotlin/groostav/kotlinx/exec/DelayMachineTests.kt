@@ -15,9 +15,9 @@ class DelayMachineTests{
         // 'accidental' parallelism.
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
 
-        val one = CoroutineTests.DelayMachine(broadcastChannel)
-        val two = CoroutineTests.DelayMachine(broadcastChannel)
-        val three = CoroutineTests.DelayMachine(broadcastChannel)
+        val one = KotlinTests.DelayMachine(broadcastChannel)
+        val two = KotlinTests.DelayMachine(broadcastChannel)
+        val three = KotlinTests.DelayMachine(broadcastChannel)
 
         val state = mutableListOf(10, 9, 8)
 

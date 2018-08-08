@@ -1,16 +1,9 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.asCoroutineDispatcher
-import kotlinx.coroutines.experimental.launch
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.Reader
 import java.nio.CharBuffer
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.SynchronousQueue
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import kotlin.coroutines.experimental.CoroutineContext
 
 internal val TRACE = true
 
@@ -128,4 +121,25 @@ internal inline fun <T> Try(block: () -> T) = try { block() } catch (e: Exceptio
 
 internal fun testing(x: Any?){
     val y = 4;
+}
+
+
+internal fun IntProgression.asSet(): Set<Int> = IntProgressionSet(this)
+data class IntProgressionSet(val src: IntProgression): Set<Int> {
+
+    init {
+        require(src.first <= src.last)
+        require(src.step >= 1)
+    }
+
+    override val size: Int = (src.last - src.first + 1) / src.step
+
+    override operator fun contains(element: Int): Boolean {
+        if(element < src.first || element > src.last) return false
+
+        return (element - src.first) % src.step == 0
+    }
+    override fun containsAll(elements: Collection<Int>) = elements.all { it in this }
+    override fun isEmpty(): Boolean = src.isEmpty()
+    override fun iterator(): Iterator<Int> = src.iterator()
 }
