@@ -8,7 +8,15 @@ data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: In
 internal fun execAsync(config: ProcessBuilder, origin: Exception = Exception()): RunningProcess {
 
     val jvmProcessBuilder = JProcBuilder(config.command).apply {
-        environment().apply { clear(); putAll(config.environment) }
+
+        environment().apply {
+            if(this !== config.environment) {
+                clear();
+                putAll(config.environment)
+            }
+        }
+
+        directory(config.workingDirectory.toFile())
     }
 
     val runningProcessFactory = RunningProcessFactory()

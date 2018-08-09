@@ -12,6 +12,8 @@ import java.util.concurrent.atomic.AtomicReference
 // in this way we pass on any problems back up to source!
 class SimpleInlineMulticaster<T>(val name: String) {
 
+    constructor(): this("anonymous-caster")
+
     sealed class State<T> {
         data class Registration<T>(val subs: List<RendezvousChannel<T>> = emptyList()): State<T>()
         data class Running<T>(val subs: List<RendezvousChannel<T>> = emptyList()): State<T>()
@@ -27,7 +29,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
         trace { "instanced $this" }
     }
 
-    fun start(source: ReceiveChannel<T>) {
+    fun syndicateAsync(source: ReceiveChannel<T>): Job {
 
         val newState = state.updateAndGet {
             when(it){
@@ -37,26 +39,26 @@ class SimpleInlineMulticaster<T>(val name: String) {
             }
         }
 
-        if(newState is State.Running){
+        if (newState !is State.Running) {
+            throw IllegalStateException("can only start syndicating once")
+        }
 
-            this.source = source
-            trace { "publishing src=$source to $this, locked-in subs: ${newState.subs.joinToString()}" }
+        this.source = source
+        trace { "publishing src=$source to $this, locked-in subs: ${newState.subs.joinToString()}" }
 
-            launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
-                try {
-                    source.consumeEach { next ->
-                        for (sub in newState.subs) {
-                            sub.send(next)
-                            // apply back-pressure from _all_ subs,
-                            // suspending the upstream until all children are satisfied.
-                        }
+        return launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
+            try {
+                source.consumeEach { next ->
+                    for (sub in newState.subs) {
+                        sub.send(next)
+                        // apply back-pressure from _all_ subs,
+                        // suspending the upstream until all children are satisfied.
                     }
                 }
-                finally {
-                    shutdown()
-                }
             }
-
+            finally {
+                shutdown()
+            }
         }
     }
 
@@ -71,10 +73,8 @@ class SimpleInlineMulticaster<T>(val name: String) {
 
         if(previous is State.Running){
             trace { "${this@SimpleInlineMulticaster} saw EOF, closing subs" }
+            for (it in previous.subs) { it.close() }
             sourceJob.complete(Unit)
-            for (it in previous.subs) {
-                it.close()
-            }
             trace { "all subs of ${this@SimpleInlineMulticaster} closed" }
         }
     }

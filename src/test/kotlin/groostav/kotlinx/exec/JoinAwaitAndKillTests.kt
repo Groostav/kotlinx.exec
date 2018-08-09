@@ -49,7 +49,7 @@ class JoinAwaitAndKillTests {
 
         //assert
         val actual = result.await()
-        assertEquals(listOf(StandardOutput("Hello!"), ExitCode(1)), actual)
+        assertEquals(listOf(StandardOutputMessage("Hello!"), ExitCode(1)), actual)
         assertThrows<CancellationException> { runningProcess.exitCode.await() }
     }
 
@@ -109,7 +109,7 @@ class JoinAwaitAndKillTests {
         assertEquals(Unit, joinResult)
         assertNotNull(exitCodeResult)
         assertTrue(exitCodeResult is InvalidExitValueException)
-        assertEquals(aggregateChannelList.map { it::class.simpleName }.first(), StandardError::class.simpleName)
+        assertEquals(aggregateChannelList.map { it::class.simpleName }.first(), StandardErrorMessage::class.simpleName)
         assertEquals(aggregateChannelList.last(), ExitCode(1))
         assertTrue("Script is exiting with code 1" in errorChannel.joinToString(""))
         assertEquals(listOf(), stdoutChannel)

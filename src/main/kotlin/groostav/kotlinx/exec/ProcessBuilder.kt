@@ -1,6 +1,8 @@
 package groostav.kotlinx.exec
 
 import java.nio.charset.Charset
+import java.nio.file.Path
+import java.nio.file.Paths
 
 data class ProcessBuilder internal constructor(
 
@@ -8,10 +10,16 @@ data class ProcessBuilder internal constructor(
          * The command to execute.
          */
         var command: List<String> = emptyList(),
+
         /**
          * Environment parameters to be applied for the child process
          */
         var environment: Map<String, String> = System.getenv(),
+
+        /**
+         * The working directory under which the child process will be run.
+         */
+        var workingDirectory: Path = Paths.get(".").toAbsolutePath(),
 
         /**
          * line delimiters used for parsing lines out of standard-error and standard-out

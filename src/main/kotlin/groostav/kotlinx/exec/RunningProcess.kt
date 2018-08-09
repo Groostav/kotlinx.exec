@@ -121,10 +121,10 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 sealed class ProcessEvent {
     abstract val formattedMessage: String
 }
-data class StandardOutput(val line: String): ProcessEvent() {
+data class StandardOutputMessage(val precedingDelimeter: String, val line: String): ProcessEvent() {
     override val formattedMessage get() = line
 }
-data class StandardError(val line: String): ProcessEvent() {
+data class StandardErrorMessage(val precedingDelimeter: String, val line: String): ProcessEvent() {
     override val formattedMessage get() = "ERROR: $line"
 }
 data class ExitCode(val code: Int): ProcessEvent() {
@@ -159,10 +159,10 @@ internal class RunningProcessFactory {
                 _standardErrorLines
         )
 
-        _standardOutputLines.start(_standardOutputSource.openSubscription().lines(config.delimiters))
-        _standardErrorLines.start(_standardErrorSource.openSubscription().lines(config.delimiters))
-        _standardOutputSource.start(processListenerProvider.standardOutputChannel.value)
-        _standardErrorSource.start(processListenerProvider.standardErrorChannel.value)
+        _standardOutputLines.syndicateAsync(_standardOutputSource.openSubscription().lines(config.delimiters))
+        _standardErrorLines.syndicateAsync(_standardErrorSource.openSubscription().lines(config.delimiters))
+        _standardOutputSource.syndicateAsync(processListenerProvider.standardOutputChannel.value)
+        _standardErrorSource.syndicateAsync(processListenerProvider.standardErrorChannel.value)
 
         return result
     }
@@ -381,11 +381,11 @@ internal class RunningProcessImpl(
                         val next = select<ProcessEvent?> {
                             if (!stderrWasNull) errorLines.onReceiveOrNull { errorMessage ->
                                 if(errorMessage == null){ stderrWasNull = true }
-                                errorMessage?.let { StandardError(it) }
+                                errorMessage?.let { StandardErrorMessage(it) }
                             }
                             if (!stdoutWasNull) outputLines.onReceiveOrNull { outputMessage ->
                                 if(outputMessage == null){ stdoutWasNull = true }
-                                outputMessage?.let { StandardOutput(it) }
+                                outputMessage?.let { StandardOutputMessage(it) }
                             }
                             _exitCode.onAwait { ExitCode(it) }
                         }
