@@ -10,7 +10,7 @@ internal interface ProcessIDGenerator {
      * The OS-relevant process ID integer.
      */
     //TODO whats the expected behaviour if the process exited?
-    val pid: Maybe<Int> get() = Unsupported
+    val pid: Maybe<Int>
 
     interface Factory {
         fun create(process: Process): Maybe<ProcessIDGenerator>

@@ -72,6 +72,9 @@ class JoinAwaitAndKillTests {
         //assert
         assertEquals(listOf("exitCodeJoin", "aggregateChannelJoin", "procJoin"), results)
         TODO("this is a flapper, and we're going to need heavier-handed solutions to actually get a certain shutdown order.")
+        // while I'm pretty sure the zipper is functioning correctly,
+        // you have no gaurentee that a resume() call actually propagates forward in the order you want it to.
+        // I'm not sure how we can get to deterministic shutdown... or if its even worth getting to...
     }
 
     @Test fun `when calling join twice shouldnt deadlock`() = runBlocking {
@@ -133,7 +136,7 @@ class JoinAwaitAndKillTests {
     @Test fun `when synchronous exec sees bad exit code should throw good exception`() = runBlocking {
 
         val thrown = try {
-            exec {
+            execVoid {
                 command = errorAndExitCodeOneCommand()
                 expectedOutputCodes = setOf(0) //make default explicity for clarity --exit code 1 => exception
             }
@@ -143,7 +146,7 @@ class JoinAwaitAndKillTests {
 
         assertEquals(
                 //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
-                "groostav.kotlinx.exec.ExecKt.exec(exec.kt:LINE_NUM)",
+                "groostav.kotlinx.exec.ExecKt.execVoid(exec.kt:LINE_NUM)",
                 thrown?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
         )
     }

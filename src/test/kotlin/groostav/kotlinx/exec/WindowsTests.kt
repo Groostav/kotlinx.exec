@@ -288,6 +288,11 @@ class WindowsTests {
         )
     }
 
+    @Test fun `when running standard error chatty script with bad exit code should get the tail of that error output`(){
+        TODO("looking at code-coverage, the push-back feature of the errorHistory is never executed, " +
+                "write a script that produces a lot of error and verify that you're tailing it properly here")
+    }
+
     @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
         val simpleScript = getLocalResourcePath("SimpleScript.ps1")
         val (lines, _) = exec {
