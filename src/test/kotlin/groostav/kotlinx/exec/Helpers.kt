@@ -37,6 +37,9 @@ fun errorAndExitCodeOneCommand() = listOf(
         "-File", getLocalResourcePath("ExitCodeOne.ps1"),
         "-ExecutionPolicy", "Bypass"
 )
+fun printWorkingDirectoryCommand() = listOf(
+        "cmd.exe", "/C", "cd"
+)
 
 
 

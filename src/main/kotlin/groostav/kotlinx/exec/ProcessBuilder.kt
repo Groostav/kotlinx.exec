@@ -105,7 +105,7 @@ data class ProcessBuilder internal constructor(
          *    and the list is not empty, an [InvalidExitValueException]
          *    is thrown when awaiting [RunningProcess.exitCode].
          *
-         *
+         * see [ANY_EXIT_CODE] for allowing the process to return normally regardless of exit code
          */
         var expectedOutputCodes: Set<Int> = setOf(0), //see also
 
@@ -125,7 +125,10 @@ data class ProcessBuilder internal constructor(
         internal var source: ExecEntryPoint? = null
 )
 
-val ANY_EXIT_CODE = (0..Int.MAX_VALUE).asSet()
+/**
+ * Indicates that a process can return with any exit code.
+ */
+val ANY_EXIT_CODE: Set<Int> = (0..Int.MAX_VALUE).asSet()
 
 internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
 

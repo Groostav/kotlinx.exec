@@ -53,7 +53,7 @@ class JoinAwaitAndKillTests {
         assertThrows<CancellationException> { runningProcess.exitCode.await() }
     }
 
-    @Test fun `when exiting normally should perform orderly shutdown`() = runBlocking {
+    @Test fun `when exiting normally should perform orderly shutdown`(): Unit = runBlocking {
         //setup
         val process = execAsync { command = completableScriptCommand() }
 
@@ -71,6 +71,7 @@ class JoinAwaitAndKillTests {
 
         //assert
         assertEquals(listOf("exitCodeJoin", "aggregateChannelJoin", "procJoin"), results)
+        TODO("this is a flapper, and we're going to need heavier-handed solutions to actually get a certain shutdown order.")
     }
 
     @Test fun `when calling join twice shouldnt deadlock`() = runBlocking {
@@ -127,6 +128,46 @@ class JoinAwaitAndKillTests {
         assertNotNull(invalidExitValue)
         assertEquals(errorAndExitCodeOneCommand(), invalidExitValue!!.command)
         assertEquals(1, invalidExitValue.exitValue)
+    }
+
+    @Test fun `when synchronous exec sees bad exit code should throw good exception`() = runBlocking {
+
+        val thrown = try {
+            exec {
+                command = errorAndExitCodeOneCommand()
+                expectedOutputCodes = setOf(0) //make default explicity for clarity --exit code 1 => exception
+            }
+            null
+        }
+        catch(ex: InvalidExitValueException){ ex }
+
+        assertEquals(
+                //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
+                "groostav.kotlinx.exec.ExecKt.exec(exec.kt:LINE_NUM)",
+                thrown?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
+        )
+    }
+
+    @Test fun `when asynchronous exec sees bad exit code should throw ugly exception with good cause`() = runBlocking {
+
+        val thrown = try {
+            execAsync {
+                command = errorAndExitCodeOneCommand()
+                expectedOutputCodes = setOf(0) //make default explicity for clarity --exit code 1 => exception
+            }.exitCode.await()
+            null
+        }
+        catch (ex: InvalidExitValueException) { ex }
+        assertTrue(
+                //assert that this stack exists, but it points somewhere inside a coroutine,
+                (thrown?.stackTrace?.get(0)?.toString() ?: "").startsWith("groostav.kotlinx.exec")
+        )
+        assertNotNull(thrown?.cause)
+        assertEquals(
+                //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
+                "groostav.kotlinx.exec.ExecKt.execAsync(exec.kt:LINE_NUM)",
+                thrown?.cause?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
+        )
     }
 }
 

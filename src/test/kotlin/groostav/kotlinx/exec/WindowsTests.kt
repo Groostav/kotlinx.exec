@@ -250,11 +250,6 @@ class WindowsTests {
             |${" "}
             |
         """.trimMargin().lines(), thrown?.message?.lines())
-        assertEquals(
-                //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
-                "groostav.kotlinx.exec.ExecKt.exec(exec.kt:LINE_NUM)",
-                thrown?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
-        )
     }
 
     @Test fun `when async command returns non-zero exit code should throw by default`() = runBlocking<Unit>{

@@ -1,13 +1,23 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.experimental.runBlocking
 import org.junit.Test
+import printWorkingDirectoryCommand
+import java.nio.file.Paths
+import kotlin.test.assertEquals
 
 class ConfigurationTests {
 
-    @Test fun todo(): Unit = TODO("""
-         working directory:
-         create a general script 'pwd' or 'cwd' hat just echos the dir,
-         run it from here, assert that the stdout contains the value set here
-        """.trimIndent())
+    @Test fun `when setting working directory resulting subprocess should see that directory`() = runBlocking {
+        val (result, code) = exec {
+            command = printWorkingDirectoryCommand()
+
+            workingDirectory = Paths.get(System.getProperty("java.io.tmpdir"))
+        }
+
+        val expected = listOf(Paths.get(System.getProperty("java.io.tmpdir")).toString())
+        assertEquals(expected, result)
+    }
+
 
 }

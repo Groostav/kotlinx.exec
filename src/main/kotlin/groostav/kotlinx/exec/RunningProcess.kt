@@ -121,10 +121,10 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 sealed class ProcessEvent {
     abstract val formattedMessage: String
 }
-data class StandardOutputMessage(val precedingDelimeter: String, val line: String): ProcessEvent() {
+data class StandardOutputMessage(val line: String): ProcessEvent() {
     override val formattedMessage get() = line
 }
-data class StandardErrorMessage(val precedingDelimeter: String, val line: String): ProcessEvent() {
+data class StandardErrorMessage(val line: String): ProcessEvent() {
     override val formattedMessage get() = "ERROR: $line"
 }
 data class ExitCode(val code: Int): ProcessEvent() {

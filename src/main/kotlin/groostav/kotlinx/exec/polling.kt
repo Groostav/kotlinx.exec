@@ -41,7 +41,7 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     override val exitCodeDeferred = Supported(
             async(Unconfined + CoroutineName("polling-process.waitFor")) {
                 val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
-                delayMachine.waitForByPollingPeriodically { process.isAlive }
+                delayMachine.waitForByPollingPeriodically { ! process.isAlive }
                 val result = process.exitValue()
                 manualEOF = true
                 delayMachine.signalPollResult()
@@ -61,7 +61,7 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
 
             reading@ while (isActive) {
 
-                delayMachine.waitForByPollingPeriodically { !ready() && !manualEOF }
+                delayMachine.waitForByPollingPeriodically { ready() || manualEOF }
 
                 while (ready() || manualEOF) {
                     val readByteCount = read(chunkBuffer)
@@ -85,7 +85,7 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     }
 }
 
-private class DelayMachine(
+internal class DelayMachine(
         private val delayWindow: IntRange,
         private val otherSignals: ConflatedBroadcastChannel<Unit>,
         private val delayFactor: Float = 1.5f
@@ -97,11 +97,11 @@ private class DelayMachine(
         require(delayFactor > 1.0f)
     }
 
-    private val backoff = AtomicInteger(0)
+    private val backoff = AtomicInteger(delayWindow.first)
     private val otherSignalsSubscription = otherSignals.openSubscription()
 
     suspend fun waitForByPollingPeriodically(condition: () -> Boolean){
-        while(condition()) {
+        while( ! condition()) {
             val backoff = backoff.updateAndGet { updateBackoff(it, delayWindow) }
 
             select<Unit> {
