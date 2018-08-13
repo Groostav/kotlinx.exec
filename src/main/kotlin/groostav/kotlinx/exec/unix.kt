@@ -2,6 +2,7 @@ package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
 import kotlinx.coroutines.experimental.Unconfined
+import kotlinx.coroutines.experimental.channels.consumeEach
 import kotlinx.coroutines.experimental.launch
 
 
@@ -22,7 +23,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
         if(includeDescendants) return Unsupported
 
         launch(Unconfined) {
-            exec { command = listOf("kill", "$pid") }
+            execAsync { command = listOf("kill", "$pid") }.consumeEach { trace { it.formattedMessage } }
         }
 
         return Supported(Unit)
@@ -33,7 +34,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
         if(includeDescendants) return Unsupported
 
         launch(Unconfined) {
-            exec { command = listOf("kill", "-9", "$pid") }
+            execAsync { command = listOf("kill", "-9", "$pid") }.consumeEach { trace { it.formattedMessage } }
         }
 
         return Supported(Unit)
