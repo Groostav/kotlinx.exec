@@ -11,7 +11,7 @@ internal fun execAsync(config: ProcessBuilder, origin: Exception = Exception()):
 
         environment().apply {
             if(this !== config.environment) {
-                clear();
+                clear()
                 putAll(config.environment)
             }
         }
@@ -80,7 +80,10 @@ suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
 
         source = SynchronousExecutionStart(command.toList())
     }
-    return execAsync(configActual).exitCode.await()
+    val runningProcess = execAsync(configActual)
+    val result = runningProcess.exitCode.await()
+
+    return result
 }
 suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = execVoid {
     command = listOf(commandFirst) + commandRest.toList()

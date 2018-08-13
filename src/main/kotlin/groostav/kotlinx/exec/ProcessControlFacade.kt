@@ -33,6 +33,7 @@ internal class CompositProcessControl(val facades: List<ProcessControlFacade>): 
 
     init {
         require(facades.all { it !is CompositProcessControl } ) { "composite of composites: $this" }
+        require(facades.any()) { "composite has no implementations!" }
     }
 
     override fun tryKillGracefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
@@ -47,6 +48,7 @@ internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessC
     val factories = listOf(
             JEP102ProcessFacade,
             WindowsProcessControl,
+            UnixProcessControl,
             ZeroTurnaroundProcessFacade
     )
     val facades = factories.filterSupporting { it.create(jvmRunningProcess, pid) }

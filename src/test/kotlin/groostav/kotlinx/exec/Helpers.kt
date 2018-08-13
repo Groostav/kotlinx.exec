@@ -1,6 +1,10 @@
+import groostav.kotlinx.exec.JavaProcessOS
+import groostav.kotlinx.exec.ProcessOS
 import groostav.kotlinx.exec.WindowsTests
+import groostav.kotlinx.exec.exec
 import java.nio.file.Paths
 import java.util.*
+import kotlin.test.assertFalse
 
 inline fun <T> queueOf(vararg elements: T): Queue<T> {
     val result = LinkedList<T>()
@@ -14,32 +18,34 @@ fun getLocalResourcePath(localName: String): String {
     return resource
 }
 
-
 //TODO make this as platform agnostic as possible, at least support ubuntu/centOS
+private fun `powershell -ExecPolicy Bypass -File`(scriptFileName: String) = listOf(
+        "powershell.exe",
+        "-File", getLocalResourcePath(scriptFileName),
+        "-ExecutionPolicy", "Bypass"
+)
+private fun bash(scriptFileName: String) = listOf("bash", getLocalResourcePath(scriptFileName))
 
-fun emptyScriptCommand() = listOf(
-        "powershell.exe",
-        "-File", getLocalResourcePath("EmptyScript.ps1"),
-        "-ExecutionPolicy", "Bypass"
-)
-fun completableScriptCommand() = listOf(
-        "powershell.exe",
-        "-File", getLocalResourcePath("CompletableScript.ps1"),
-        "-ExecutionPolicy", "Bypass"
-)
-fun promptScriptCommand() = listOf(
-        "powershell.exe",
-        "-File", getLocalResourcePath("PromptScript.ps1"),
-        "-ExecutionPolicy", "Bypass"
-)
-fun errorAndExitCodeOneCommand() = listOf(
-        "powershell.exe",
-        "-File", getLocalResourcePath("ExitCodeOne.ps1"),
-        "-ExecutionPolicy", "Bypass"
-)
-fun printWorkingDirectoryCommand() = listOf(
-        "cmd.exe", "/C", "cd"
-)
+fun emptyScriptCommand() = when(JavaProcessOS) {
+    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("EmptyScript.ps1")
+    ProcessOS.Unix -> bash("EmptyScript.sh")
+}
+fun completableScriptCommand() = when(JavaProcessOS){
+    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("CompletableScript.ps1")
+    ProcessOS.Unix -> bash("CompletableScript.sh")
+}
+fun promptScriptCommand() = when(JavaProcessOS){
+    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("PromptScript.ps1")
+    ProcessOS.Unix -> bash("PromptScript.sh")
+}
+fun errorAndExitCodeOneCommand() = when(JavaProcessOS){
+    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("ExitCodeOne.ps1")
+    ProcessOS.Unix -> bash("ExitCodeOne.sh")
+}
+fun printWorkingDirectoryCommand() = when(JavaProcessOS){
+    ProcessOS.Windows -> listOf("cmd.exe", "/C", "cd")
+    ProcessOS.Unix -> listOf("bash pwd")
+}
 
 
 
@@ -58,3 +64,49 @@ inline fun <reified X: Exception> assertThrows(action: () -> Any?): X? {
 
 internal inline fun <reified X: Exception> Catch(action: () -> Any?): X? =
         try { action(); null } catch(ex: Exception){ if(ex is X) ex else throw ex }
+
+internal suspend fun assertNotListed(deadProcessID: Int){
+
+
+    val runningPIDs: List<Int> = when(JavaProcessOS){
+        ProcessOS.Unix -> {
+            val firstIntOnLineRegex = Regex(
+                    "(?<pid>\\d+)\\s+"+
+                    "(?<terminalName>\\S+)\\s+"+
+                    "(?<time>\\d\\d:\\d\\d:\\d\\d)\\s+"+
+                    "(?<processName>\\S+)"
+            )
+            exec("ps", "-a")
+                    .outputAndErrorLines
+                    .drop(1)
+                    .map { it.trim() }
+                    .map { pidRecord ->
+                        firstIntOnLineRegex.matchEntire(pidRecord)?.groups?.get("pid")?.value?.toInt()
+                                ?: TODO("no PID on `ps` record $pidRecord")
+                    }
+        }
+        ProcessOS.Windows -> {
+            val getProcessLineRegex = Regex(
+                    "(?<handleCount>\\d)+\\s+" +
+                    "(?<nonPagedMemKb>\\d)+\\s+" +
+                    "(?<pagedMemKb>\\d+)\\s+" +
+                    "(?<workingSetKb>\\d+)\\s+" +
+                    "(?<processorTimeSeconds>\\d*,\\d+\\.\\d)?" +
+                    "(?<pid>\\d+)\\s+" +
+                    "(?<somethingImportant>\\d+)\\s+" +
+                    "(?<processName>\\w+)"
+            )
+            exec("powershell.exe", "-Command", "Get-Process")
+                    .outputAndErrorLines
+                    .drop(2)
+                    .map { it.trim() }
+                    .map { pidRecord ->
+                        getProcessLineRegex.matchEntire(pidRecord)?.groups?.get("pid")?.value?.toInt()
+                                ?: TODO("no PID on `GetProcess` record $pidRecord")
+                    }
+        }
+
+    }
+
+    assertFalse(deadProcessID in runningPIDs)
+}

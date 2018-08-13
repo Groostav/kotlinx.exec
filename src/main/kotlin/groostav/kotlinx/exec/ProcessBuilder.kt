@@ -18,8 +18,10 @@ data class ProcessBuilder internal constructor(
 
         /**
          * The working directory under which the child process will be run.
+         *
+         * Defaults to the current working directory of this process.
          */
-        var workingDirectory: Path = Paths.get(".").toAbsolutePath(),
+        var workingDirectory: Path = Paths.get("").toAbsolutePath(),
 
         /**
          * line delimiters used for parsing lines out of standard-error and standard-out

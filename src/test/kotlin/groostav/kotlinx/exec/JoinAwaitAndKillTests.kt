@@ -1,6 +1,7 @@
 package groostav.kotlinx.exec
 
 import Catch
+import assertNotListed
 import assertThrows
 import completableScriptCommand
 import emptyScriptCommand
@@ -21,14 +22,16 @@ class JoinAwaitAndKillTests {
         }
 
         //act
-        withTimeoutOrNull(10) { runningProcess.join() }
+        val completedAfter100ms = withTimeoutOrNull(1000) { runningProcess.join() } != null
         if( ! runningProcess.isClosedForReceive){
             runningProcess.kill()
         }
 
         //assert
+        assertFalse(completedAfter100ms)
         assertTrue(runningProcess.exitCode.isCompleted)
         assertFalse(runningProcess.exitCode.isActive)
+        assertNotListed(runningProcess.processID)
     }
 
     @Test fun `when cancelling a process with another consumer should simply close the resulting channel for that consumer`() = runBlocking<Unit>{
@@ -48,9 +51,12 @@ class JoinAwaitAndKillTests {
         runningProcess.kill()
 
         //assert
-        val actual = result.await()
-        assertEquals(listOf(StandardOutputMessage("Hello!"), ExitCode(1)), actual)
+        val messages = result.await()
+        assertEquals(2, messages.size)
+        assertEquals(StandardOutputMessage("Hello!"), messages.first())
+        assertNotEquals(ExitCode(0), messages.last())
         assertThrows<CancellationException> { runningProcess.exitCode.await() }
+        assertNotListed(runningProcess.processID)
     }
 
     @Test fun `when exiting normally should perform orderly shutdown`(): Unit = runBlocking {
@@ -75,6 +81,7 @@ class JoinAwaitAndKillTests {
         // while I'm pretty sure the zipper is functioning correctly,
         // you have no gaurentee that a resume() call actually propagates forward in the order you want it to.
         // I'm not sure how we can get to deterministic shutdown... or if its even worth getting to...
+        assertNotListed(process.processID)
     }
 
     @Test fun `when calling join twice shouldnt deadlock`() = runBlocking {
@@ -90,6 +97,7 @@ class JoinAwaitAndKillTests {
         //assert
         assertTrue(runningProcess.exitCode.isCompleted)
         assertFalse(runningProcess.exitCode.isActive)
+        assertNotListed(runningProcess.processID)
 
         // TODO: I'd like this, but elizarov's own notes say its not a requirement
         // https://stackoverflow.com/questions/48999564/kotlin-wait-for-channel-isclosedforreceive
@@ -113,10 +121,11 @@ class JoinAwaitAndKillTests {
         assertEquals(Unit, joinResult)
         assertNotNull(exitCodeResult)
         assertTrue(exitCodeResult is InvalidExitValueException)
-        assertEquals(aggregateChannelList.map { it::class.simpleName }.first(), StandardErrorMessage::class.simpleName)
-        assertEquals(aggregateChannelList.last(), ExitCode(1))
+        assertEquals(StandardErrorMessage::class, aggregateChannelList.first()::class)
+        assertEquals(ExitCode(1), aggregateChannelList.last())
         assertTrue("Script is exiting with code 1" in errorChannel.joinToString(""))
         assertEquals(listOf(), stdoutChannel)
+        assertNotListed(runningProcess.processID)
     }
 
     @Test fun `when synchronously running process with unexpected exit code should exit appropriately`() = runBlocking {

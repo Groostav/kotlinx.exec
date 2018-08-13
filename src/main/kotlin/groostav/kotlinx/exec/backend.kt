@@ -16,10 +16,15 @@ internal inline fun trace(message: () -> String){
 enum class ProcessOS { Windows, Unix } //TODO: Solaris?
 
 internal val JavaProcessOS: ProcessOS = run {
+    //this is the strategy from apache commons lang... I hate it, but they seem to think it works.
+    //https://github.com/apache/commons-lang/blob/master/src/main/java/org/apache/commons/lang3/SystemUtils.java
+
+    val name = System.getProperty("os.name").toLowerCase()
+
     when {
         //TODO: I dont want an external dep, but I dont have a process instance here, what do?
-        true -> ProcessOS.Windows
-        false -> ProcessOS.Unix
+        name.startsWith("windows") -> ProcessOS.Windows
+        name.startsWith("linux") || name.endsWith("bsd") -> ProcessOS.Unix //TODO need BSD tests.
         else -> TODO()
     }
 }
