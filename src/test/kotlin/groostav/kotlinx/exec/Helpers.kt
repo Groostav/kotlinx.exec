@@ -67,6 +67,8 @@ internal inline fun <reified X: Exception> Catch(action: () -> Any?): X? =
 
 internal suspend fun assertNotListed(deadProcessID: Int){
 
+    // both powershell and ps have output formatting options,
+    // but I'd rather demo working line-by-line with a regex.
 
     val runningPIDs: List<Int> = when(JavaProcessOS){
         ProcessOS.Unix -> {
@@ -82,7 +84,7 @@ internal suspend fun assertNotListed(deadProcessID: Int){
                     .map { it.trim() }
                     .map { pidRecord ->
                         firstIntOnLineRegex.matchEntire(pidRecord)?.groups?.get("pid")?.value?.toInt()
-                                ?: TODO("no PID on `ps` record $pidRecord")
+                                ?: TODO("no PID on `ps` record '$pidRecord'")
                     }
         }
         ProcessOS.Windows -> {
@@ -91,18 +93,19 @@ internal suspend fun assertNotListed(deadProcessID: Int){
                     "(?<nonPagedMemKb>\\d)+\\s+" +
                     "(?<pagedMemKb>\\d+)\\s+" +
                     "(?<workingSetKb>\\d+)\\s+" +
-                    "(?<processorTimeSeconds>\\d*,\\d+\\.\\d)?" +
+                    "((?<processorTimeSeconds>\\S+)\\s+)?" +
                     "(?<pid>\\d+)\\s+" +
                     "(?<somethingImportant>\\d+)\\s+" +
-                    "(?<processName>\\w+)"
+                    "(?<processName>.*)"
             )
             exec("powershell.exe", "-Command", "Get-Process")
                     .outputAndErrorLines
-                    .drop(2)
+                    .drop(3) //powershell preamble is a blank line, a header line, and an ascii horizontal separator line
                     .map { it.trim() }
+                    .dropLastWhile { it.isBlank() }
                     .map { pidRecord ->
                         getProcessLineRegex.matchEntire(pidRecord)?.groups?.get("pid")?.value?.toInt()
-                                ?: TODO("no PID on `GetProcess` record $pidRecord")
+                                ?: TODO("no PID on `GetProcess` record '$pidRecord'")
                     }
         }
 

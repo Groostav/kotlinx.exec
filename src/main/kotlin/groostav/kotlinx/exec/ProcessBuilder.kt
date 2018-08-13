@@ -53,7 +53,7 @@ data class ProcessBuilder internal constructor(
          * at time of writing. There is, to my knowledge, no strategy to change this buffer short of
          * class-loader or byte-code manipulations.
          */
-        var standardErrorBufferCharCount: Int = 8192,
+        var standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
         /**
          * Amount of raw-character output buffered by [RunningProcess.standardOutput]
@@ -63,7 +63,7 @@ data class ProcessBuilder internal constructor(
          * This buffer is only for the character stream, line-aggregation is done before buffering and is
          * buffered by the aggregate channel as part of the [aggregateOutputBufferLineCount]
          */
-        var standardOutputBufferCharCount: Int = 8192,
+        var standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
         /**
          * Number of lines to buffer in the aggregate channel
@@ -72,7 +72,7 @@ data class ProcessBuilder internal constructor(
          * that will be kept by the running process. In the event that this buffer is filled,
          * the oldest line will be dropped, giving a behaviour similar to posix `tail`.
          */
-        var aggregateOutputBufferLineCount: Int = 200,
+        var aggregateOutputBufferLineCount: Int = 2000,
 
         /**
          * The amount of time to wait before considering a SIG_INT kill command to have failed.

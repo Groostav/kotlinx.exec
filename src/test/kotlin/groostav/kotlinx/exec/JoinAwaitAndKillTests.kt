@@ -181,6 +181,10 @@ class JoinAwaitAndKillTests {
                 thrown?.cause?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
         )
     }
+
+    @Test fun `when killing process tree should properly end all descendants`(){
+        TODO()
+    }
 }
 
 
