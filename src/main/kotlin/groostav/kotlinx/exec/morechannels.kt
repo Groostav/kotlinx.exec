@@ -57,7 +57,6 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
 
     var previousState: State = State.NoMatch
 
-    //TODO: can I make this immutable and fast?
     fun translate(next: Char): State {
 
         // strategy:
@@ -137,7 +136,6 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
     }
 }
 
-//this did not yield any performance improvement over a hash-set :(
 private inline fun BitSet.removeIf(predicate: (Int) -> Boolean){
     var currentSetIndex = 0
     while(true) {

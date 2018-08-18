@@ -43,8 +43,6 @@ import java.util.concurrent.TimeUnit
  */
 interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 
-    //TODO: these should be broadcast channels, but I need dynamic size
-    // and I want it backed by CharArray rather than Array<Characater>
     val standardOutput: ReceiveChannel<Char>
     val standardError: ReceiveChannel<Char>
     val standardInput: SendChannel<Char>
@@ -121,10 +119,10 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
 sealed class ProcessEvent {
     abstract val formattedMessage: String
 }
-data class StandardOutputMessage(val precedingDelimeter: String, val line: String): ProcessEvent() {
+data class StandardOutputMessage(val line: String): ProcessEvent() {
     override val formattedMessage get() = line
 }
-data class StandardErrorMessage(val precedingDelimeter: String, val line: String): ProcessEvent() {
+data class StandardErrorMessage(val line: String): ProcessEvent() {
     override val formattedMessage get() = "ERROR: $line"
 }
 data class ExitCode(val code: Int): ProcessEvent() {
@@ -332,8 +330,6 @@ internal class RunningProcessImpl(
         }
     }
 
-    //TODO: do we need to expose a flush() call?
-    //override fun flush(): Unit = process.outputStream.flush()
     override val isClosedForSend: Boolean get() = inputLines.isClosedForSend
     override val isFull: Boolean get() = inputLines.isFull
     override val onSend: SelectClause2<String, SendChannel<String>> = inputLines.onSend

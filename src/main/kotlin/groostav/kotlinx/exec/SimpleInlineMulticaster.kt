@@ -92,19 +92,16 @@ class SimpleInlineMulticaster<T>(val name: String) {
 
                     State.Registration(it.subs + subscription)
                 }
-                is State.Running -> throw IllegalStateException()
-                is State.Closed -> throw IllegalStateException()
+                is State.Running -> throw IllegalStateException("state = $it")
+                is State.Closed -> throw IllegalStateException("state = $it")
             }
         }
 
-        if(registered is State.Registration<T>){
-            val subscription = registered.subs.last()
-            trace { "opened $subscription from ${this@SimpleInlineMulticaster}" }
-            return subscription
-        }
-        else {
-            return TODO()
-        }
+        registered as? State.Registration<T> ?: throw IllegalStateException("state = $registered")
+
+        val subscription = registered.subs.last()
+        trace { "opened $subscription from ${this@SimpleInlineMulticaster}" }
+        return subscription
     }
 
     // suspends until source is empty and all elements have been dispatched to all subscribers.

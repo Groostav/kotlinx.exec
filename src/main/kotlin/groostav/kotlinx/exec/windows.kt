@@ -9,12 +9,9 @@ import kotlinx.coroutines.experimental.Unconfined
 import kotlinx.coroutines.experimental.channels.consumeEach
 import kotlinx.coroutines.experimental.launch
 
+//note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
+// isnt supported on windows' implementation of ProcessHandle.
 internal class WindowsProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
-
-    init {
-        //normally we warn about java-9 here, but it doesnt support kill gracefully...
-        //TODO how do we reconcile the reflection hack with kill gracefully on java 10+?
-    }
 
     companion object: ProcessControlFacade.Factory {
         override fun create(process: Process, pid: Int) = supportedIf(Platform.isWindows()) { WindowsProcessControl(process, pid) }
