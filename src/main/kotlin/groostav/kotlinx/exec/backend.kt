@@ -22,7 +22,6 @@ internal val JavaProcessOS: ProcessOS = run {
     val name = System.getProperty("os.name").toLowerCase()
 
     when {
-        //TODO: I dont want an external dep, but I dont have a process instance here, what do?
         name.startsWith("windows") -> ProcessOS.Windows
         name.startsWith("linux") || name.endsWith("bsd") -> ProcessOS.Unix //TODO need BSD tests.
         else -> TODO()
