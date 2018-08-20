@@ -1,11 +1,12 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.experimental.channels.*
+import java.io.IOException
 import java.lang.ProcessBuilder as JProcBuilder
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
 
-internal fun execAsync(config: ProcessBuilder, origin: Exception = Exception()): RunningProcess {
+internal fun execAsync(config: ProcessBuilder): RunningProcess {
 
     val jvmProcessBuilder = JProcBuilder(config.command).apply {
 
@@ -23,7 +24,8 @@ internal fun execAsync(config: ProcessBuilder, origin: Exception = Exception()):
 
     val listenerProviderFactory = makeListenerProviderFactory()
 
-    val jvmRunningProcess = jvmProcessBuilder.start()
+    val jvmRunningProcess = try { jvmProcessBuilder.start() }
+            catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message!!, config, ex.takeIf { TRACE }) }
 
     val pidProvider = makePIDGenerator(jvmRunningProcess)
     val processID = pidProvider.pid.value
@@ -138,3 +140,6 @@ internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recent
 
     return result
 }
+
+class InvalidExecConfigurationException(message: String, val configuration: ProcessBuilder, cause: Exception? = null)
+    : RuntimeException(message, cause)

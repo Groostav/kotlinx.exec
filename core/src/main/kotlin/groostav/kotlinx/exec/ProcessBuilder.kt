@@ -14,7 +14,7 @@ data class ProcessBuilder internal constructor(
         /**
          * Environment parameters to be applied for the child process
          */
-        var environment: Map<String, String> = System.getenv(),
+        var environment: Map<String, String> = InheritedDefaultEnvironment,
 
         /**
          * The working directory under which the child process will be run.
@@ -125,12 +125,34 @@ data class ProcessBuilder internal constructor(
 
         //used to point at caller of exec() through suspension context
         internal var source: ExecEntryPoint? = null
-)
+) {
+
+    override fun toString(): String = "ProcessBuilder(" +
+            "command=$command, " +
+            "workingDirectory=$workingDirectory, " +
+            "delimiters=${delimiters.toString().encodeLineChars()}, " +
+            "inputFlushMarker=${inputFlushMarker.toString().encodeLineChars()}, " +
+            "encoding=$encoding, " +
+            "standardErrorBufferCharCount=$standardErrorBufferCharCount, " +
+            "standardOutputBufferCharCount=$standardOutputBufferCharCount, " +
+            "aggregateOutputBufferLineCount=$aggregateOutputBufferLineCount, " +
+            "gracefulTimeousMillis=$gracefulTimeousMillis, " +
+            "includeDescendantsInKill=$includeDescendantsInKill, " +
+            "expectedOutputCodes=$expectedOutputCodes, " +
+            "linesForExceptionError=$linesForExceptionError" +
+            ")"
+}
 
 /**
  * Indicates that a process can return with any exit code.
  */
 val ANY_EXIT_CODE: Set<Int> = (0..Int.MAX_VALUE).asSet()
+
+object InheritedDefaultEnvironment: Map<String, String> by System.getenv()
+
+private fun String.encodeLineChars() = this
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
 
 internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
 
@@ -141,13 +163,13 @@ internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): P
             command = initialCommandList,
             delimiters = initial.delimiters.toList(),
             expectedOutputCodes = initial.expectedOutputCodes.toSet(),
-            environment = if(initial.environment === System.getenv()) initial.environment else initial.environment.toMap()
+            environment = if(initial.environment === InheritedDefaultEnvironment) initial.environment else initial.environment.toMap()
 
             //dont deep-copy source, since its internal
     )
 
-    result.apply {
-        require(initialCommandList.any()) { "cannot exec empty command: $this" }
+    result.run {
+        require(initialCommandList.any()) { "cannot exec empty command" }
         require(initialCommandList.all { '\u0000' !in it }) { "cannot exec command with null character: $this"}
         require(standardErrorBufferCharCount >= 0) { "cannot exec with output buffer size less than zero: $this"}
         require(delimiters.all { it.any()}) { "cannot parse output lines with empty delimeter: $this" }
@@ -165,3 +187,8 @@ interface ExecEntryPoint
 class AsynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint
 class SynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint
 
+private inline fun ProcessBuilder.require(requirement: Boolean, message: () -> String) {
+    if( ! requirement){
+        throw InvalidExecConfigurationException(message(), this)
+    }
+}
