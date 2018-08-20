@@ -4,6 +4,7 @@ import groostav.kotlinx.exec.WindowsTests
 import groostav.kotlinx.exec.exec
 import java.nio.file.Paths
 import java.util.*
+import java.util.regex.Pattern
 import kotlin.test.assertFalse
 
 inline fun <T> queueOf(vararg elements: T): Queue<T> {

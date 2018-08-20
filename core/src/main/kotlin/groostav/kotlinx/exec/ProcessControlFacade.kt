@@ -42,6 +42,8 @@ internal class CompositProcessControl(val facades: List<ProcessControlFacade>): 
     override fun killForcefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
         it.killForcefullyAsync(includeDescendants)
     })
+
+    override fun toString() = "CompositProcessControl[${facades.joinToString()}]"
 }
 
 internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessControlFacade {

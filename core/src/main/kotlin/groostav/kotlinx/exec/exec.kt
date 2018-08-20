@@ -28,10 +28,13 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
             catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message!!, config, ex.takeIf { TRACE }) }
 
     val pidProvider = makePIDGenerator(jvmRunningProcess)
+    trace { "selected pidProvider=$pidProvider" }
     val processID = pidProvider.pid.value
 
     val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
+    trace { "selected facade=$processControllerFacade" }
     val listenerProvider = listenerProviderFactory.create(jvmRunningProcess, processID, config)
+    trace { "selected listenerProvider=$listenerProvider" }
 
     return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
 }
