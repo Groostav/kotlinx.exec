@@ -46,6 +46,10 @@ fun printWorkingDirectoryCommand() = when(JavaProcessOS){
     ProcessOS.Windows -> listOf("cmd.exe", "/C", "cd")
     ProcessOS.Unix -> listOf("bash pwd")
 }
+fun forkerCommand() = when(JavaProcessOS){
+    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("forker/forker-compose-up.ps1")
+    else -> TODO()
+}
 
 
 

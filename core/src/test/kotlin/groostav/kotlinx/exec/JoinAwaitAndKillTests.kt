@@ -6,7 +6,11 @@ import assertThrows
 import completableScriptCommand
 import emptyScriptCommand
 import errorAndExitCodeOneCommand
+import forkerCommand
 import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.experimental.channels.filter
+import kotlinx.coroutines.experimental.channels.map
+import kotlinx.coroutines.experimental.channels.take
 import kotlinx.coroutines.experimental.channels.toList
 import org.junit.Test
 import promptScriptCommand
@@ -182,9 +186,30 @@ class JoinAwaitAndKillTests {
         )
     }
 
-    @Test fun `when killing process tree should properly end all descendants`(){
-        TODO()
+    @Test fun `when killing process tree should properly end all descendants`() = runBlocking {
+
+        //setup
+        val pidRegex = Regex("PID=(?<pid>\\d+)")
+
+        val runningProcess = execAsync {
+            command = forkerCommand()
+            includeDescendantsInKill = true
+        }
+
+        val pids = runningProcess
+                .map { it.also { trace { it.formattedMessage }}}
+                .filter { pidRegex.containsMatchIn(it.formattedMessage) }
+                .map { pidRegex.find(it.formattedMessage)?.groups?.get("pid")?.value?.toInt() ?: TODO() }
+                .take(3)
+                .toList()
+
+        //act
+        runningProcess.kill()
+
+        //assert
+        pids.forEach { assertNotListed(it) }
     }
+
 }
 
 

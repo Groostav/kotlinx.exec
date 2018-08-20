@@ -1,6 +1,6 @@
 $prefix = "nginx-proxy  |"
 
-Write-Output "$prefix starting"
+Write-Output "$prefix starting worker-2 with PID=$PID"
 
 Try
 {

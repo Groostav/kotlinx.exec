@@ -1,6 +1,6 @@
 $prefix = "worker1      |"
 
-Write-Output "$prefix starting"
+Write-Output "$prefix worker-1 with PID=$PID"
 
 Try
 {

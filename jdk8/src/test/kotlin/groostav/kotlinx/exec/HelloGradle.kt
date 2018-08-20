@@ -9,7 +9,7 @@ class HelloGradle {
 
     @Test fun `another`() = runBlocking {
         val (a, r) = exec {
-
+            command = listOf("cmd.exe", "/C", "echo", "testing")
         }
     }
 }

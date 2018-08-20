@@ -6,13 +6,14 @@ import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.selects.select
 import org.amshove.kluent.*
+import org.junit.Assert.assertTrue
 import org.junit.Ignore
 import org.junit.Test
 import queueOf
 import java.util.*
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
-
 
 // Wow, so powershell takes 10X longer to start (~1 second) than cmd (~100ms)
 // I suppose thats .netframework startup time, which is supposidly faster than the jvm, but it sure ain't fast.
@@ -287,9 +288,28 @@ class WindowsTests {
         )
     }
 
-    @Test fun `when running standard error chatty script with bad exit code should get the tail of that error output`(){
-        TODO("looking at code-coverage, the push-back feature of the errorHistory is never executed, " +
-                "write a script that produces a lot of error and verify that you're tailing it properly here")
+    @Test fun `when running standard error chatty script with bad exit code should get the tail of that error output`() = runBlocking<Unit> {
+        val chattyScript = getLocalResourcePath("ChattyErrorScript.ps1")
+
+        val thrown = try {
+            val running = execAsync {
+                command = listOf("powershell.exe",
+                        "-File", chattyScript,
+                        "-ThrowError",
+                        "-ExecutionPolicy", "Bypass"
+                )
+                linesForExceptionError = 5
+            }
+            running.exitCode.await()
+            null
+        }
+        catch(ex: InvalidExitValueException){ ex }
+
+        // assert that the error message contains the most recently emitted std-error message,
+        // not something from the beginning
+        val lines = (thrown?.message ?: "").lines().joinToString("") //do this to avoid powershell formatting
+        assertFalse("The Polito form is dead, insect." in lines)
+        assertTrue("I survived only by sleeping." in lines)
     }
 
     @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
