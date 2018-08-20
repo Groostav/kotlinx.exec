@@ -101,5 +101,23 @@ project('core'){
 }
 
 project('jdk8'){
+    dependencies {
+        compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+        compile "org.jetbrains.kotlinx:kotlinx-coroutines-core:0.23.4"
+        testCompile group: 'junit', name: 'junit', version: '4.12'
 
+        compile project(":core")
+    }
+
+    compileKotlin {
+        kotlinOptions.jvmTarget = "1.8"
+    }
+    compileTestKotlin {
+        kotlinOptions.jvmTarget = "1.8"
+    }
+    kotlin {
+        experimental {
+            coroutines "enable"
+        }
+    }
 }

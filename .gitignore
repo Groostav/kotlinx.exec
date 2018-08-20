@@ -10,7 +10,7 @@ hs_err_pid*
 #build system outputs
 out/
 .gradle/
-build/
+**/build/
 
 #since this project is effectively a gradle project, I'm removing the .idea folder
 .idea/
