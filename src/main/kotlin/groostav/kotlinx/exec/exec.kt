@@ -11,7 +11,7 @@ internal fun execAsync(config: ProcessBuilder, origin: Exception = Exception()):
 
         environment().apply {
             if(this !== config.environment) {
-                clear();
+                clear()
                 putAll(config.environment)
             }
         }
@@ -80,7 +80,10 @@ suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
 
         source = SynchronousExecutionStart(command.toList())
     }
-    return execAsync(configActual).exitCode.await()
+    val runningProcess = execAsync(configActual)
+    val result = runningProcess.exitCode.await()
+
+    return result
 }
 suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = execVoid {
     command = listOf(commandFirst) + commandRest.toList()
@@ -96,7 +99,7 @@ class InvalidExitValueException internal constructor(
 
     init {
         stackTraceApplier()
-        if(stackTrace == null) super.fillInStackTrace()
+        if(stackTrace == null || stackTrace.isEmpty()) super.fillInStackTrace()
     }
 
     override fun fillInStackTrace(): Throwable = this.also {
@@ -106,11 +109,12 @@ class InvalidExitValueException internal constructor(
 
 internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentOutput: List<String>): Throwable {
     val builder = StringBuilder().apply {
+
         appendln("exec '${config.command.joinToString(" ")}'")
+
         val multipleOutputs = config.expectedOutputCodes.size > 1
-        append("exited with code $exitCode ")
         val exitCodesScription = config.expectedOutputCodes.joinToString("', '")
-        appendln("(expected ${if(multipleOutputs) "one of " else ""}'$exitCodesScription')")
+        appendln("exited with code $exitCode (expected ${if(multipleOutputs) "one of " else ""}'$exitCodesScription')")
 
         if(recentOutput.any()){
             appendln("the most recent standard-error output was:")

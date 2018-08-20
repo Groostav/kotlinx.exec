@@ -5,19 +5,20 @@ import kotlinx.coroutines.experimental.channels.ConflatedBroadcastChannel
 import org.junit.Test
 import java.util.*
 import java.util.concurrent.Executors
+import kotlin.test.assertEquals
 
 class DelayMachineTests{
 
-    @Test fun `when using three subscribers should properly leverage things`() = runBlocking<Unit> {
+    // put everythong on one thread to proove that the system doesnt need
+    // 'accidental' parallelism.
+    val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+
+    @Test fun `when using three subscribers should properly leverage things`() = runBlocking<Unit>(dispatcher) {
         val broadcastChannel = ConflatedBroadcastChannel<Unit>()
 
-        // put everythong on one thread to proove that the system doesnt need
-        // 'accidental' parallelism.
-        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
-
-        val one = KotlinTests.DelayMachine(broadcastChannel)
-        val two = KotlinTests.DelayMachine(broadcastChannel)
-        val three = KotlinTests.DelayMachine(broadcastChannel)
+        val one = DelayMachine(2 .. 10, broadcastChannel)
+        val two = DelayMachine(2 .. 10, broadcastChannel)
+        val three = DelayMachine(2 .. 10, broadcastChannel)
 
         val state = mutableListOf(10, 9, 8)
 
@@ -30,25 +31,61 @@ class DelayMachineTests{
             }
         }
 
-        val oneResult = async(dispatcher) {
+        val oneJob = async(dispatcher) {
             one.waitForByPollingPeriodically { state[0] == 0 }
-            1
+            state[0]
         }
-        val twoResult = async(dispatcher) {
+        val twoJob = async(dispatcher) {
             two.waitForByPollingPeriodically { state[1] == 0 }
-            2
+            state[1]
         }
-        val threeResult = async(dispatcher) {
+        val threeJob = async(dispatcher) {
             three.waitForByPollingPeriodically { state[2] == 0 }
-            3
+            state[2]
         }
 
-        oneResult.await()
-        twoResult.await()
-        threeResult.await()
+        val oneResult = oneJob.await()
+        val twoResult = twoJob.await()
+        val threeResult = threeJob.await()
 
-        val x = 4;
+        assertEquals(0, oneResult)
+        assertEquals(0, twoResult)
+        assertEquals(0, threeResult)
     }
 
-    @Test fun todo(): Unit = TODO("what kind of coverage can we get here, and what kind of test-hard points can we use?")
+    @Test fun `when using really long timeout should be interruptable with signal`() = runBlocking(dispatcher) {
+        val broadcastChannel = ConflatedBroadcastChannel<Unit>()
+
+        val machine = DelayMachine(999_999_999 .. 1_000_000_000, broadcastChannel)
+        var polledResult: Boolean = false
+
+        val pollingJob = launch(dispatcher) { machine.waitForByPollingPeriodically { polledResult } }
+        delay(10)
+        require( ! pollingJob.isCompleted)
+
+        polledResult = true
+        delay(10)
+        require ( ! pollingJob.isCompleted)
+
+        broadcastChannel.send(Unit)
+        delay(10)
+        require(pollingJob.isCompleted)
+    }
+
+    @Test fun `when using really long timeout should be manually interruptable`() = runBlocking(dispatcher) {
+        val broadcastChannel = ConflatedBroadcastChannel<Unit>()
+
+        val machine = DelayMachine(999_999_999 .. 1_000_000_000, broadcastChannel)
+        var polledResult: Boolean = false
+
+        val pollingJob = launch(dispatcher) { machine.waitForByPollingPeriodically { polledResult } }
+        delay(10)
+        require( ! pollingJob.isCompleted)
+
+        polledResult = true
+        machine.signalPollResult()
+
+        delay(10)
+        require(pollingJob.isCompleted)
+    }
 }

@@ -3,6 +3,12 @@ package groostav.kotlinx.exec
 import org.zeroturnaround.process.Processes
 import org.zeroturnaround.process.WindowsProcess
 
+//TODO: what do i need this for anymore?
+// we're putting JNA on the path for 1.8 => kern32 style PID getter is handled
+// also we copied their impl for kill and kill with children
+// waitFor... and its WMIC magic... is superfluous?
+//      Whats the reason to actually ping the OS? AFAIK there is none?
+// ==> Delete this, and the dep on zt!
 internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): ProcessControlFacade {
 
     init {

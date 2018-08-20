@@ -1,6 +1,9 @@
 package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
+import kotlinx.coroutines.experimental.Unconfined
+import kotlinx.coroutines.experimental.channels.consumeEach
+import kotlinx.coroutines.experimental.launch
 
 
 internal class UnixProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
@@ -10,16 +13,31 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
     }
 
     companion object: ProcessControlFacade.Factory {
-        override fun create(process: Process, pid: Int) = supportedIf(Platform.isWindows()) { WindowsProcessControl(process, pid) }
+        override fun create(process: Process, pid: Int) = supportedIf(JavaProcessOS == ProcessOS.Unix) {
+            UnixProcessControl(process, pid)
+        }
     }
 
-    override fun tryKillGracefullyAsync(includeDescendants: Boolean): Supported<Unit> {
+    override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
         //can we issue a pgrep -P call here
-        TODO()
+        if(includeDescendants) return Unsupported
+
+        launch(Unconfined) {
+            execAsync { command = listOf("kill", "$pid") }.consumeEach { trace { it.formattedMessage } }
+        }
+
+        return Supported(Unit)
     }
 
-    override fun killForcefullyAsync(includeDescendants: Boolean): Supported<Unit> {
-        TODO()
+    override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
+        //can we issue a pgrep -P call here
+        if(includeDescendants) return Unsupported
+
+        launch(Unconfined) {
+            execAsync { command = listOf("kill", "-9", "$pid") }.consumeEach { trace { it.formattedMessage } }
+        }
+
+        return Supported(Unit)
     }
 }
 
@@ -27,7 +45,7 @@ internal class UnixReflectivePIDGen(private val process: Process): ProcessIDGene
 
     companion object: ProcessIDGenerator.Factory {
         override fun create(process: Process) = supportedIf(JavaProcessOS == ProcessOS.Unix){
-            WindowsReflectiveNativePIDGen(process)
+            UnixReflectivePIDGen(process)
         }
     }
 

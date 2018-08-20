@@ -18,8 +18,10 @@ data class ProcessBuilder internal constructor(
 
         /**
          * The working directory under which the child process will be run.
+         *
+         * Defaults to the current working directory of this process.
          */
-        var workingDirectory: Path = Paths.get(".").toAbsolutePath(),
+        var workingDirectory: Path = Paths.get("").toAbsolutePath(),
 
         /**
          * line delimiters used for parsing lines out of standard-error and standard-out
@@ -51,7 +53,7 @@ data class ProcessBuilder internal constructor(
          * at time of writing. There is, to my knowledge, no strategy to change this buffer short of
          * class-loader or byte-code manipulations.
          */
-        var standardErrorBufferCharCount: Int = 8192,
+        var standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
         /**
          * Amount of raw-character output buffered by [RunningProcess.standardOutput]
@@ -61,7 +63,7 @@ data class ProcessBuilder internal constructor(
          * This buffer is only for the character stream, line-aggregation is done before buffering and is
          * buffered by the aggregate channel as part of the [aggregateOutputBufferLineCount]
          */
-        var standardOutputBufferCharCount: Int = 8192,
+        var standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
         /**
          * Number of lines to buffer in the aggregate channel
@@ -70,7 +72,7 @@ data class ProcessBuilder internal constructor(
          * that will be kept by the running process. In the event that this buffer is filled,
          * the oldest line will be dropped, giving a behaviour similar to posix `tail`.
          */
-        var aggregateOutputBufferLineCount: Int = 200,
+        var aggregateOutputBufferLineCount: Int = 2000,
 
         /**
          * The amount of time to wait before considering a SIG_INT kill command to have failed.
@@ -105,7 +107,7 @@ data class ProcessBuilder internal constructor(
          *    and the list is not empty, an [InvalidExitValueException]
          *    is thrown when awaiting [RunningProcess.exitCode].
          *
-         *
+         * see [ANY_EXIT_CODE] for allowing the process to return normally regardless of exit code
          */
         var expectedOutputCodes: Set<Int> = setOf(0), //see also
 
@@ -125,7 +127,10 @@ data class ProcessBuilder internal constructor(
         internal var source: ExecEntryPoint? = null
 )
 
-val ANY_EXIT_CODE = (0..Int.MAX_VALUE).asSet()
+/**
+ * Indicates that a process can return with any exit code.
+ */
+val ANY_EXIT_CODE: Set<Int> = (0..Int.MAX_VALUE).asSet()
 
 internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
 

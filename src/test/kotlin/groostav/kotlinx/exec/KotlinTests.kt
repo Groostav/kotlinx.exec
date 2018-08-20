@@ -55,37 +55,6 @@ class KotlinTests {
 //        val localDecoder = listOf<Message>()
     }
 
-
-    internal class DelayMachine(
-            val otherSignals: ConflatedBroadcastChannel<Unit>,
-            val delayWindow: IntRange = 5 .. 100,
-            val delayFactor: Float = 1.5f
-    ) {
-        val backoff = AtomicInteger(0)
-
-        suspend fun waitForByPollingPeriodically(condition: () -> Boolean){
-            while(condition()) {
-                val backoff = backoff.updateAndGet { updateBackoff(it, delayWindow) }
-
-                withTimeoutOrNull(backoff){
-                    otherSignals.openSubscription().take(2)
-                }
-            }
-            signalPollResult()
-        }
-
-        private fun updateBackoff(currentPollPeriodMillis: Int, pollPeriodMillis: IntRange): Int {
-            return (currentPollPeriodMillis * 1.5).toInt()
-                    .coerceAtLeast(currentPollPeriodMillis + 1)
-                    .coerceAtMost(pollPeriodMillis.endInclusive)
-        }
-
-        private fun signalPollResult(){
-            backoff.set(delayWindow.start)
-            otherSignals.offer(Unit)
-        }
-    }
-
     @Test fun `when opening subscription after member already published should suspend`() = runBlocking {
 
         val channel = ConflatedBroadcastChannel<Unit>()

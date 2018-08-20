@@ -1,6 +1,7 @@
 package groostav.kotlinx.exec
 
 import Catch
+import assertNotListed
 import assertThrows
 import completableScriptCommand
 import emptyScriptCommand
@@ -21,14 +22,16 @@ class JoinAwaitAndKillTests {
         }
 
         //act
-        withTimeoutOrNull(10) { runningProcess.join() }
+        val completedAfter100ms = withTimeoutOrNull(1000) { runningProcess.join() } != null
         if( ! runningProcess.isClosedForReceive){
             runningProcess.kill()
         }
 
         //assert
+        assertFalse(completedAfter100ms)
         assertTrue(runningProcess.exitCode.isCompleted)
         assertFalse(runningProcess.exitCode.isActive)
+        assertNotListed(runningProcess.processID)
     }
 
     @Test fun `when cancelling a process with another consumer should simply close the resulting channel for that consumer`() = runBlocking<Unit>{
@@ -48,12 +51,15 @@ class JoinAwaitAndKillTests {
         runningProcess.kill()
 
         //assert
-        val actual = result.await()
-        assertEquals(listOf(StandardOutputMessage("Hello!"), ExitCode(1)), actual)
+        val messages = result.await()
+        assertEquals(2, messages.size)
+        assertEquals(StandardOutputMessage("Hello!"), messages.first())
+        assertNotEquals(ExitCode(0), messages.last())
         assertThrows<CancellationException> { runningProcess.exitCode.await() }
+        assertNotListed(runningProcess.processID)
     }
 
-    @Test fun `when exiting normally should perform orderly shutdown`() = runBlocking {
+    @Test fun `when exiting normally should perform orderly shutdown`(): Unit = runBlocking {
         //setup
         val process = execAsync { command = completableScriptCommand() }
 
@@ -71,6 +77,11 @@ class JoinAwaitAndKillTests {
 
         //assert
         assertEquals(listOf("exitCodeJoin", "aggregateChannelJoin", "procJoin"), results)
+        TODO("this is a flapper, and we're going to need heavier-handed solutions to actually get a certain shutdown order.")
+        // while I'm pretty sure the zipper is functioning correctly,
+        // you have no gaurentee that a resume() call actually propagates forward in the order you want it to.
+        // I'm not sure how we can get to deterministic shutdown... or if its even worth getting to...
+        assertNotListed(process.processID)
     }
 
     @Test fun `when calling join twice shouldnt deadlock`() = runBlocking {
@@ -86,6 +97,7 @@ class JoinAwaitAndKillTests {
         //assert
         assertTrue(runningProcess.exitCode.isCompleted)
         assertFalse(runningProcess.exitCode.isActive)
+        assertNotListed(runningProcess.processID)
 
         // TODO: I'd like this, but elizarov's own notes say its not a requirement
         // https://stackoverflow.com/questions/48999564/kotlin-wait-for-channel-isclosedforreceive
@@ -109,10 +121,11 @@ class JoinAwaitAndKillTests {
         assertEquals(Unit, joinResult)
         assertNotNull(exitCodeResult)
         assertTrue(exitCodeResult is InvalidExitValueException)
-        assertEquals(aggregateChannelList.map { it::class.simpleName }.first(), StandardErrorMessage::class.simpleName)
-        assertEquals(aggregateChannelList.last(), ExitCode(1))
+        assertEquals(StandardErrorMessage::class, aggregateChannelList.first()::class)
+        assertEquals(ExitCode(1), aggregateChannelList.last())
         assertTrue("Script is exiting with code 1" in errorChannel.joinToString(""))
         assertEquals(listOf(), stdoutChannel)
+        assertNotListed(runningProcess.processID)
     }
 
     @Test fun `when synchronously running process with unexpected exit code should exit appropriately`() = runBlocking {
@@ -127,6 +140,50 @@ class JoinAwaitAndKillTests {
         assertNotNull(invalidExitValue)
         assertEquals(errorAndExitCodeOneCommand(), invalidExitValue!!.command)
         assertEquals(1, invalidExitValue.exitValue)
+    }
+
+    @Test fun `when synchronous exec sees bad exit code should throw good exception`() = runBlocking {
+
+        val thrown = try {
+            execVoid {
+                command = errorAndExitCodeOneCommand()
+                expectedOutputCodes = setOf(0) //make default explicity for clarity --exit code 1 => exception
+            }
+            null
+        }
+        catch(ex: InvalidExitValueException){ ex }
+
+        assertEquals(
+                //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
+                "groostav.kotlinx.exec.ExecKt.execVoid(exec.kt:LINE_NUM)",
+                thrown?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
+        )
+    }
+
+    @Test fun `when asynchronous exec sees bad exit code should throw ugly exception with good cause`() = runBlocking {
+
+        val thrown = try {
+            execAsync {
+                command = errorAndExitCodeOneCommand()
+                expectedOutputCodes = setOf(0) //make default explicity for clarity --exit code 1 => exception
+            }.exitCode.await()
+            null
+        }
+        catch (ex: InvalidExitValueException) { ex }
+        assertTrue(
+                //assert that this stack exists, but it points somewhere inside a coroutine,
+                (thrown?.stackTrace?.get(0)?.toString() ?: "").startsWith("groostav.kotlinx.exec")
+        )
+        assertNotNull(thrown?.cause)
+        assertEquals(
+                //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
+                "groostav.kotlinx.exec.ExecKt.execAsync(exec.kt:LINE_NUM)",
+                thrown?.cause?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
+        )
+    }
+
+    @Test fun `when killing process tree should properly end all descendants`(){
+        TODO()
     }
 }
 
