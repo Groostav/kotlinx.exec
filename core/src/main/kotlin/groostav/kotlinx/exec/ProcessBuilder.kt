@@ -40,25 +40,27 @@ data class ProcessBuilder internal constructor(
         var encoding: Charset = Charsets.UTF_8,
 
         /**
-         * Amount of raw-character output buffered by [RunningProcess.standardError]
+         * character count of output buffered by [RunningProcess.standardError].
          *
-         * This value controls the number of characters buffered for the standard-output character stream.
+         * This value controls the number of characters buffered for the standard-error character channel.
          *
          * This buffer is only for the character stream, line-aggregation is done before buffering and is
          * buffered by the aggregate channel as part of the [aggregateOutputBufferLineCount]
          *
-         * Other buffers may be acquired as part of the child APIs,
-         * namely the [java.lang.Process.getInputStream]'s representation of standard-output
-         * is buffered by a default [java.io.BufferedInputStream.DEFAULT_BUFFER_SIZE]
-         * at time of writing. There is, to my knowledge, no strategy to change this buffer short of
-         * class-loader or byte-code manipulations.
+         * Note also, implementations of java platform types may allocate their own small buffers,
+         * - [java.io.InputStreamReader]'s use of a 8KB buffer in [sun.nio.cs.StreamDecoder].
+         * - [java.lang.Process.getInputStream] also returns a [java.io.BufferedInputStream]
+         *   instance with a non-configurable byte-buffer of 8KB [java.io.BufferedInputStream.DEFAULT_BUFFER_SIZE]
          */
         var standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
         /**
-         * Amount of raw-character output buffered by [RunningProcess.standardOutput]
+         * character count of output buffered by [RunningProcess.standardOutput].
          *
-         * This value controls the number of characters buffered for the standard-error character stream.
+         * This value controls the number of characters buffered for the standard-output character stream.
+         *
+         * Note also, implementations of java platform types may allocate their own small buffers,
+         * namely [java.io.InputStreamReader]'s use of a 8KB buffer in [sun.nio.cs.StreamDecoder]
          *
          * This buffer is only for the character stream, line-aggregation is done before buffering and is
          * buffered by the aggregate channel as part of the [aggregateOutputBufferLineCount]
@@ -83,14 +85,10 @@ data class ProcessBuilder internal constructor(
         var gracefulTimeousMillis: Long = 1500L,
 
         /**
-         * Indication of whether a `kill` call should be interpreted a _kill process-tree_ or _kill (single process)_
+         * Indication of whether a `kill` call should be interpreted aa _kill process-tree_ or _kill (single process)_
          *
-         * if `true`, this may subsantially increase the time the `kill` command takes.
+         * if `true`, this may substantially increase the time the `kill` command takes.
          */
-        // TODO: what about a docker-style program, that quickly forks child-processes and the exits?
-        // can we call `kill(includeDescendants=true)` on a process thats already stopped, in an attempt
-        // to end its child processes?
-        // Such a feature would involve a graph traversal problem similar to those of the GC.
         var includeDescendantsInKill: Boolean = false,
 
         /**

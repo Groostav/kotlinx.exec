@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import org.junit.Ignore
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -11,6 +12,7 @@ class MultiprocessTests {
         // Is this useful? Should we emulate it?
     }
 
+    @Ignore("see https://github.com/Groostav/kotlinx.exec/issues/7")
     @Test fun `when using two processes should be able to pipe output of one into another simply`(){
         val source = execAsync { TODO() }
         val sink = execAsync { TODO() }

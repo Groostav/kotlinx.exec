@@ -1,14 +1,12 @@
 package groostav.kotlinx.exec
 
+import org.zeroturnaround.process.PidProcess
 import org.zeroturnaround.process.Processes
 import org.zeroturnaround.process.WindowsProcess
 
-//TODO: what do i need this for anymore?
-// we're putting JNA on the path for 1.8 => kern32 style PID getter is handled
-// also we copied their impl for kill and kill with children
-// waitFor... and its WMIC magic... is superfluous?
-//      Whats the reason to actually ping the OS? AFAIK there is none?
-// ==> Delete this, and the dep on zt!
+/**
+ * backup implementation for
+ */
 internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): ProcessControlFacade {
 
     init {
@@ -16,8 +14,10 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
     }
 
     companion object: ProcessControlFacade.Factory  {
-        val ztOnClassPath: Boolean = Try { Class.forName("org.zeroturnaround.process.Processes") } != null
-        override fun create(process: Process, pid: Int) = supportedIf(ztOnClassPath) { ZeroTurnaroundProcessFacade(process, pid) }
+
+        override fun create(process: Process, pid: Int) = supportedIf(ZTOnClassPath) {
+            ZeroTurnaroundProcessFacade(process, pid)
+        }
     }
 
     private val pidProcess = Processes.newPidProcess(pid)
@@ -56,3 +56,15 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
         return Supported(Unit)
     }
 }
+
+internal class ZeroTurnaroundPIDGenerator(val process: PidProcess): ProcessIDGenerator {
+    override val pid: Maybe<Int> get() = Supported(process.pid)
+
+    companion object: ProcessIDGenerator.Factory {
+        override fun create(process: Process) = supportedIf(ZTOnClassPath) {
+            ZeroTurnaroundPIDGenerator(Processes.newPidProcess(process))
+        }
+    }
+}
+
+val ZTOnClassPath: Boolean = Try { Class.forName("org.zeroturnaround.process.Processes") } != null

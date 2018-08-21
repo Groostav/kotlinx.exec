@@ -9,7 +9,6 @@ internal interface ProcessIDGenerator {
     /**
      * The OS-relevant process ID integer.
      */
-    //TODO whats the expected behaviour if the process exited?
     val pid: Maybe<Int>
 
     interface Factory {
@@ -20,7 +19,8 @@ internal interface ProcessIDGenerator {
 internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
     val factories = listOf(
             JEP102ProcessIDGenerator,
-            WindowsReflectiveNativePIDGen, UnixReflectivePIDGen
+            WindowsReflectiveNativePIDGen, UnixReflectivePIDGen,
+            ZeroTurnaroundPIDGenerator
     )
 
     return factories.firstSupporting { it.create(jvmRunningProcess) }

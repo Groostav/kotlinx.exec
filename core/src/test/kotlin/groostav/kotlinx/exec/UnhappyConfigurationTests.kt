@@ -91,11 +91,4 @@ class UnhappyConfigurationTests {
         assertEquals(false, afterClose.isEmpty) //thats pretty weird, a closed channel is non-empty? huh.
         assertEquals(null, afterClose.poll)
     }
-
-    @Test fun todo(){
-        TODO("""
-            hmm, so aggregate channel acts as a null-object when set to 0 buffer,
-            but stdout char channel explodes when you get() it with the same config, seems odd and inconsistent.
-        """.trimIndent())
-    }
 }

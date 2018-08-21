@@ -33,17 +33,17 @@ class WindowsTests {
         }
 
         val messages = runningProcess.map { event -> when(event){
-            is StandardErrorMessage -> DomainModel("Error: ${event.line}")
-            is StandardOutputMessage -> DomainModel(event.line)
-            is ExitCode -> DomainModel("exit code: ${event.code}")
+            is StandardErrorMessage -> "std-err: ${event.line}"
+            is StandardOutputMessage -> event.line
+            is ExitCode -> "exit code: ${event.code}"
         }}
 
         val exitCode = runningProcess.exitCode.await()
         val messagesList = messages.toList()
 
         messagesList.shouldEqual(listOf(
-                DomainModel("\"hello command line!\""), //extra quotes inserted by cmd
-                DomainModel("exit code: 0")
+                "\"hello command line!\"", //extra quotes inserted by cmd
+                "exit code: 0"
         ))
         exitCode.shouldBe(0)
     }
@@ -68,25 +68,7 @@ class WindowsTests {
         )
     }
 
-    @Ignore //really nasty test, how can we make these fast? JimFS for processes?
-    @Test fun `while trying to recover a stuck command`() = runBlocking<Unit> {
-        val process = execAsync(
-                "powershell.exe",
-                "-Command", "while(\$true) { echo \"running!\"; Sleep -m 500 }",
-                "-ExecutionPolicy", "Bypass"
-        )
 
-        delay(5000)
-
-        process.kill()
-
-        val stdout = process.map { it.formattedMessage }.toList()
-        val result = assertThrows<JobCancellationException> { process.exitCode.await() }
-
-        result shouldNotBe null
-        stdout shouldContain "running!"
-        stdout.size shouldBeGreaterThan ((5000-1) / 500)
-    }
 
     val IP_REGEX = Regex("(\\d+\\.){3}\\d+")
 
@@ -98,6 +80,7 @@ class WindowsTests {
         //I'm going to create an actor as a Map<QuestionString, ResponseString>,
         // where "question" is the line output by the sub-process.
         class Message(val outputQuestionLine: String, val response: CompletableDeferred<String?> = CompletableDeferred())
+
         val localDecoder = actor<Message> {
 
             val domainsToTry: Queue<String> = queueOf("jetbrains.com", "asdf.asdf.asdf.12345.!!!")
@@ -489,6 +472,4 @@ class WindowsTests {
         result)
     }
 }
-
-data class DomainModel(val data: String)
 

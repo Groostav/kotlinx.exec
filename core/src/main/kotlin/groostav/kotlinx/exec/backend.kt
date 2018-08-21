@@ -13,7 +13,7 @@ internal inline fun trace(message: () -> String){
     }
 }
 
-enum class ProcessOS { Windows, Unix } //TODO: Solaris?
+enum class ProcessOS { Windows, Unix }
 
 internal val JavaProcessOS: ProcessOS = run {
     //this is the strategy from apache commons lang... I hate it, but they seem to think it works.
@@ -23,8 +23,8 @@ internal val JavaProcessOS: ProcessOS = run {
 
     when {
         name.startsWith("windows") -> ProcessOS.Windows
-        name.startsWith("linux") || name.endsWith("bsd") -> ProcessOS.Unix //TODO need BSD tests.
-        else -> TODO()
+        name.startsWith("linux") || name.endsWith("bsd") -> ProcessOS.Unix
+        else -> throw UnsupportedOperationException("")
     }
 }
 
@@ -52,10 +52,11 @@ internal sealed class Maybe<out T> {
     abstract val value: T
 }
 internal data class Supported<out T>(override val value: T): Maybe<T>()
-internal object Unsupported : Maybe<Nothing>() { override val value: Nothing get() = TODO() }
+internal object Unsupported : Maybe<Nothing>() {
+    val platform = "${System.getProperty("os.name")}-jre${System.getProperty("java.version")}"
+    override val value: Nothing get() = throw UnsupportedOperationException("unsupported platform $platform")
+}
 
-internal typealias ResultHandler = (Int) -> Unit
-internal typealias ResultEventSource = (ResultHandler) -> Unit
 
 internal fun <T> supportedIf(condition: Boolean, resultIfTrue: () -> T): Maybe<T> = when(condition){
     true -> Supported(resultIfTrue())
@@ -68,8 +69,6 @@ internal class NamedTracingProcessReader private constructor(
         val config: ProcessBuilder
 ): Reader() {
 
-    //TODO: there doesnt seem to be any way to control buffering here.
-    //how can we stricly conform to buffer sizes from the user?
     val src = InputStreamReader(src, config.encoding)
 
     init {
@@ -126,7 +125,6 @@ internal inline fun <T> Try(block: () -> T) = try { block() } catch (e: Exceptio
 internal fun testing(x: Any?){
     val y = 4;
 }
-
 
 internal fun IntProgression.asSet(): Set<Int> = IntProgressionSet(this)
 data class IntProgressionSet(val src: IntProgression): Set<Int> {

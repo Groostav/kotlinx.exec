@@ -77,7 +77,7 @@ internal suspend fun assertNotListed(deadProcessID: Int){
 
     val runningPIDs: List<Int> = when(JavaProcessOS){
         ProcessOS.Unix -> {
-            val firstIntOnLineRegex = Regex(
+            val firstIntOnLineRegex = Pattern.compile(
                     "(?<pid>\\d+)\\s+"+
                     "(?<terminalName>\\S+)\\s+"+
                     "(?<time>\\d\\d:\\d\\d:\\d\\d)\\s+"+
@@ -88,12 +88,13 @@ internal suspend fun assertNotListed(deadProcessID: Int){
                     .drop(1)
                     .map { it.trim() }
                     .map { pidRecord ->
-                        firstIntOnLineRegex.matchEntire(pidRecord)?.groups?.get("pid")?.value?.toInt()
+//                        firstIntOnLineRegex.matchEntire(pidRecord)?.groups?.get("pid")?.value?.toInt()
+                        firstIntOnLineRegex.matcher(pidRecord).apply { find() }.group("pid").toInt()
                                 ?: TODO("no PID on `ps` record '$pidRecord'")
                     }
         }
         ProcessOS.Windows -> {
-            val getProcessLineRegex = Regex(
+            val getProcessLineRegex = Pattern.compile(
                     "(?<handleCount>\\d)+\\s+" +
                     "(?<nonPagedMemKb>\\d)+\\s+" +
                     "(?<pagedMemKb>\\d+)\\s+" +
@@ -109,7 +110,7 @@ internal suspend fun assertNotListed(deadProcessID: Int){
                     .map { it.trim() }
                     .dropLastWhile { it.isBlank() }
                     .map { pidRecord ->
-                        getProcessLineRegex.matchEntire(pidRecord)?.groups?.get("pid")?.value?.toInt()
+                        getProcessLineRegex.matcher(pidRecord).apply { find() }.group("pid")?.toInt()
                                 ?: TODO("no PID on `GetProcess` record '$pidRecord'")
                     }
         }

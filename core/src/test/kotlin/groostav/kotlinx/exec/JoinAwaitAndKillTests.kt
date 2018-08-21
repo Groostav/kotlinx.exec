@@ -12,9 +12,14 @@ import kotlinx.coroutines.experimental.channels.filter
 import kotlinx.coroutines.experimental.channels.map
 import kotlinx.coroutines.experimental.channels.take
 import kotlinx.coroutines.experimental.channels.toList
+import org.amshove.kluent.shouldContain
+import org.amshove.kluent.shouldNotBe
+import org.junit.Ignore
 import org.junit.Test
 import promptScriptCommand
+import stuckCommand
 import java.util.*
+import java.util.regex.Pattern
 import kotlin.test.*
 
 class JoinAwaitAndKillTests {
@@ -63,7 +68,9 @@ class JoinAwaitAndKillTests {
         assertNotListed(runningProcess.processID)
     }
 
-    @Test fun `when exiting normally should perform orderly shutdown`(): Unit = runBlocking {
+    @Test
+    @Ignore("see https://github.com/Groostav/kotlinx.exec/issues/3")
+    fun `when exiting normally should perform orderly shutdown`(): Unit = runBlocking {
         //setup
         val process = execAsync { command = completableScriptCommand() }
 
@@ -81,11 +88,12 @@ class JoinAwaitAndKillTests {
 
         //assert
         assertEquals(listOf("exitCodeJoin", "aggregateChannelJoin", "procJoin"), results)
-        TODO("this is a flapper, and we're going to need heavier-handed solutions to actually get a certain shutdown order.")
+        assertNotListed(process.processID)
+
+        fail("this is a flapper, and we're going to need heavier-handed solutions to actually get a certain shutdown order.")
         // while I'm pretty sure the zipper is functioning correctly,
         // you have no gaurentee that a resume() call actually propagates forward in the order you want it to.
         // I'm not sure how we can get to deterministic shutdown... or if its even worth getting to...
-        assertNotListed(process.processID)
     }
 
     @Test fun `when calling join twice shouldnt deadlock`() = runBlocking {
@@ -103,7 +111,7 @@ class JoinAwaitAndKillTests {
         assertFalse(runningProcess.exitCode.isActive)
         assertNotListed(runningProcess.processID)
 
-        // TODO: I'd like this, but elizarov's own notes say its not a requirement
+        // I'd like this, but elizarov's own notes say its not a requirement
         // https://stackoverflow.com/questions/48999564/kotlin-wait-for-channel-isclosedforreceive
 //        assertTrue(runningProcess.isClosedForReceive)
     }
@@ -189,7 +197,7 @@ class JoinAwaitAndKillTests {
     @Test fun `when killing process tree should properly end all descendants`() = runBlocking {
 
         //setup
-        val pidRegex = Regex("PID=(?<pid>\\d+)")
+        val pidRegex = Pattern.compile("PID=(?<pid>\\d+)")
 
         val runningProcess = execAsync {
             command = forkerCommand()
@@ -198,8 +206,9 @@ class JoinAwaitAndKillTests {
 
         val pids = runningProcess
                 .map { it.also { trace { it.formattedMessage }}}
-                .filter { pidRegex.containsMatchIn(it.formattedMessage) }
-                .map { pidRegex.find(it.formattedMessage)?.groups?.get("pid")?.value?.toInt() ?: TODO() }
+                .map { pidRegex.matcher(it.formattedMessage) }
+                .filter { it.find() }
+                .map { it.group("pid")?.toInt() ?: TODO() }
                 .take(3)
                 .toList()
 
@@ -210,6 +219,26 @@ class JoinAwaitAndKillTests {
         pids.forEach { assertNotListed(it) }
     }
 
+
+    @Test fun `while trying to recover a stuck command should properly exit`() = runBlocking<Unit> {
+
+        //setup
+        val process = execAsync {
+            command = stuckCommand()
+        }
+        //let the script get to where it can write things to console
+        delay(500)
+
+        //act
+        process.kill()
+
+        //assert
+        val stdout = process.map { it.formattedMessage }.toList()
+        val result = assertThrows<CancellationException> { process.exitCode.await() }
+
+        result shouldNotBe null
+        stdout shouldContain "running!"
+    }
 }
 
 

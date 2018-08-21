@@ -78,7 +78,7 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
         // because we're allocating threads to 'pump' those streams,
         // the thread-allocation time might not be 'prompt' enough.
         // so we'll use a hack to make sure 2 threads exist such that when we dispatch jobs to this pool,
-        // the jobs will be subitted to a pool with 2 idle threads.
+        // the jobs will be submitted to a pool with 2 idle threads.
         //
         // TODO: how can this be tested? Can we find a place where not prestarting results in data being lost?
         // what about a microbenchmark?
