@@ -31,7 +31,6 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
 
         val success = killRecursor(procHandle, includeDescendants)
         return if(success) Supported(Unit) else Unsupported
-        return Unsupported
     }
 
     override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
@@ -53,7 +52,6 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
 
         val success = killRecursor(procHandle, includeDescendants)
         return if(success) Supported(Unit) else Unsupported
-        return Unsupported
     }
 }
 

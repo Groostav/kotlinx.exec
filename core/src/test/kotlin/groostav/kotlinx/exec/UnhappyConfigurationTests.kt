@@ -4,15 +4,21 @@ import Catch
 import assertThrows
 import emptyScriptCommand
 import kotlinx.coroutines.experimental.runBlocking
-import org.hamcrest.MatcherAssert.assertThat
 import org.junit.Test
-import java.io.IOException
 import java.nio.file.Paths
-import java.util.*
 import kotlin.test.assertEquals
 
 class UnhappyConfigurationTests {
 
+    val OSLocalizedNoSuchFileMessage = when(JavaProcessOS) {
+        ProcessOS.Windows -> "The system cannot find the file specified"
+        ProcessOS.Unix -> "No such file or directory"
+    }
+
+    val OSLocalizedErrorPreamble = when(JavaProcessOS) {
+        ProcessOS.Windows -> "CreateProcess "
+        ProcessOS.Unix -> ""
+    }
 
     @Test fun `when attempting to run nonexistant program should get exception`() = runBlocking<Unit> {
 
@@ -24,7 +30,7 @@ class UnhappyConfigurationTests {
         //assert
         assertEquals("Cannot run program \"prog-that-doesn't-exist-a1ccfa01-cf9a-474c-b95f-94377655ea75\" " +
                 "(in directory \"${Paths.get("").toAbsolutePath()}\"): " +
-                "CreateProcess error=2, The system cannot find the file specified",
+                "${OSLocalizedErrorPreamble}error=2, $OSLocalizedNoSuchFileMessage",
                 result?.message
         )
     }

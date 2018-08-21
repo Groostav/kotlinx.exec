@@ -45,7 +45,7 @@ fun errorAndExitCodeOneCommand() = when(JavaProcessOS){
 }
 fun printWorkingDirectoryCommand() = when(JavaProcessOS){
     ProcessOS.Windows -> listOf("cmd.exe", "/C", "cd")
-    ProcessOS.Unix -> listOf("bash pwd")
+    ProcessOS.Unix -> listOf("bash", "-c", "pwd")
 }
 fun forkerCommand() = when(JavaProcessOS){
     ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("forker/forker-compose-up.ps1")

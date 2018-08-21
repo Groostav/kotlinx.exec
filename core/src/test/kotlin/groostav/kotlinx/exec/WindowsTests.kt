@@ -7,6 +7,8 @@ import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.selects.select
 import org.amshove.kluent.*
 import org.junit.Assert.assertTrue
+import org.junit.Assume
+import org.junit.BeforeClass
 import org.junit.Ignore
 import org.junit.Test
 import queueOf
@@ -18,6 +20,12 @@ import kotlin.test.assertNotNull
 // Wow, so powershell takes 10X longer to start (~1 second) than cmd (~100ms)
 // I suppose thats .netframework startup time, which is supposidly faster than the jvm, but it sure ain't fast.
 class WindowsTests {
+
+    companion object {
+        @JvmStatic @BeforeClass fun `should be windows`(){
+            Assume.assumeTrue(JavaProcessOS == ProcessOS.Windows)
+        }
+    }
 
     @Ignore("functional")
     @Test fun `when running calc should get a calc`() = runBlocking<Unit> {

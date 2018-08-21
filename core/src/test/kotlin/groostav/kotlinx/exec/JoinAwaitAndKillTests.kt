@@ -17,7 +17,6 @@ import org.amshove.kluent.shouldNotBe
 import org.junit.Ignore
 import org.junit.Test
 import promptScriptCommand
-import stuckCommand
 import java.util.*
 import java.util.regex.Pattern
 import kotlin.test.*
@@ -219,26 +218,6 @@ class JoinAwaitAndKillTests {
         pids.forEach { assertNotListed(it) }
     }
 
-
-    @Test fun `while trying to recover a stuck command should properly exit`() = runBlocking<Unit> {
-
-        //setup
-        val process = execAsync {
-            command = stuckCommand()
-        }
-        //let the script get to where it can write things to console
-        delay(500)
-
-        //act
-        process.kill()
-
-        //assert
-        val stdout = process.map { it.formattedMessage }.toList()
-        val result = assertThrows<CancellationException> { process.exitCode.await() }
-
-        result shouldNotBe null
-        stdout shouldContain "running!"
-    }
 }
 
 
