@@ -20,9 +20,16 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
 
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
         //can we issue a pgrep -P call here
-        if(includeDescendants) return Unsupported
+//        if(includeDescendants) return Unsupported
+
+        val x = 4;
 
         launch(Unconfined) {
+            val (out, r) = exec { command = listOf("pgrep", "-P", "$pid") }
+
+            println(out.joinToString("\n"))
+            val y = 4;
+
             execAsync { command = listOf("kill", "$pid") }.consumeEach { trace { it.formattedMessage } }
         }
 
@@ -31,7 +38,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
 
     override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
         //can we issue a pgrep -P call here
-        if(includeDescendants) return Unsupported
+//        if(includeDescendants) return Unsupported
 
         launch(Unconfined) {
             execAsync { command = listOf("kill", "-9", "$pid") }.consumeEach { trace { it.formattedMessage } }

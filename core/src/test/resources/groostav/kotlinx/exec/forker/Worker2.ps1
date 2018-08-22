@@ -13,7 +13,7 @@ Try
 
     While($true)
     {
-        Write-Output "$prefix $prefix HTTP GET /imporant/customers 200 OK"
+        Write-Output "$prefix HTTP GET /imporant/customers 200 OK"
         Sleep -m 600
     }
 }

@@ -193,7 +193,7 @@ class JoinAwaitAndKillTests {
         )
     }
 
-    @Test fun `when killing process tree should properly end all descendants`() = runBlocking {
+    @Test fun `when killing process tree should properly end all descendants`() = runBlocking<Unit> {
 
         //setup
         val pidRegex = Pattern.compile("PID=(?<pid>\\d+)")
@@ -216,6 +216,8 @@ class JoinAwaitAndKillTests {
 
         //assert
         pids.forEach { assertNotListed(it) }
+
+        fail("this test passes on linux when I dont include the kill-child implementation, so my oracle's broken :sigh:")
     }
 
 }

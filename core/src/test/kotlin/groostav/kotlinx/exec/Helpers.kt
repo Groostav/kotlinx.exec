@@ -49,7 +49,7 @@ fun printWorkingDirectoryCommand() = when(JavaProcessOS){
 }
 fun forkerCommand() = when(JavaProcessOS){
     ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("forker/forker-compose-up.ps1")
-    else -> TODO()
+    ProcessOS.Unix -> listOf("bash", getLocalResourcePath("forker/forker-compose-up.sh"))
 }
 
 
@@ -88,7 +88,6 @@ internal suspend fun assertNotListed(deadProcessID: Int){
                     .drop(1)
                     .map { it.trim() }
                     .map { pidRecord ->
-//                        firstIntOnLineRegex.matchEntire(pidRecord)?.groups?.get("pid")?.value?.toInt()
                         firstIntOnLineRegex.matcher(pidRecord).apply { find() }.group("pid").toInt()
                                 ?: TODO("no PID on `ps` record '$pidRecord'")
                     }
