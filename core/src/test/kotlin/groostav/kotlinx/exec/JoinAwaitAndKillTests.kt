@@ -218,6 +218,9 @@ class JoinAwaitAndKillTests {
         pids.forEach { assertNotListed(it) }
 
         fail("this test passes on linux when I dont include the kill-child implementation, so my oracle's broken :sigh:")
+        // blah, running forker-compose-up.sh from command line, then ctrl + Z, then ps, then kill -9 (parent), then ps
+        // notice that all the child processes are dead. clearly I dont know enough about parent-child process relationships.
+        // it seems that kill -9 in this cercomstance is giving me the "end process tree" behaviour I wanted. 
     }
 
 }
