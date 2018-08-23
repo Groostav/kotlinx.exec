@@ -29,10 +29,10 @@ internal interface ProcessControlFacade {
 
 }
 
-internal class CompositProcessControl(val facades: List<ProcessControlFacade>): ProcessControlFacade {
+internal class CompositeProcessControl(val facades: List<ProcessControlFacade>): ProcessControlFacade {
 
     init {
-        require(facades.all { it !is CompositProcessControl } ) { "composite of composites: $this" }
+        require(facades.all { it !is CompositeProcessControl } ) { "composite of composites: $this" }
         require(facades.any()) { "composite has no implementations!" }
     }
 
@@ -43,7 +43,7 @@ internal class CompositProcessControl(val facades: List<ProcessControlFacade>): 
         it.killForcefullyAsync(includeDescendants)
     })
 
-    override fun toString() = "CompositProcessControl[${facades.joinToString()}]"
+    override fun toString() = "CompositeProcessControl[${facades.joinToString()}]"
 }
 
 internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessControlFacade {
@@ -54,5 +54,5 @@ internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessC
             ZeroTurnaroundProcessFacade
     )
     val facades = factories.filterSupporting { it.create(jvmRunningProcess, pid) }
-    return CompositProcessControl(facades)
+    return CompositeProcessControl(facades)
 }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.experimental.sync.Mutex
 import kotlinx.coroutines.experimental.sync.withLock
 import java.util.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE") //renames a couple of the param names for SendChannel & ReceiveChannel
 /**
@@ -218,8 +219,7 @@ internal class RunningProcessImpl(
 
     //region join, kill
 
-    private val killLock = Mutex()
-    private var killed: Boolean = false
+    private val killed = AtomicBoolean(false)
 
     private val _exitCode = async(Unconfined + CoroutineName("process(PID=$processID)._exitcode")) {
 
@@ -252,7 +252,7 @@ internal class RunningProcessImpl(
             val result = _exitCode.await()
 
             when {
-                killed -> throw CancellationException()
+                killed.get() -> throw CancellationException()
                 result in config.expectedOutputCodes -> result
                 else -> {
                     val errorLines = errorHistory.await().toList()
@@ -289,28 +289,27 @@ internal class RunningProcessImpl(
 
         val gracefulTimeousMillis = config.gracefulTimeousMillis
 
-        killLock.withLock {
+        if( ! killed.getAndSet(true)) {
+
             if (_exitCode.isCompleted) return
 
-            killed = true
-        }
+            trace { "killing $processID" }
 
-        trace { "killing $processID" }
+            if (gracefulTimeousMillis > 0) {
 
-        if (gracefulTimeousMillis > 0) {
+                withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
+                    processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
 
-            withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
-                processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
+                    _exitCode.join()
+                }
 
-                _exitCode.join()
+                if (_exitCode.isCompleted) {
+                    return
+                }
             }
 
-            if (_exitCode.isCompleted) {
-                return
-            }
+            processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
         }
-
-        processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
     }
 
 

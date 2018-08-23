@@ -17,16 +17,20 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
             if( ! handle.supportsNormalTermination()) return false
 
             //recurse on children
-            val childSequence = handle.children().asSequence()
-            val successfulInfanticide = includeChildren && childSequence.fold(true){ accum, next ->
+            val childSequence = handle.children().asSequence().takeUnless { ! includeChildren }
+            val successfulInfanticide = childSequence == null || childSequence.fold(true){ accum, next ->
+                //this is really morbid...
                 accum && killRecursor(next, includeChildren)
             }
 
             if ( ! successfulInfanticide) return false
 
             val destroyed = handle.destroy()
+            trace { "JEP102 destroy [gracefully] PID=${handle.pid()}: ${if(destroyed)"success" else "FAILED"}" }
 
-            return destroyed
+            // assume success, once we've killed one process there isnt much point in trying to stop
+            // we probably got false because it exited naturally
+            return true
         }
 
         val success = killRecursor(procHandle, includeDescendants)
@@ -38,16 +42,18 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
         fun killRecursor(handle: ProcessHandle, includeChildren: Boolean): Boolean{
 
             //recurse on children
-            val childSequence = handle.children().asSequence()
-            val successfulInfanticide = includeChildren && childSequence.fold(true){ accum, next ->
+            val childSequence = handle.children().asSequence().takeUnless { ! includeChildren }
+            val successfulInfanticide = childSequence == null || childSequence.fold(true){ accum, next ->
                 accum && killRecursor(next, includeChildren)
             }
 
             if ( ! successfulInfanticide) return false
 
             val destroyed = handle.destroyForcibly()
+            trace { "JEP102 destroy forcibly PID=${handle.pid()}: ${if(destroyed)"success" else "FAILED"}" }
 
-            return destroyed
+            // assume success, same as above.
+            return true
         }
 
         val success = killRecursor(procHandle, includeDescendants)
