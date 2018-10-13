@@ -144,6 +144,7 @@ data class ProcessBuilder internal constructor(
 /**
  * Indicates that a process can return with any exit code.
  */
+//TODO kotlin 1.3 includes BitSet
 val ANY_EXIT_CODE: Set<Int> = (0..Int.MAX_VALUE).asSet()
 
 object InheritedDefaultEnvironment: Map<String, String> by System.getenv()
