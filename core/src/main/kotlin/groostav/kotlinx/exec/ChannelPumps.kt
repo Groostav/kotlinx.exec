@@ -19,7 +19,7 @@ internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Cha
                 writer.append(nextChar)
                 if(nextChar == config.inputFlushMarker) writer.flush()
             }
-            catch (ex: FileNotFoundException) {
+            catch (ex: IOException) {
                 //writer was closed, process was terminated.
                 //TODO need a test to induce this, verify correctness.
                 return@actor

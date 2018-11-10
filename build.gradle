@@ -80,25 +80,25 @@ project('core'){
         archives javadocJar
     }
     
-    bintray {
-        user = bintrayUser
-        key = bintrayKey
-    
-        pkg {
-            repo = 'generic'
-            name = 'kotlinx.exec'
-            user = project.group
-            licenses = ['Apache-2.0']
-            vcsUrl = 'https://github.com/Groostav/kotlinx.exec'
-    
-            override = true
-    
-            configurations = ['archives']
-    
-            version {
-                name = project.version
-            }
-    
-        }
-    }
+//    bintray {
+//        user = bintrayUser
+//        key = bintrayKey
+//
+//        pkg {
+//            repo = 'generic'
+//            name = 'kotlinx.exec'
+//            user = project.group
+//            licenses = ['Apache-2.0']
+//            vcsUrl = 'https://github.com/Groostav/kotlinx.exec'
+//
+//            override = true
+//
+//            configurations = ['archives']
+//
+//            version {
+//                name = project.version
+//            }
+//
+//        }
+//    }
 }

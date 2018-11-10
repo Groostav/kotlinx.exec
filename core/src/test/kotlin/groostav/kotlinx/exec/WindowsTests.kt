@@ -23,7 +23,7 @@ class WindowsTests {
 
     companion object {
         @JvmStatic @BeforeClass fun `should be windows`(){
-            Assume.assumeTrue(JavaProcessOS == ProcessOS.Windows)
+            Assume.assumeTrue("assume $JavaProcessOS == Windows", JavaProcessOS == ProcessOS.Windows)
         }
     }
 
@@ -55,27 +55,6 @@ class WindowsTests {
         ))
         exitCode.shouldBe(0)
     }
-
-    @Test fun `when running multiline script should get both lines`() = runBlocking<Unit>{
-        //setup
-        val resource = getLocalResourcePath("MultilineScript.ps1")
-
-        //act
-        val proc = execAsync(
-                "powershell.exe",
-                "-File", resource,
-                "-ExecutionPolicy", "Bypass"
-        )
-        val result = proc.toList()
-
-        //assert
-        result shouldEqual listOf(
-                StandardOutputMessage("hello"),
-                StandardOutputMessage("nextline!"),
-                ExitCode(0)
-        )
-    }
-
 
 
     val IP_REGEX = Regex("(\\d+\\.){3}\\d+")
@@ -279,29 +258,6 @@ class WindowsTests {
         )
     }
 
-    @Test fun `when running standard error chatty script with bad exit code should get the tail of that error output`() = runBlocking<Unit> {
-        val chattyScript = getLocalResourcePath("ChattyErrorScript.ps1")
-
-        val thrown = try {
-            val running = execAsync {
-                command = listOf("powershell.exe",
-                        "-File", chattyScript,
-                        "-ThrowError",
-                        "-ExecutionPolicy", "Bypass"
-                )
-                linesForExceptionError = 5
-            }
-            running.exitCode.await()
-            null
-        }
-        catch(ex: InvalidExitValueException){ ex }
-
-        // assert that the error message contains the most recently emitted std-error message,
-        // not something from the beginning
-        val lines = (thrown?.message ?: "").lines().joinToString("") //do this to avoid powershell formatting
-        assertFalse("The Polito form is dead, insect." in lines)
-        assertTrue("I survived only by sleeping." in lines)
-    }
 
     @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
         val simpleScript = getLocalResourcePath("SimpleScript.ps1")
@@ -316,25 +272,6 @@ class WindowsTests {
         }
 
         assertEquals(listOf<String>("env:GROOSTAV_ENV_VALUE is ''"), lines)
-    }
-
-    @Test fun `when using dropping buffer should not attempt to cache any output`() = runBlocking<Unit>{
-
-        //setup
-        val simpleScript = getLocalResourcePath("MultilineScript.ps1")
-
-        //act
-        val (output, code) = exec {
-            aggregateOutputBufferLineCount = 1
-            command = listOf(
-                    "powershell.exe",
-                    "-File", simpleScript,
-                    "-ExecutionPolicy", "Bypass"
-            )
-        }
-
-        //assert
-        assertEquals(listOf<String>("nextline!"), output)
     }
 
     @Test fun `when running with non standard env should do things`() = runBlocking<Unit> {
@@ -355,6 +292,7 @@ class WindowsTests {
     }
 
     @Test fun `when syncing on exit code output should still be available`() = runBlocking<Unit> {
+        //setup
         val simpleScript = getLocalResourcePath("SimpleScript.ps1")
         val runningProcess = execAsync {
             command = listOf(
@@ -363,9 +301,12 @@ class WindowsTests {
                     "-ExecutionPolicy", "Bypass"
             )
         }
+
+        //act
         val exitCode = runningProcess.exitCode.await()
         val lines = runningProcess.toList()
 
+        //assert
         assertEquals(listOf<ProcessEvent>(
                 StandardOutputMessage("env:GROOSTAV_ENV_VALUE is ''"),
                 ExitCode(0)
@@ -373,19 +314,7 @@ class WindowsTests {
 
     }
 
-    @Test fun `when using raw character output should get sensable characters`() = runBlocking<Unit>{
-        val script = getLocalResourcePath("MultilineScript.ps1")
 
-        val runningProc = execAsync(
-                "powershell.exe",
-                "-ExecutionPolicy", "Bypass",
-                "-File", script,
-                "-Message", "testing!"
-        )
-        val chars = runningProc.standardOutput.toList()
-
-        assertEquals(listOf<Char>('h', 'e', 'l', 'l', 'o', '\n', 'n', 'e', 'x', 't', 'l', 'i', 'n', 'e', '!', '\n'), chars)
-    }
 
     @Test fun `using Read-Host with Prompt style powershell script should block script`() = runBlocking<Unit> {
 
@@ -425,7 +354,7 @@ class WindowsTests {
         assertEquals(listOf("hello!", "timed-out"), result)
     }
 
-    @Test fun `using inputPipeline style powershell script should rung normally`() = runBlocking<Unit> {
+    @Test fun `using inputPipeline style powershell script should run normally`() = runBlocking<Unit> {
 
         // in opposition to the above, powershell does 'wire standard-input' input to the 'input-pipeline',
         // so we can leverage that here fairly effectively.

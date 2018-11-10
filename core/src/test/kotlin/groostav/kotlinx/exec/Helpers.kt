@@ -1,5 +1,7 @@
 import groostav.kotlinx.exec.JavaProcessOS
 import groostav.kotlinx.exec.ProcessOS
+import groostav.kotlinx.exec.ProcessOS.Unix
+import groostav.kotlinx.exec.ProcessOS.Windows
 import groostav.kotlinx.exec.WindowsTests
 import groostav.kotlinx.exec.exec
 import java.nio.file.Paths
@@ -28,29 +30,38 @@ private fun `powershell -ExecPolicy Bypass -File`(scriptFileName: String) = list
 private fun bash(scriptFileName: String) = listOf("bash", getLocalResourcePath(scriptFileName))
 
 fun emptyScriptCommand() = when(JavaProcessOS) {
-    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("EmptyScript.ps1")
-    ProcessOS.Unix -> bash("EmptyScript.sh")
+    Windows -> `powershell -ExecPolicy Bypass -File`("EmptyScript.ps1")
+    Unix -> bash("EmptyScript.sh")
 }
 fun completableScriptCommand() = when(JavaProcessOS){
-    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("CompletableScript.ps1")
-    ProcessOS.Unix -> bash("CompletableScript.sh")
+    Windows -> `powershell -ExecPolicy Bypass -File`("CompletableScript.ps1")
+    Unix -> bash("CompletableScript.sh")
 }
 fun promptScriptCommand() = when(JavaProcessOS){
-    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("PromptScript.ps1")
-    ProcessOS.Unix -> bash("PromptScript.sh")
+    Windows -> `powershell -ExecPolicy Bypass -File`("PromptScript.ps1")
+    Unix -> bash("PromptScript.sh")
 }
 fun errorAndExitCodeOneCommand() = when(JavaProcessOS){
-    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("ExitCodeOne.ps1")
-    ProcessOS.Unix -> bash("ExitCodeOne.sh")
+    Windows -> `powershell -ExecPolicy Bypass -File`("ExitCodeOne.ps1")
+    Unix -> bash("ExitCodeOne.sh")
 }
 fun printWorkingDirectoryCommand() = when(JavaProcessOS){
-    ProcessOS.Windows -> listOf("cmd.exe", "/C", "cd")
-    ProcessOS.Unix -> listOf("bash", "-c", "pwd")
+    Windows -> listOf("cmd.exe", "/C", "cd")
+    Unix -> listOf("bash", "-c", "pwd")
 }
 fun forkerCommand() = when(JavaProcessOS){
-    ProcessOS.Windows -> `powershell -ExecPolicy Bypass -File`("forker/forker-compose-up.ps1")
-    ProcessOS.Unix -> listOf("bash", getLocalResourcePath("forker/forker-compose-up.sh"))
+    Windows -> `powershell -ExecPolicy Bypass -File`("forker/forker-compose-up.ps1")
+    Unix -> listOf("bash", "forker/forker-compose-up.sh")
 }
+fun printMultipleLinesCommand() = when(JavaProcessOS){
+    Windows -> `powershell -ExecPolicy Bypass -File`("MultilineScript.ps1")
+    Unix -> bash( "MultilineScript.sh")
+}
+fun chattyErrorScriptCommand() = when(JavaProcessOS){
+    Windows -> `powershell -ExecPolicy Bypass -File`("ChattyErrorScript.ps1")
+    Unix -> bash("ChattyErrorScript.sh")
+}
+
 
 
 
@@ -76,7 +87,7 @@ internal suspend fun assertNotListed(deadProcessID: Int){
     // but I'd rather demo working line-by-line with a regex.
 
     val runningPIDs: List<Int> = when(JavaProcessOS){
-        ProcessOS.Unix -> {
+        Unix -> {
             val firstIntOnLineRegex = Pattern.compile(
                     "(?<pid>\\d+)\\s+"+
                     "(?<terminalName>\\S+)\\s+"+
@@ -88,11 +99,11 @@ internal suspend fun assertNotListed(deadProcessID: Int){
                     .drop(1)
                     .map { it.trim() }
                     .map { pidRecord ->
-                        firstIntOnLineRegex.matcher(pidRecord).apply { find() }.group("pid").toInt()
+                        firstIntOnLineRegex.matcher(pidRecord).apply { find() }.group("pid")?.toInt()
                                 ?: TODO("no PID on `ps` record '$pidRecord'")
                     }
         }
-        ProcessOS.Windows -> {
+        Windows -> {
             val getProcessLineRegex = Pattern.compile(
                     "(?<handleCount>\\d)+\\s+" +
                     "(?<nonPagedMemKb>\\d)+\\s+" +
@@ -116,5 +127,5 @@ internal suspend fun assertNotListed(deadProcessID: Int){
 
     }
 
-    assertFalse(deadProcessID in runningPIDs)
+    assertFalse("$deadProcessID is a running pid as listed in $runningPIDs") { deadProcessID in runningPIDs }
 }

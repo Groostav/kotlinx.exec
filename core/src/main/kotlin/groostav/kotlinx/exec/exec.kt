@@ -98,6 +98,7 @@ class InvalidExitValueException internal constructor(
         val command: List<String>,
         val exitValue: Int,
         val expectedExitCodes: Set<Int>,
+        val recentStandardErrorLines: List<String>,
         message: String,
         stackTraceApplier: InvalidExitValueException.() -> Unit
 ): RuntimeException(message) {
@@ -112,7 +113,7 @@ class InvalidExitValueException internal constructor(
     }
 }
 
-internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentOutput: List<String>): Throwable {
+internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): Throwable {
     val builder = StringBuilder().apply {
 
         appendln("exec '${config.command.joinToString(" ")}'")
@@ -121,13 +122,13 @@ internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recent
         val exitCodesScription = config.expectedOutputCodes.joinToString("', '")
         appendln("exited with code $exitCode (expected ${if(multipleOutputs) "one of " else ""}'$exitCodesScription')")
 
-        if(recentOutput.any()){
+        if(recentErrorOutput.any()){
             appendln("the most recent standard-error output was:")
-            recentOutput.forEach { appendln(it) }
+            recentErrorOutput.forEach { appendln(it) }
         }
     }
 
-    val result = InvalidExitValueException(config.command, exitCode, config.expectedOutputCodes, builder.toString()){
+    val result = InvalidExitValueException(config.command, exitCode, config.expectedOutputCodes, recentErrorOutput, builder.toString()){
         val source = config.source
         when(source){
             is AsynchronousExecutionStart -> {
