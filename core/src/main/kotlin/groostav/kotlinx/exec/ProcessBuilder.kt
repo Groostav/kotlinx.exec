@@ -92,8 +92,9 @@ data class ProcessBuilder internal constructor(
         var includeDescendantsInKill: Boolean = false,
 
         /**
-         * Indication of how exit values should be interpreted, wherein 'normal' or 'success' exit codes result
-         * in regular `return` statements, and 'error' or 'failure' exit codes result in thrown exceptions.
+         * If the resulting [RunningProcess] instance completes with an exit code that is in
+         * the specified list the [RunningProcess] instance will complete normally, if it completes
+         * with a value that is not in the list then it will fail.
          *
          * How this set is interpreted:
          *

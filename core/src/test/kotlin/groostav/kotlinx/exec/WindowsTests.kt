@@ -258,22 +258,6 @@ class WindowsTests {
         )
     }
 
-
-    @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
-        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
-        val (lines, _) = exec {
-            command = listOf(
-                    "powershell.exe",
-                    "-File", simpleScript,
-                    "-ExitCode", "1",
-                    "-ExecutionPolicy", "Bypass"
-            )
-            expectedOutputCodes = setOf(1)
-        }
-
-        assertEquals(listOf<String>("env:GROOSTAV_ENV_VALUE is ''"), lines)
-    }
-
     @Test fun `when running with non standard env should do things`() = runBlocking<Unit> {
         val simpleScript = getLocalResourcePath("SimpleScript.ps1")
         val (lines, _) = exec {

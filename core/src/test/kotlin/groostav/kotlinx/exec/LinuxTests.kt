@@ -74,7 +74,7 @@ class LinuxTests {
                 "▇▇▇▇▇▇▇▇  | 80%",
                 "▇▇▇▇▇▇▇▇▇ | 90%",
                 "▇▇▇▇▇▇▇▇▇▇| 100%",
-                "",
+                "", //this blank line comes simply from the way the progress bar is written
                 "finished Important task 42"
         ), output)
 
