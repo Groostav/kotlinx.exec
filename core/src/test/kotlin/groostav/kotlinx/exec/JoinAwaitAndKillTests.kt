@@ -1,12 +1,5 @@
 package groostav.kotlinx.exec
 
-import Catch
-import assertNotListed
-import assertThrows
-import completableScriptCommand
-import emptyScriptCommand
-import errorAndExitCodeOneCommand
-import forkerCommand
 import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.filter
 import kotlinx.coroutines.experimental.channels.map
@@ -16,7 +9,6 @@ import org.amshove.kluent.shouldContain
 import org.amshove.kluent.shouldNotBe
 import org.junit.Ignore
 import org.junit.Test
-import promptScriptCommand
 import java.util.*
 import java.util.regex.Pattern
 import kotlin.test.*
@@ -25,18 +17,15 @@ class JoinAwaitAndKillTests {
 
 
     @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
-        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
-        val (lines, _) = exec {
-            command = listOf(
-                    "powershell.exe",
-                    "-File", simpleScript,
-                    "-ExitCode", "1",
-                    "-ExecutionPolicy", "Bypass"
-            )
+
+        // because '1' is an expected code, and the script exited with code 1, we see that as a regular return value,
+        // rather than a thrown UnexpectedExitCode exception
+        val (_, code) = exec {
+            command = errorAndExitCodeOneCommand()
             expectedOutputCodes = setOf(1)
         }
 
-        assertEquals(listOf<String>("env:GROOSTAV_ENV_VALUE is ''"), lines)
+        assertEquals(1, code)
     }
 
 
@@ -240,6 +229,13 @@ class JoinAwaitAndKillTests {
         // it seems that kill -9 in this cercomstance is giving me the "end process tree" behaviour I wanted. 
     }
 
+    @Test fun `when calling kill forcefully should X`(){
+        TODO("found under coverage testing, no tests call kill forcefully.")
+    }
+
+    @Test fun `when attempting to write to stdin after process sterminates should X`(){
+        TODO("hit groostav/kotlinx/exec/ChannelPumps.kt:25?")
+    }
 }
 
 

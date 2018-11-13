@@ -1,7 +1,5 @@
 package groostav.kotlinx.exec
 
-import assertNotListed
-import emptyScriptCommand
 import kotlinx.coroutines.experimental.runBlocking
 import org.junit.Test
 

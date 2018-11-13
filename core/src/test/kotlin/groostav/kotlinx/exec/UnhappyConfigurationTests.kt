@@ -1,8 +1,5 @@
 package groostav.kotlinx.exec
 
-import Catch
-import assertThrows
-import emptyScriptCommand
 import kotlinx.coroutines.experimental.runBlocking
 import org.junit.Test
 import java.nio.file.Paths
@@ -57,7 +54,7 @@ class UnhappyConfigurationTests {
 
         //act & assert
         assertThrows<IllegalStateException> { runningProcess.standardError }
-        assertThrows<IllegalStateException> { runningProcess.standardError }
+        assertThrows<IllegalStateException> { runningProcess.standardOutput }
 
         //cleanup --done outside of finally block because above errors are more important
         runningProcess.join()

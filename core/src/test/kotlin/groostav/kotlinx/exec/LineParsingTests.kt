@@ -64,4 +64,25 @@ class LineParsingTests {
         //assert
         assertEquals(listOf("abc", "xyz"), result)
     }
+
+
+    @Test fun `when parsing lines separated by custom delim should properly group`() = runBlocking<Unit>{
+        val chars = produce {
+            send('a')
+            send('b')
+            send('c')
+            send('x')
+            send('x')
+            send('x')
+            send('1')
+            send('2')
+            send('3')
+        }
+
+        //act
+        val result = chars.lines(listOf("xxx")).toList()
+
+        //assert
+        assertEquals(listOf("abc", "123"), result)
+    }
 }

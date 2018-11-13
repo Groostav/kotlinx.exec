@@ -1,7 +1,5 @@
 package groostav.kotlinx.exec
 
-import assertThrows
-import getLocalResourcePath
 import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.*
 import kotlinx.coroutines.experimental.selects.select
@@ -11,7 +9,6 @@ import org.junit.Assume
 import org.junit.BeforeClass
 import org.junit.Ignore
 import org.junit.Test
-import queueOf
 import java.util.*
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -275,35 +272,11 @@ class WindowsTests {
 
     }
 
-    @Test fun `when syncing on exit code output should still be available`() = runBlocking<Unit> {
-        //setup
-        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
-        val runningProcess = execAsync {
-            command = listOf(
-                    "powershell.exe",
-                    "-File", simpleScript,
-                    "-ExecutionPolicy", "Bypass"
-            )
-        }
-
-        //act
-        val exitCode = runningProcess.exitCode.await()
-        val lines = runningProcess.toList()
-
-        //assert
-        assertEquals(listOf<ProcessEvent>(
-                StandardOutputMessage("env:GROOSTAV_ENV_VALUE is ''"),
-                ExitCode(0)
-        ), lines)
-
-    }
-
-
 
     @Test fun `using Read-Host with Prompt style powershell script should block script`() = runBlocking<Unit> {
 
-        // this is realy unfortunate, and is a negative test.
-        // Powershells concept of 'pipelines' and interactive scripts means that
+        // this is unfortunate, and is a negative test.
+        // Powershell's concept of 'pipelines' and interactive scripts means that
         // Read-Host -Prompt "input question" will write _around_ standard-in/standard-out 'pipeline' concepts,
         // directly mutating the parent console window,
         // or in our case a chunk of memory we cant access from java-standard APIs.

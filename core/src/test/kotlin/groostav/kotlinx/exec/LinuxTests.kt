@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import getLocalResourcePath
 import kotlinx.coroutines.experimental.channels.map
 import kotlinx.coroutines.experimental.channels.toList
 import kotlinx.coroutines.experimental.runBlocking

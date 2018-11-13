@@ -180,7 +180,7 @@ internal class RunningProcessImpl(
 ): RunningProcess {
 
     private val config = _config.copy()
-    private var state: Any = fail;
+    //private var state: Any = fail;
     // we should formalize the state of this object into fields on the state machine.
     // this will make it clearer from the debugger and easier to document.
 

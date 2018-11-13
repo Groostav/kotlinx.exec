@@ -1,10 +1,9 @@
 package groostav.kotlinx.exec
 
-import errorAndExitCodeOneCommand
 import kotlinx.coroutines.experimental.runBlocking
 import org.junit.Test
-import printWorkingDirectoryCommand
 import java.nio.file.Paths
+import java.util.*
 import kotlin.test.assertEquals
 
 class ConfigurationTests {
@@ -21,7 +20,13 @@ class ConfigurationTests {
     }
 
     @Test fun `when running with specified environment parameter should see that environment parameter`() = runBlocking<Unit> {
-        TODO()
+        val uniqueKey = UUID.randomUUID()
+        val (result, code) = exec {
+            command = printASDFEnvironmentParameterCommand()
+            environment += "ASDF" to "1234-$uniqueKey"
+        }
+
+        assertEquals(listOf("ASDF is '1234-$uniqueKey'"), result)
     }
 
     @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{

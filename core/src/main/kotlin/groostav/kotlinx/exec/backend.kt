@@ -47,7 +47,6 @@ internal val JavaVersion = run {
 // main providers of classes returning 'Unsupported':
 //   - OS specific features
 //   - java version specific features
-// could probably make this monadic...
 internal sealed class Maybe<out T> {
     abstract val value: T
 }

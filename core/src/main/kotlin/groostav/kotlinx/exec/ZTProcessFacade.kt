@@ -3,6 +3,7 @@ package groostav.kotlinx.exec
 import org.zeroturnaround.process.PidProcess
 import org.zeroturnaround.process.Processes
 import org.zeroturnaround.process.WindowsProcess
+import java.lang.Boolean.getBoolean
 
 /**
  * backup implementation for
@@ -15,7 +16,7 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
 
     companion object: ProcessControlFacade.Factory  {
 
-        override fun create(process: Process, pid: Int) = supportedIf(ZTOnClassPath) {
+        override fun create(process: Process, pid: Int) = supportedIf(UseZeroTurnaroundIfAvailable && ZTOnClassPath) {
             ZeroTurnaroundProcessFacade(process, pid)
         }
     }
@@ -67,4 +68,5 @@ internal class ZeroTurnaroundPIDGenerator(val process: PidProcess): ProcessIDGen
     }
 }
 
-val ZTOnClassPath: Boolean = Try { Class.forName("org.zeroturnaround.process.Processes") } != null
+private val ZTOnClassPath: Boolean by lazy { Try { Class.forName("org.zeroturnaround.process.Processes") } != null }
+private val UseZeroTurnaroundIfAvailable = getBoolean("groostav.kotlinx.exec.UseZeroTurnaroundIfAvailable")

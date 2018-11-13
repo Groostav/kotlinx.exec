@@ -13,19 +13,22 @@ internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Cha
 
         val writer = OutputStreamWriter(this@toSendChannel, config.encoding)
 
-        consumeEach { nextChar ->
+        try {
+            consumeEach { nextChar ->
 
-            try {
-                writer.append(nextChar)
-                if(nextChar == config.inputFlushMarker) writer.flush()
-            }
-            catch (ex: IOException) {
-                //writer was closed, process was terminated.
-                //TODO need a test to induce this, verify correctness.
-                return@actor
+                try {
+                    writer.append(nextChar)
+                    if (nextChar == config.inputFlushMarker) writer.flush()
+                }
+                catch (ex: IOException) {
+                    //writer was closed, process was terminated.
+                    //TODO need a test to induce this, verify correctness.
+                    return@actor
+                }
             }
         }
-
-        writer.close()
+        finally {
+            writer.close()
+        }
     }
 }

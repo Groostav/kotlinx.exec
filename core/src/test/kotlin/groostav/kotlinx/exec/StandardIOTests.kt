@@ -1,12 +1,10 @@
 package groostav.kotlinx.exec
 
-import chattyErrorScriptCommand
 import kotlinx.coroutines.experimental.channels.toList
 import kotlinx.coroutines.experimental.runBlocking
 import org.amshove.kluent.shouldEqual
 import org.junit.Assert
 import org.junit.Test
-import printMultipleLinesCommand
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
@@ -49,6 +47,7 @@ class StandardIOTests {
                 "30 years later, the grove crash landed on Tau Ceti 5.",
                 "I survived only by sleeping."
         ), lines)
+        assertEquals(setOf(0), thrown?.expectedExitCodes)
     }
 
     @Test fun `when using dropping buffer should not attempt to cache any output`() = runBlocking<Unit>{
@@ -71,6 +70,13 @@ class StandardIOTests {
         val chars = runningProc.standardOutput.toList()
 
         assertEquals(listOf<Char>('h', 'e', 'l', 'l', 'o', '\n', 'n', 'e', 'x', 't', 'l', 'i', 'n', 'e', '!', '\n'), chars)
+    }
+
+    @Test fun `when using output stream should properly dispose writer`(){
+        TODO("""saw this udner coverage:
+            |groostav/kotlinx/exec/ChannelPumps.kt:29
+            |the writer.close() call isnt being made according to coverage. wat?
+        """.trimMargin())
     }
 
 }

@@ -1,0 +1,1 @@
+echo "ASDF is '${$env:ASDF}'"

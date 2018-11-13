@@ -1,9 +1,9 @@
-import groostav.kotlinx.exec.JavaProcessOS
-import groostav.kotlinx.exec.ProcessOS
+package groostav.kotlinx.exec
+
+
 import groostav.kotlinx.exec.ProcessOS.Unix
 import groostav.kotlinx.exec.ProcessOS.Windows
 import groostav.kotlinx.exec.WindowsTests
-import groostav.kotlinx.exec.exec
 import java.nio.file.Paths
 import java.util.*
 import java.util.regex.Pattern
@@ -61,7 +61,10 @@ fun chattyErrorScriptCommand() = when(JavaProcessOS){
     Windows -> `powershell -ExecPolicy Bypass -File`("ChattyErrorScript.ps1")
     Unix -> bash("ChattyErrorScript.sh")
 }
-
+fun printASDFEnvironmentParameterCommand() = when(JavaProcessOS){
+    Windows -> `powershell -ExecPolicy Bypass -File`("PrintASDFEnvironmentParameter.ps1")
+    Unix -> bash("PrintASDFEnvironmentParameter.sh")
+}
 
 
 

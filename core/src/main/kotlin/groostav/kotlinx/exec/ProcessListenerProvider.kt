@@ -8,9 +8,9 @@ import java.lang.Boolean.getBoolean
 
 internal interface ProcessListenerProvider {
 
-    val standardErrorChannel: Maybe<ReceiveChannel<Char>> get() = Unsupported
-    val standardOutputChannel: Maybe<ReceiveChannel<Char>> get() = Unsupported
-    val exitCodeDeferred: Maybe<Deferred<Int>> get() = Unsupported
+    val standardErrorChannel: Maybe<ReceiveChannel<Char>>// get() = Unsupported
+    val standardOutputChannel: Maybe<ReceiveChannel<Char>>// get() = Unsupported
+    val exitCodeDeferred: Maybe<Deferred<Int>>// get() = Unsupported
 
     interface Factory {
         fun create(process: Process, pid: Int, config: ProcessBuilder): ProcessListenerProvider
