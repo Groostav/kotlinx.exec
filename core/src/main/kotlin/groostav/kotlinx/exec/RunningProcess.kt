@@ -262,6 +262,8 @@ internal class RunningProcessImpl(
                 result in config.expectedOutputCodes -> result
                 else -> {
                     val errorLines = errorHistory.await().toList()
+                    fail; //ook, throwing this exception across the 'async' coroutine boundary is a bad idea.
+                    // leads to strange cancellation. 
                     val exception = makeExitCodeException(config, result, errorLines)
                     throw exception
                 }
