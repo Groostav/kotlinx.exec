@@ -1,8 +1,8 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.selects.select
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.selects.select
 import org.amshove.kluent.*
 import org.junit.Assert.assertTrue
 import org.junit.Assume
@@ -50,7 +50,7 @@ class WindowsTests {
                 "\"hello command line!\"", //extra quotes inserted by cmd
                 "exit code: 0"
         ))
-        exitCode.shouldBe(0)
+        exitCode.shouldEqual(0)
     }
 
 
@@ -125,6 +125,8 @@ class WindowsTests {
                 StandardOutputMessage(line = "Have a nice day!"),
                 ExitCode(code = 0)
         )
+
+        localDecoder.close()
 
         // regarding order: there is a race condition here
         // individual lines have happens-before, but the mixing of standard-error and standard-out isn't fixed here,

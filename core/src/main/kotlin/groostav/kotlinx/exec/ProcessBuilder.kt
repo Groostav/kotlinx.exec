@@ -1,8 +1,10 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.CoroutineScope
 import java.nio.charset.Charset
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.lang.ProcessBuilder as PRocBuilder
 
 data class ProcessBuilder internal constructor(
 
@@ -123,7 +125,8 @@ data class ProcessBuilder internal constructor(
         var linesForExceptionError: Int = 15,
 
         //used to point at caller of exec() through suspension context
-        internal var source: ExecEntryPoint? = null
+        internal var source: ExecEntryPoint? = null,
+        internal val scope: CoroutineScope
 ) {
 
     override fun toString(): String = "ProcessBuilder(" +
@@ -154,9 +157,9 @@ private fun String.encodeLineChars() = this
         .replace("\r", "\\r")
         .replace("\n", "\\n")
 
-internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
+internal inline fun processBuilder(coroutineScope: CoroutineScope, configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
 
-    val initial = ProcessBuilder().apply(configureBlock)
+    val initial = ProcessBuilder(scope = coroutineScope).apply(configureBlock)
     val initialCommandList = initial.command.toList()
 
     val result = initial.copy (

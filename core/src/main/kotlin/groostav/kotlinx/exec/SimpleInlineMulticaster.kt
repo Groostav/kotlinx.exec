@@ -1,11 +1,15 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.ReceiveChannel
-import kotlinx.coroutines.experimental.channels.RendezvousChannel
-import kotlinx.coroutines.experimental.channels.consumeEach
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.Channel.Factory.RENDEZVOUS
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.consumeEach
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+
+private typealias RendezvousChannel<T> = Channel<T>
 
 // the express purpose of this object is to block on send,
 // adhere to all back-pressure provided by any of the subscribers!
@@ -46,7 +50,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
         this.source = source
         trace { "publishing src=$source to $this, locked-in subs: ${newState.subs.joinToString()}" }
 
-        return launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
+        return GlobalScope.launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
             try {
                 source.consumeEach { next ->
                     for (sub in newState.subs) {
@@ -85,7 +89,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             when(it){
                 is State.Registration<T> -> {
 
-                    val subscription = object: RendezvousChannel<T>() {
+                    val subscription = object: RendezvousChannel<T> by Channel(RENDEZVOUS) {
                         val id = it.subs.size+1
                         override fun toString() = "sub$id-$name"
                     }

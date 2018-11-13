@@ -1,14 +1,14 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.ReceiveChannel
-import kotlinx.coroutines.experimental.channels.produce
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.produce
 import java.io.Reader
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.experimental.CoroutineContext
+import kotlin.coroutines.CoroutineContext
 
 
 internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int, val config: ProcessBuilder): ProcessListenerProvider {
@@ -30,7 +30,7 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
     }
     override val exitCodeDeferred = run {
         val context = BlockableDispatcher + CoroutineName("blocking-process.WaitFor")
-        Supported(async(context) { process.waitFor() })
+        Supported(config.scope.async(context) { process.waitFor() })
     }
 
     /**
@@ -44,7 +44,7 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
      */
     private fun Reader.toPumpedReceiveChannel(context: CoroutineContext = BlockableDispatcher): ReceiveChannel<Char> {
 
-        val result = produce(context) {
+        val result = config.scope.produce(context) {
 
             while (isActive) {
                 val nextCodePoint = read().takeUnless { it == EOF_VALUE }
@@ -86,14 +86,17 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
 
             trace { "prestarting $jobs on $this, possible deadlock..." }
 
-            val latch = CountDownLatch(jobs)
-            for(jobId in 1 .. jobs){
-                launch(this + CoroutineName("Prestarting-job$jobId-${this@BlockableDispatcher}")) { latch.countDown() }
+            runBlocking {
+                val latch = CountDownLatch(jobs)
+                for(jobId in 1 .. jobs){
+                    launch(CoroutineName("Prestarting-job$jobId-${this@BlockableDispatcher}")) { latch.countDown() }
+                }
+
+                latch.await()
+
+                trace { "prestarted $jobs threads on $this" }
             }
 
-            latch.await()
-
-            trace { "prestarted $jobs threads on $this" }
         }
     }
 

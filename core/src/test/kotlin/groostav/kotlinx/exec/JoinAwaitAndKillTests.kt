@@ -1,10 +1,10 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.filter
-import kotlinx.coroutines.experimental.channels.map
-import kotlinx.coroutines.experimental.channels.take
-import kotlinx.coroutines.experimental.channels.toList
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.filter
+import kotlinx.coroutines.channels.map
+import kotlinx.coroutines.channels.take
+import kotlinx.coroutines.channels.toList
 import org.amshove.kluent.shouldContain
 import org.amshove.kluent.shouldNotBe
 import org.junit.Ignore

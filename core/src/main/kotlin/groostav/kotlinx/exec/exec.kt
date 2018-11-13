@@ -1,6 +1,8 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.channels.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.channels.*
 import java.io.IOException
 import java.lang.ProcessBuilder as JProcBuilder
 
@@ -33,36 +35,36 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
 
     val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
     trace { "selected facade=$processControllerFacade" }
+
     val listenerProvider = listenerProviderFactory.create(jvmRunningProcess, processID, config)
     trace { "selected listenerProvider=$listenerProvider" }
 
     return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
 }
 
-fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
-    val configActual = processBuilder {
+fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
+    val configActual = processBuilder(coroutineScope = this@execAsync) {
         config()
-
         source = AsynchronousExecutionStart(command.toList())
     }
     return execAsync(configActual)
 }
-fun execAsync(commandFirst: String, vararg commandRest: String): RunningProcess = execAsync {
+fun CoroutineScope.execAsync(commandFirst: String, vararg commandRest: String): RunningProcess = execAsync {
     command = listOf(commandFirst) + commandRest.toList()
 }
 
 suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult {
 
-    val configActual = processBuilder {
+    val configActual = processBuilder(GlobalScope) {
         standardErrorBufferCharCount = 0
         standardOutputBufferCharCount = 0
 
-        config()
+        apply(config)
 
         source = SynchronousExecutionStart(command.toList())
     }
-    val runningProcess = execAsync(configActual)
 
+    val runningProcess = execAsync(configActual)
     runningProcess.join()
 
     val output = runningProcess
@@ -76,12 +78,12 @@ suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResul
         = exec { command = listOf(commandFirst) + commandRest }
 
 suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
-    val configActual = processBuilder {
+    val configActual = processBuilder(GlobalScope) {
         aggregateOutputBufferLineCount = 0
         standardErrorBufferCharCount = 0
         standardErrorBufferCharCount = 0
 
-        config()
+        apply(config)
 
         source = SynchronousExecutionStart(command.toList())
     }

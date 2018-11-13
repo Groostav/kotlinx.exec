@@ -1,7 +1,8 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.channels.toList
-import kotlinx.coroutines.experimental.runBlocking
+import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.channels.toList
+import kotlinx.coroutines.runBlocking
 import org.amshove.kluent.shouldEqual
 import org.junit.Assert
 import org.junit.Test
@@ -70,6 +71,22 @@ class StandardIOTests {
         val chars = runningProc.standardOutput.toList()
 
         assertEquals(listOf<Char>('h', 'e', 'l', 'l', 'o', '\n', 'n', 'e', 'x', 't', 'l', 'i', 'n', 'e', '!', '\n'), chars)
+    }
+
+    @Test fun `when writing value to input stream should work as appropriate`() = runBlocking {
+
+        //setup
+        val runningProc = execAsync {
+            command = readToExitValue()
+            expectedOutputCodes = setOf(42)
+        }
+
+        //act
+        runningProc.send("42")
+        val result = runningProc.exitCode.await()
+
+        //assert
+        assertEquals(42, result)
     }
 
     @Test fun `when using output stream should properly dispose writer`(){

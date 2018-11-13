@@ -1,16 +1,14 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.ConflatedBroadcastChannel
-import kotlinx.coroutines.experimental.channels.ReceiveChannel
-import kotlinx.coroutines.experimental.channels.produce
-import kotlinx.coroutines.experimental.channels.take
-import kotlinx.coroutines.experimental.selects.select
-import java.io.Closeable
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.channels.ConflatedBroadcastChannel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.selects.select
 import java.io.Reader
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.coroutines.experimental.CoroutineContext
+import kotlin.coroutines.CoroutineContext
 
 internal class PollingListenerProvider(val process: Process, val pid: Int, val config: ProcessBuilder): ProcessListenerProvider {
 
@@ -39,7 +37,7 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     }
 
     override val exitCodeDeferred = Supported(
-            async(Unconfined + CoroutineName("polling-process.waitFor")) {
+            GlobalScope.async(Unconfined + CoroutineName("polling-process.waitFor")) {
                 val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
                 delayMachine.waitForByPollingPeriodically { ! process.isAlive }
                 val result = process.exitValue()
@@ -55,7 +53,7 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
             delayMachine: DelayMachine
     ): ReceiveChannel<Char> {
 
-        val result = produce(context) {
+        val result = GlobalScope.produce(context) {
 
             val chunkBuffer = CharArray(128)
 
@@ -105,7 +103,7 @@ internal class DelayMachine(
             val backoff = backoff.updateAndGet { updateBackoff(it, delayWindow) }
 
             select<Unit> {
-                onTimeout(backoff.toLong(), TimeUnit.MILLISECONDS) { Unit }
+                onTimeout(backoff.toLong()) { Unit }
                 otherSignalsSubscription.onReceiveOrNull { Unit }
             }
 
