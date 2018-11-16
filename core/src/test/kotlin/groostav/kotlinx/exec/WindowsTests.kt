@@ -10,6 +10,8 @@ import org.junit.BeforeClass
 import org.junit.Ignore
 import org.junit.Test
 import java.util.*
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -268,10 +270,7 @@ class WindowsTests {
             environment += "GROOSTAV_ENV_VALUE" to "Testing!"
         }
 
-        assertEquals(listOf<String>(
-                "env:GROOSTAV_ENV_VALUE is 'Testing!'"
-        ), lines)
-
+        assertEquals(listOf<String>("env:GROOSTAV_ENV_VALUE is 'Testing!'"), lines)
     }
 
 
@@ -296,21 +295,30 @@ class WindowsTests {
 
         //act
         var result = emptyList<String>()
-        while( ! runningProc.isClosedForReceive) {
+        do {
             val next = select<String> {
-                runningProc.onReceive { it -> it.formattedMessage }
+                runningProc.onReceiveOrNull { it -> it?.formattedMessage ?: "closed" }
                 runningProc.exitCode.onAwait { it -> "exited" }
 
                 if("hello!" in result) {
-                    onTimeout(200) { "timed-out" }
+                    onTimeout(200) {
+                        "timed-out"
+                    }
                 }
             }
             result += next
-            if(next == "exited" || next == "timed-out") break;
         }
+        while(next != "exited" && next != "timed-out" && next != "closed")
+
+        runningProc.cancel()
 
         //assert
         assertEquals(listOf("hello!", "timed-out"), result)
+
+        fail; //bleh, so something is happening, some coroutine hasnt finished
+        //oh, yeah, nothing here actually finishes it. lol. so does that mean the scope is a problem?
+        //ok update: so somehow the kill command is having its error listener get attached after the process starts?
+        //it seems that parentScope.launch(Unconfined) does not give you the behaviour of the ol' launch(Unconfined)
     }
 
     @Test fun `using inputPipeline style powershell script should run normally`() = runBlocking<Unit> {

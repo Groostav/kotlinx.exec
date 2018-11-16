@@ -159,6 +159,10 @@ internal class RunningProcessFactory {
                 _standardErrorLines
         )
 
+        //TODO: ok so this is kind've illegal, the above constructor starts a number of coroutines.
+        // it seems like its trying to use launch(Unconfined) as a way to get them into a "ready" state synchronously.
+        // this is prone to failure. We need better state management.
+        // ok, so it turns out parentScope.launch(Unconfined) does **not** give you the above assumed behaviour. fuu.
         _standardOutputLines.syndicateAsync(_standardOutputSource.openSubscription().lines(config.delimiters))
         _standardErrorLines.syndicateAsync(_standardErrorSource.openSubscription().lines(config.delimiters))
         _standardOutputSource.syndicateAsync(processListenerProvider.standardOutputChannel.value)
@@ -253,33 +257,41 @@ internal class RunningProcessImpl(
     }
 
     //user-facing control root.
-    override val exitCode: Deferred<Int> = config.scope.async<Int>(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
-        return@async try {
-            val result = _exitCode.await()
+    override val exitCode: Deferred<Int> = CompletableDeferred<Int>().apply {
+        //use launch rather than async to avoid throwing across coroutine boundary.
+        config.scope.launch(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
+            val (result: Int?, ex: Throwable?) = try {
+                val result = _exitCode.await()
 
-            when {
-                killed.get() -> throw CancellationException()
-                result in config.expectedOutputCodes -> result
-                else -> {
-                    val errorLines = errorHistory.await().toList()
-                    fail; //ook, throwing this exception across the 'async' coroutine boundary is a bad idea.
-                    // leads to strange cancellation. 
-                    val exception = makeExitCodeException(config, result, errorLines)
-                    throw exception
+                when {
+                    killed.get() -> throw CancellationException()
+                    result in config.expectedOutputCodes -> result to null
+                    else -> {
+                        val errorLines = errorHistory.await().toList()
+                        val exception = makeExitCodeException(config, result, errorLines)
+                        null to exception
+                    }
                 }
             }
-        }
-        catch (ex: CancellationException) {
-            killOnceWithoutSync()
-            _exitCode.join()
-            throw ex
-        }
-        finally {
-            shutdownZipper.waitFor(ShutdownItem.ExitCodeJoin)
-            trace { "exitCode pid=$processID in finally block, killed=$killed" }
-        }
-    }
+            catch (ex: CancellationException) {
+                killOnceWithoutSync()
+                _exitCode.join()
+                null to ex
+            }
+            finally {
+                shutdownZipper.waitFor(ShutdownItem.ExitCodeJoin)
+                trace { "exitCode pid=$processID in finally block, killed=$killed" }
+            }
 
+            when{
+                ex != null -> completeExceptionally(ex)
+                result != null -> complete(result)
+            }
+
+            val x = 4;
+        }
+
+    }
 
     override suspend fun join(): Unit {
         exitCode.join()

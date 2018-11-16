@@ -187,10 +187,11 @@ class JoinAwaitAndKillTests {
             null
         }
         catch (ex: InvalidExitValueException) { ex }
-        assertTrue(
-                //assert that this stack exists, but it points somewhere inside a coroutine,
-                (thrown?.stackTrace?.get(0)?.toString() ?: "").startsWith("groostav.kotlinx.exec")
-        )
+        val firstStackFrame = thrown?.stackTrace?.get(0)?.toString() ?: ""
+        assertTrue("stack frame: $firstStackFrame points inside kotlinx.exec") {
+            //assert that this stack exists, but it points somewhere inside a coroutine,
+            firstStackFrame.startsWith("groostav.kotlinx.exec")
+        }
         assertNotNull(thrown?.cause)
         assertEquals(
                 //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
@@ -229,12 +230,31 @@ class JoinAwaitAndKillTests {
         // it seems that kill -9 in this cercomstance is giving me the "end process tree" behaviour I wanted. 
     }
 
-    @Test fun `when calling kill forcefully should X`(){
-        TODO("found under coverage testing, no tests call kill forcefully.")
+    @Test fun `when calling kill forcefully should X`() = runBlocking<Unit>{
+
+        //setup
+        val process = execAsync {
+            command = hangingCommand()
+        }
+
+        //act
+        process.kill()
+
+        //assert
+
     }
 
-    @Test fun `when attempting to write to stdin after process sterminates should X`(){
-        TODO("hit groostav/kotlinx/exec/ChannelPumps.kt:25?")
+    @Test fun `when attempting to write to stdin after process sterminates should X`() = runBlocking<Unit> {
+        //setup
+        val process = execAsync {
+            command = emptyScriptCommand()
+        }
+        process.exitCode.await()
+
+        //act & assert
+        assertThrows<CancellationException> {
+            process.send("posthumously pestering")
+        }
     }
 }
 

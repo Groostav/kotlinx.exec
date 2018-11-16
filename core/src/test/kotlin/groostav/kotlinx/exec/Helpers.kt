@@ -69,6 +69,10 @@ fun readToExitValue() = when(JavaProcessOS){
     Windows -> `powershell -ExecPolicy Bypass -File`("ReadToExitValue.ps1")
     Unix -> TODO()
 }
+fun hangingCommand() = when(JavaProcessOS){
+    Windows -> `powershell -ExecPolicy Bypass -File`("Hanging.ps1")
+    Unix -> TODO()
+}
 
 
 

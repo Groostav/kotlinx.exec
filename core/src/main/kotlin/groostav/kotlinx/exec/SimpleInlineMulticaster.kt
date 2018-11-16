@@ -27,7 +27,6 @@ class SimpleInlineMulticaster<T>(val name: String) {
     private val state: AtomicReference<State<T>> = AtomicReference(State.Registration())
     private var source: ReceiveChannel<T>? = null
     private val sourceJob = CompletableDeferred<Unit>()
-    private val subId = AtomicInteger(0)
 
     init {
         trace { "instanced $this" }
