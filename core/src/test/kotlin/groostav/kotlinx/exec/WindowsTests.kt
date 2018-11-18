@@ -297,8 +297,8 @@ class WindowsTests {
         var result = emptyList<String>()
         do {
             val next = select<String> {
-                runningProc.onReceiveOrNull { it -> it?.formattedMessage ?: "closed" }
-                runningProc.exitCode.onAwait { it -> "exited" }
+                runningProc.onReceiveOrNull { it?.formattedMessage ?: "closed" }
+                runningProc.exitCode.onAwait { "exited" }
 
                 if("hello!" in result) {
                     onTimeout(200) {
@@ -315,7 +315,7 @@ class WindowsTests {
         //assert
         assertEquals(listOf("hello!", "timed-out"), result)
 
-        fail; //bleh, so something is happening, some coroutine hasnt finished
+//        fail; //bleh, so something is happening, some coroutine hasnt finished
         //oh, yeah, nothing here actually finishes it. lol. so does that mean the scope is a problem?
         //ok update: so somehow the kill command is having its error listener get attached after the process starts?
         //it seems that parentScope.launch(Unconfined) does not give you the behaviour of the ol' launch(Unconfined)

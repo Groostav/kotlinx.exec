@@ -5,8 +5,6 @@ import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.select
 import org.junit.Ignore
 import org.junit.Test
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
 
@@ -219,5 +217,102 @@ class KotlinTests {
         assertFalse(2 in oneToSevenStepTwoSet)
         assertFalse(6 in oneToSevenStepTwoSet)
         assertFalse(8 in oneToSevenStepTwoSet)
+    }
+
+    @Ignore("expected behaviour is to hang")
+    @Test fun `when using runblockign with parent-child coroutine and child is abandoned should never return`(){
+        runBlocking {
+            launch {
+                delay(999_999_999)
+            }
+        }
+        println("done!")
+    }
+
+    @Test fun `when attempting to detect cancelation of parent should let you detect it through exceptions`() = runBlocking<Unit> {
+
+        var result: List<String> = emptyList()
+
+        val job = launch {
+
+            val childJob = GlobalScope.launch {
+                result += "doing stuff!"
+                delay(1_000)
+                result += "done!"
+            }
+
+            try {
+                childJob.join()
+            }
+            catch(ex: CancellationException){
+                result += "cancelled!"
+                throw ex
+            }
+        }
+
+        delay(100)
+        job.cancel()
+        delay(10)
+
+        assertEquals(listOf("doing stuff!", "cancelled!"), result)
+    }
+
+    @Test fun `one can detect parent job completion through onJoin`() = runBlocking{
+
+        runBlocking {
+
+            val scope: CoroutineScope = this@runBlocking
+
+            val runBlockingAsJob = scope.coroutineContext[Job]!!
+
+            GlobalScope.launch {
+                select<Unit> {
+                    runBlockingAsJob.onJoin { Unit }
+                }
+
+                println("detected!!")
+            }
+
+            delay(10)
+        }
+
+
+        delay(20)
+    }
+
+    @Test fun `one can create daemon coroutines with onjoin`() = runBlocking<Unit> {
+
+        runBlocking {
+
+            launchDaemon {
+                println("I'm a daemon!")
+                delay(20)
+                println("daemon is done!")
+            }
+
+            launch {
+                println("I'm a prime job!")
+                delay(10)
+                println("prime job is done!")
+            }
+
+            println("last line in outer job")
+        }
+
+        println("outer job returned")
+    }
+
+    private suspend fun CoroutineScope.launchDaemon(job: suspend CoroutineScope.() -> Unit){
+        val runningJob = GlobalScope.launch(block = job)
+        val parentJob = this.coroutineContext[Job]!!
+
+        GlobalScope.launch {
+            val cancel = select<Boolean>{
+                runningJob.onJoin { false }
+                parentJob.onJoin { true }
+            }
+
+            if(cancel) runningJob.cancel()
+        }
     }
 }

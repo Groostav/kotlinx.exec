@@ -309,29 +309,26 @@ internal class RunningProcessImpl(
 
         val gracefulTimeousMillis = config.gracefulTimeousMillis
 
-        if( ! killed.getAndSet(true)) {
+        if (killed.getAndSet(true)) return
+        if (_exitCode.isCompleted) return
 
-            if (_exitCode.isCompleted) return
+        trace { "killing $processID" }
 
-            trace { "killing $processID" }
+        if (gracefulTimeousMillis > 0) {
 
-            if (gracefulTimeousMillis > 0) {
+            withTimeoutOrNull(gracefulTimeousMillis) {
+                processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
 
-                withTimeoutOrNull(gracefulTimeousMillis) {
-                    processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
-
-                    _exitCode.join()
-                }
-
-                if (_exitCode.isCompleted) {
-                    return
-                }
+                _exitCode.join()
             }
 
-            processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
+            if (_exitCode.isCompleted) {
+                return
+            }
         }
-    }
 
+        processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
+    }
 
     //endregion
 
@@ -441,7 +438,7 @@ internal class RunningProcessImpl(
     override suspend fun receiveOrNull(): ProcessEvent? = aggregateChannel.receiveOrNull()
     override fun cancel() { cancel(null); Unit }
     override fun cancel(cause: Throwable?): Boolean {
-        config.scope.launch(Unconfined + CoroutineName("process(PID=$processID).cancel-kill")) { killOnceWithoutSync() }
+        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$processID).cancel-kill")) { killOnceWithoutSync() }
         return aggregateChannel.cancel(cause)
     }
 

@@ -3,6 +3,8 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.newCoroutineContext
+import kotlinx.coroutines.selects.select
 import java.io.IOException
 import java.lang.ProcessBuilder as JProcBuilder
 
@@ -43,6 +45,7 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
 }
 
 fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
+
     val configActual = processBuilder(coroutineScope = this@execAsync) {
         config()
         source = AsynchronousExecutionStart(command.toList())

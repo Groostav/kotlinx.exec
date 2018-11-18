@@ -1,13 +1,10 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
 import org.amshove.kluent.shouldEqual
-import org.junit.Assert
 import org.junit.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 
 class StandardIOTests {
 

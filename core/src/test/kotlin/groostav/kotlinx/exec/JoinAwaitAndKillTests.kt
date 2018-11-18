@@ -5,8 +5,6 @@ import kotlinx.coroutines.channels.filter
 import kotlinx.coroutines.channels.map
 import kotlinx.coroutines.channels.take
 import kotlinx.coroutines.channels.toList
-import org.amshove.kluent.shouldContain
-import org.amshove.kluent.shouldNotBe
 import org.junit.Ignore
 import org.junit.Test
 import java.util.*
@@ -46,6 +44,60 @@ class JoinAwaitAndKillTests {
         assertTrue(runningProcess.exitCode.isCompleted)
         assertFalse(runningProcess.exitCode.isActive)
         assertNotListed(runningProcess.processID)
+    }
+
+    @Test fun `when abandoning a process should hold parent scope open`() = runBlocking<Unit>{
+        // interesting behaviour: in moving from coroutines 0.X to 1.0 (ie adding parent job scope)
+        // I simply attached everything that this library did to the provided parent scope
+        // the result was that abandoning hanging processes would hang the parent job.
+        // At first this was a problem,
+        // but thinking about it, its probably best that abandon processes keep something open in their parent
+        // process since an abandon process is effectively a leaked process.
+
+        // Thus, to avoid "leaking" processes, we get this behaviour:
+        var actionSequence: List<String> = emptyList()
+        val jobThatSpawnsSubProcess = launch {
+            val proxy = this.execAsync {
+                command = hangingCommand()
+            }
+
+            actionSequence += "started sub-process"
+
+            // note: we never explicitly synchronize on `proxy.await()` or similar.
+            // meaning this job will collapse but the job wont change to "finished"
+        }
+
+        delay(10)
+        actionSequence += "sub-process status check: isComplete=${jobThatSpawnsSubProcess.isCompleted}"
+
+        jobThatSpawnsSubProcess.cancel()
+
+        assertEquals(listOf(
+                "started sub-process",
+                "sub-process status check: isComplete=false"
+        ), actionSequence)
+    }
+
+    @Test fun `when cancelling the parent job of a sub-process kill child process`() = runBlocking<Unit>{
+
+        // as a correllary to the above test, when cancelling the parent scope,
+        // we emit a `kill` command to the process.
+
+        var id: Int? = null
+        val jobThatSpawnsSubProcess = launch {
+            val proxy = this.execAsync {
+                command = hangingCommand()
+            }
+
+            id = proxy.processID
+        }
+
+        delay(10) // cant call `jobThatSpawnsProcess.join()`
+        // because it never finishes, because `hangingCommand` never exits
+
+        jobThatSpawnsSubProcess.cancel()
+
+        assertNotListed(id!!)
     }
 
     @Test fun `when cancelling a process with another consumer should simply close the resulting channel for that consumer`() = runBlocking<Unit>{

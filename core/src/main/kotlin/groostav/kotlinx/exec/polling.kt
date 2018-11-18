@@ -2,11 +2,14 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.channels.ChannelIterator
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.select
 import java.io.Reader
+import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 
@@ -77,8 +80,9 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
 
             trace { "polling of ${this@toPolledReceiveChannel} completed" }
         }
+
         return object: ReceiveChannel<Char> by result {
-            override fun toString() = "pollchan-${this@toPolledReceiveChannel}"
+            override fun toString() = "poll-${this@toPolledReceiveChannel}"
         }
     }
 }
@@ -130,4 +134,9 @@ internal fun getIntRange(key: String): IntRange? = System.getProperty(key)?.let 
             ?: throw UnsupportedOperationException("couldn't parse $it as IntRange (please use format '#..#' eg '1..234')")
     val (start, end) = match.groupValues.apply { require(size == 3) }.takeLast(2).map { it.toInt() }
     start .. end
+}
+
+object EmptyChannelIterator: ChannelIterator<Nothing> {
+    override suspend fun hasNext() = false
+    override suspend fun next() = throw NoSuchElementException()
 }
