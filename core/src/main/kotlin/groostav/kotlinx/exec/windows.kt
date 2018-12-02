@@ -13,7 +13,9 @@ import kotlinx.coroutines.channels.consumeEach
 internal class WindowsProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
 
     companion object: ProcessControlFacade.Factory {
-        override fun create(process: Process, pid: Int) = supportedIf(Platform.isWindows()) { WindowsProcessControl(process, pid) }
+        override fun create(process: Process, pid: Int) = supportedIf(Platform.isWindows()) {
+            WindowsProcessControl(process, pid)
+        }
     }
 
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Supported<Unit> {
