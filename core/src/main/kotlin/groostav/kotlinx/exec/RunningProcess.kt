@@ -191,21 +191,11 @@ internal class RunningProcessImpl(
 
     // region output
 
-    private val _standardOutput: ReceiveChannel<Char>? = run {
-        if(config.standardOutputBufferCharCount == 0) null
-        else _standardOutputSource.openSubscription().tail(config.standardOutputBufferCharCount)
-    }
-    override val standardOutput: ReceiveChannel<Char> get() = _standardOutput ?: throw IllegalStateException(
-            "no buffer specified for standard-output"
-    )
+    override val standardOutput: ReceiveChannel<Char> =
+            _standardOutputSource.openSubscription().tail(config.standardOutputBufferCharCount)
 
-    private val _standardError: ReceiveChannel<Char>? = run {
-        if(config.standardErrorBufferCharCount == 0) null
-        else _standardErrorSource.openSubscription().tail(config.standardErrorBufferCharCount)
-    }
-    override val standardError: ReceiveChannel<Char> get() = _standardError ?: throw IllegalStateException(
-            "no buffer specified for standard-error"
-    )
+    override val standardError: ReceiveChannel<Char> =
+            _standardErrorSource.openSubscription().tail(config.standardErrorBufferCharCount)
 
     // endregion
 
@@ -304,7 +294,9 @@ internal class RunningProcessImpl(
         exitCode.join()
     }
 
-    //must be reentrant, this method is called in `finally{}` logic
+    // must be reentrant, this method is called in `finally{}` logic
+    // TODO: probably in shutdown we dont want to bother with graceful shutdown,
+    // or we could make that configurable.
     private suspend fun killOnceWithoutSync() {
 
         val gracefulTimeousMillis = config.gracefulTimeousMillis

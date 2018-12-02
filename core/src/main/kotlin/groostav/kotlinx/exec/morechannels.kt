@@ -160,8 +160,10 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 
     GlobalScope.launch(Unconfined + CoroutineName(buffer.toString())) {
         try {
-            for (item in this@tail) {
-                buffer.pushForward(item)
+            if(bufferSize > 0) {
+                for (item in this@tail) {
+                    buffer.pushForward(item)
+                }
             }
         }
         finally {
