@@ -94,23 +94,15 @@ data class ProcessBuilder internal constructor(
         var includeDescendantsInKill: Boolean = false,
 
         /**
-         * If the resulting [RunningProcess] instance completes with an exit code that is in
-         * the specified list the [RunningProcess] instance will complete normally, if it completes
-         * with a value that is not in the list then it will fail.
+         * Specifies the exit codes that are considered successful, determining whether the [RunningProcess]
+         * completes normally or fails with an exception.
          *
-         * How this set is interpreted:
-         *
-         * 1. If a process exits with a code that is in this set, then calls to await [RunningProcess.exitCode]
-         *    will yield that value.
-         * 2. If the set is empty, all exit codes will be treated as valid and be yielded from
-         *    [RunningProcess.exitCode]
-         * 3. If a process exists with a code that is not in this list
-         *    and the list is not empty, an [InvalidExitValueException]
-         *    is thrown when awaiting [RunningProcess.exitCode].
-         *
-         * see [ANY_EXIT_CODE] for allowing the process to return normally regardless of exit code
+         * If a [RunningProcess] instance exits...
+         * 1. ...and this set is `null` then all exit codes will be treated as valid will be used to complete [RunningProcess.exitCode]
+         * 2. ...with an exit code that is in this set then it will be used to complete [RunningProcess.exitCode]
+         * 3. ...with an exit code that is not in this non-null set then [RunningProcess.exitCode] throws [InvalidExitValueException].
          */
-        var expectedOutputCodes: Set<Int> = setOf(0), //see also
+        var expectedOutputCodes: Set<Int>? = setOf(0), //see also
 
         /**
          * Number of lines to be kept for generation of the exception on a bad exit code.
@@ -145,12 +137,6 @@ data class ProcessBuilder internal constructor(
             ")"
 }
 
-/**
- * Indicates that a process can return with any exit code.
- */
-//TODO kotlin 1.3 includes BitSet
-val ANY_EXIT_CODE: Set<Int> = (0..Int.MAX_VALUE).asSet()
-
 object InheritedDefaultEnvironment: Map<String, String> by System.getenv()
 
 private fun String.encodeLineChars() = this
@@ -165,7 +151,7 @@ internal inline fun processBuilder(coroutineScope: CoroutineScope, configureBloc
     val result = initial.copy (
             command = initialCommandList,
             delimiters = initial.delimiters.toList(),
-            expectedOutputCodes = initial.expectedOutputCodes.toSet(),
+            expectedOutputCodes = initial.expectedOutputCodes?.toSet(),
             environment = if(initial.environment === InheritedDefaultEnvironment) initial.environment else initial.environment.toMap()
 
             //dont deep-copy source, since its internal

@@ -99,7 +99,7 @@ suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = ex
     command = listOf(commandFirst) + commandRest.toList()
 }
 
-class InvalidExitValueException internal constructor(
+class InvalidExitValueException(
         val command: List<String>,
         val exitValue: Int,
         val expectedExitCodes: Set<Int>,
