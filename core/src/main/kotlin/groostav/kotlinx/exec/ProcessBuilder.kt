@@ -119,23 +119,7 @@ data class ProcessBuilder internal constructor(
         //used to point at caller of exec() through suspension context
         internal var source: ExecEntryPoint? = null,
         internal val scope: CoroutineScope
-) {
-
-    override fun toString(): String = "ProcessBuilder(" +
-            "command=$command, " +
-            "workingDirectory=$workingDirectory, " +
-            "delimiters=${delimiters.toString().encodeLineChars()}, " +
-            "inputFlushMarker=${inputFlushMarker.toString().encodeLineChars()}, " +
-            "encoding=$encoding, " +
-            "standardErrorBufferCharCount=$standardErrorBufferCharCount, " +
-            "standardOutputBufferCharCount=$standardOutputBufferCharCount, " +
-            "aggregateOutputBufferLineCount=$aggregateOutputBufferLineCount, " +
-            "gracefulTimeousMillis=$gracefulTimeousMillis, " +
-            "includeDescendantsInKill=$includeDescendantsInKill, " +
-            "expectedOutputCodes=$expectedOutputCodes, " +
-            "linesForExceptionError=$linesForExceptionError" +
-            ")"
-}
+)
 
 object InheritedDefaultEnvironment: Map<String, String> by System.getenv()
 

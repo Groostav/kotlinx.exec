@@ -252,10 +252,11 @@ internal class RunningProcessImpl(
         config.scope.launch(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
             val (result: Int?, ex: Throwable?) = try {
                 val result = _exitCode.await()
+                val expectedCodes = config.expectedOutputCodes
 
                 when {
                     killed.get() -> throw CancellationException()
-                    result in config.expectedOutputCodes -> result to null
+                    expectedCodes == null || result in expectedCodes -> result to null
                     else -> {
                         val errorLines = errorHistory.await().toList()
                         val exception = makeExitCodeException(config, result, errorLines)
