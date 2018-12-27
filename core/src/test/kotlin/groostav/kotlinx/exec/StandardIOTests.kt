@@ -1,5 +1,7 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
 import org.amshove.kluent.shouldEqual

@@ -92,7 +92,7 @@ class JoinAwaitAndKillTests {
             id = proxy.processID
         }
 
-        delay(10) // cant call `jobThatSpawnsProcess.join()`
+        delay(100) // cant call `jobThatSpawnsProcess.join()`
         // because it never finishes, because `hangingCommand` never exits
 
         jobThatSpawnsSubProcess.cancel()

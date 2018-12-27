@@ -210,7 +210,7 @@ class WindowsTests {
 
         assertEquals("""
             |exec 'powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass'
-            |exited with code 1 (expected '0')
+            |exited with code 1 (expected 0)
             |the most recent standard-error output was:
             |this is an important message!
             |At $simpleScript:12 char:5
@@ -240,7 +240,7 @@ class WindowsTests {
 
         assertEquals("""
             |exec 'powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass'
-            |exited with code 1 (expected '0')
+            |exited with code 1 (expected 0)
             |the most recent standard-error output was:
             |this is an important message!
             |At $simpleScript:12 char:5
