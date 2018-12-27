@@ -5,7 +5,7 @@ import java.io.InputStreamReader
 import java.io.Reader
 import java.nio.CharBuffer
 
-internal val TRACE = true
+internal val TRACE = java.lang.Boolean.getBoolean("kotlinx.exec.trace")
 
 internal inline fun trace(message: () -> String){
     if(TRACE){
@@ -129,7 +129,7 @@ data class IntProgressionSet(val src: IntProgression): Set<Int> {
         require(src.step >= 1)
     }
 
-    override val size: Int = (src.last - src.first + 1) / src.step
+    override val size: Int = (src.last - src.first + 1) / src.step + 1
 
     override operator fun contains(element: Int): Boolean {
         if(element < src.first || element > src.last) return false

@@ -13,7 +13,7 @@ import java.io.OutputStreamWriter
 
 
 internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Char> {
-    return config.scope.actor<Char>(Unconfined + CoroutineName("process.stdin")) {
+    return GlobalScope.actor<Char>(Unconfined + CoroutineName("process.stdin")) {
 
         val writer = OutputStreamWriter(this@toSendChannel, config.encoding)
 

@@ -17,7 +17,7 @@ plugins {
 
 allprojects {
     group 'groostav'
-    version '0.5'
+    version '0.6'
     
     repositories {
         mavenCentral()
@@ -30,7 +30,7 @@ subprojects {
     apply plugin: 'java'
     apply plugin: 'kotlin'
     
-    sourceCompatibility = 1.8
+    sourceCompatibility = 9
 }
 
 project('core'){

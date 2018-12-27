@@ -19,8 +19,8 @@ class SimpleInlineMulticaster<T>(val name: String) {
     constructor(): this("anonymous-caster")
 
     sealed class State<T> {
-        data class Registration<T>(val subs: List<RendezvousChannel<T>> = emptyList()): State<T>()
-        data class Running<T>(val subs: List<RendezvousChannel<T>> = emptyList()): State<T>()
+        data class Registration<T>(val subs: List<Channel<T>> = emptyList()): State<T>()
+        data class Running<T>(val subs: List<Channel<T>> = emptyList()): State<T>()
         class Closed<T>(): State<T>()
     }
 
@@ -53,6 +53,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             try {
                 source.consumeEach { next ->
                     for (sub in newState.subs) {
+                        val x = 4;
                         sub.send(next)
                         // apply back-pressure from _all_ subs,
                         // suspending the upstream until all children are satisfied.
@@ -88,7 +89,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             when(it){
                 is State.Registration<T> -> {
 
-                    val subscription = object: RendezvousChannel<T> by Channel(RENDEZVOUS) {
+                    val subscription = object: Channel<T> by Channel(5) {
                         val id = it.subs.size+1
                         override fun toString() = "sub$id-$name"
                     }

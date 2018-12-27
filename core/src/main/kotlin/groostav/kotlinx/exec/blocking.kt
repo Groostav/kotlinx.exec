@@ -30,7 +30,7 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
     }
     override val exitCodeDeferred = run {
         val context = BlockableDispatcher + CoroutineName("blocking-process.WaitFor")
-        Supported(config.scope.async(context) { process.waitFor() })
+        Supported(GlobalScope.async(context) { process.waitFor() })
     }
 
     /**
@@ -44,7 +44,7 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
      */
     private fun Reader.toPumpedReceiveChannel(context: CoroutineContext = BlockableDispatcher): ReceiveChannel<Char> {
 
-        val result = config.scope.produce(context) {
+        val result = GlobalScope.produce(context + BlockableDispatcher) {
 
             while (isActive) {
                 val nextCodePoint = read().takeUnless { it == EOF_VALUE }
@@ -89,7 +89,9 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
             runBlocking {
                 val latch = CountDownLatch(jobs)
                 for(jobId in 1 .. jobs){
-                    launch(CoroutineName("Prestarting-job$jobId-${this@BlockableDispatcher}")) { latch.countDown() }
+                    val name = CoroutineName("Prestarting-job$jobId-${this@BlockableDispatcher}")
+                    launch(name + BlockableDispatcher) {
+                        latch.countDown() }
                 }
 
                 latch.await()

@@ -161,9 +161,11 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
     GlobalScope.launch(Unconfined + CoroutineName(buffer.toString())) {
         try {
             if(bufferSize > 0) {
-                for (item in this@tail) {
-                    buffer.pushForward(item)
+                val y = 4;
+                this@tail.consumeEach {
+                    buffer.pushForward(it)
                 }
+                val x = 4;
             }
         }
         finally {
@@ -175,10 +177,11 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 }
 
 private suspend inline fun <T> Channel<T>.pushForward(next: T){
-    while (! isClosedForSend && !offer(next)) {
-        val bumpedElement = receiveOrNull()
-        if (bumpedElement != null){
-            trace { "WARN: back-pressure forced drop '$bumpedElement' from ${this@pushForward}" }
-        }
-    }
+    offer(next)
+//    while (! isClosedForSend && !offer(next)) {
+//        val bumpedElement = receiveOrNull()
+//        if (bumpedElement != null){
+//            trace { "WARN: back-pressure forced drop '$bumpedElement' from ${this@pushForward}" }
+//        }
+//    }
 }

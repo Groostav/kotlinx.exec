@@ -191,20 +191,22 @@ internal class RunningProcessImpl(
 
     // region output
 
-    override val standardOutput: ReceiveChannel<Char> =
-            _standardOutputSource.openSubscription().tail(config.standardOutputBufferCharCount)
+    override val standardOutput: ReceiveChannel<Char>
+        get() = TODO()
+//            = _standardOutputSource.openSubscription().tail(config.standardOutputBufferCharCount)
 
-    override val standardError: ReceiveChannel<Char> =
-            _standardErrorSource.openSubscription().tail(config.standardErrorBufferCharCount)
+    override val standardError: ReceiveChannel<Char>
+        get() = TODO()
+//            = _standardErrorSource.openSubscription().tail(config.standardErrorBufferCharCount)
 
     // endregion
 
-    // region input
+    // region inputsst
 
     private val _standardInput: SendChannel<Char> by lazy { process.outputStream.toSendChannel(config) }
     private val inputLineLock = Mutex()
 
-    override val standardInput: SendChannel<Char> by lazy { config.scope.actor<Char> {
+    override val standardInput: SendChannel<Char> by lazy { GlobalScope.actor<Char> {
         consumeEach {
             inputLineLock.withLock {
                 _standardInput.send(it)
@@ -219,7 +221,7 @@ internal class RunningProcessImpl(
 
     private val killed = AtomicBoolean(false)
 
-    private val _exitCode = config.scope.async(Unconfined + CoroutineName("process(PID=$processID)._exitcode")) {
+    private val _exitCode = GlobalScope.async(CoroutineName("process(PID=$processID)._exitcode")) {
 
         val result = processListenerProvider.exitCodeDeferred.value.await()
 
@@ -233,7 +235,7 @@ internal class RunningProcessImpl(
         result
     }
 
-    private val errorHistory = config.scope.async<Queue<String>>(Unconfined + CoroutineName("process(PID=$processID).errorHistory")) {
+    private val errorHistory = GlobalScope.async<Queue<String>>(Unconfined + CoroutineName("process(PID=$processID).errorHistory")) {
         val result = LinkedList<String>()
         if (config.linesForExceptionError > 0) {
             _standardErrorLines.openSubscription().consumeEach {
@@ -249,13 +251,14 @@ internal class RunningProcessImpl(
     //user-facing control root.
     override val exitCode: Deferred<Int> = CompletableDeferred<Int>().apply {
         //use launch rather than async to avoid throwing across coroutine boundary.
-        config.scope.launch(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
+        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
             val (result: Int?, ex: Throwable?) = try {
                 val result = _exitCode.await()
+                val expectedCodes = config.expectedOutputCodes
 
                 when {
                     killed.get() -> throw CancellationException()
-                    result in config.expectedOutputCodes -> result to null
+                    expectedCodes == null || result in expectedCodes -> result to null
                     else -> {
                         val errorLines = errorHistory.await().toList()
                         val exception = makeExitCodeException(config, result, errorLines)
@@ -277,8 +280,6 @@ internal class RunningProcessImpl(
                 ex != null -> completeExceptionally(ex)
                 result != null -> complete(result)
             }
-
-            val x = 4;
         }
 
     }
@@ -327,7 +328,7 @@ internal class RunningProcessImpl(
     //region SendChannel
 
     private val inputLines by lazy {
-        config.scope.actor<String>(Unconfined) {
+        GlobalScope.actor<String>(Unconfined) {
             val newlineString = System.lineSeparator()
             consumeEach { nextLine ->
                 inputLineLock.withLock {
@@ -360,7 +361,7 @@ internal class RunningProcessImpl(
     private val aggregateChannel: ReceiveChannel<ProcessEvent> = when(config.aggregateOutputBufferLineCount){
         0 -> {
             val name = "aggregate[NoBufferedOutput, delay=$_exitCode]"
-            val actual = config.scope.produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name"), capacity = 1){
+            val actual = GlobalScope.produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name"), capacity = 1){
                 val code = _exitCode.await()
                 send(ExitCode(code))
 
@@ -377,7 +378,7 @@ internal class RunningProcessImpl(
 
             val name = "aggregate[out=$outputLines,err=$errorLines]"
 
-            val actual = config.scope.produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name")) {
+            val actual = GlobalScope.produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name")) {
                 try {
                     var stderrWasNull = false
                     var stdoutWasNull = false
