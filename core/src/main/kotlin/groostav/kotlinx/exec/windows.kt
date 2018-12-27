@@ -4,17 +4,18 @@ import com.sun.jna.Platform
 import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.WinNT
-import kotlinx.coroutines.experimental.CoroutineName
-import kotlinx.coroutines.experimental.Unconfined
-import kotlinx.coroutines.experimental.channels.consumeEach
-import kotlinx.coroutines.experimental.launch
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.channels.consumeEach
 
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
 // isnt supported on windows' implementation of ProcessHandle.
 internal class WindowsProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
 
     companion object: ProcessControlFacade.Factory {
-        override fun create(process: Process, pid: Int) = supportedIf(Platform.isWindows()) { WindowsProcessControl(process, pid) }
+        override fun create(process: Process, pid: Int) = supportedIf(Platform.isWindows()) {
+            WindowsProcessControl(process, pid)
+        }
     }
 
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Supported<Unit> {
@@ -30,7 +31,7 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         if(includeDescendants) command += "/T"
         command += listOf("/PID", "$pid")
 
-        launch(Unconfined + CoroutineName("process(PID=$pid).killGracefully")) {
+        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$pid).killGracefully")) {
             execAsync { this.command = command }.consumeEach { trace { it.formattedMessage } }
         }
 
@@ -44,7 +45,7 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         command += "/F"
         command += listOf("/PID", "$pid")
 
-        launch(Unconfined + CoroutineName("process(PID=$pid).killForcefully")) {
+        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$pid).killForcefully")) {
             execAsync { this.command = command }.consumeEach { trace { it.formattedMessage } }
         }
 

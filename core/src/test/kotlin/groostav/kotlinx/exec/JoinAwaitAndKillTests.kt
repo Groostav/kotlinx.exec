@@ -1,12 +1,10 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.filter
-import kotlinx.coroutines.experimental.channels.map
-import kotlinx.coroutines.experimental.channels.take
-import kotlinx.coroutines.experimental.channels.toList
-import org.amshove.kluent.shouldContain
-import org.amshove.kluent.shouldNotBe
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.filter
+import kotlinx.coroutines.channels.map
+import kotlinx.coroutines.channels.take
+import kotlinx.coroutines.channels.toList
 import org.junit.Ignore
 import org.junit.Test
 import java.util.*
@@ -46,6 +44,60 @@ class JoinAwaitAndKillTests {
         assertTrue(runningProcess.exitCode.isCompleted)
         assertFalse(runningProcess.exitCode.isActive)
         assertNotListed(runningProcess.processID)
+    }
+
+    @Test fun `when abandoning a process should hold parent scope open`() = runBlocking<Unit>{
+        // interesting behaviour: in moving from coroutines 0.X to 1.0 (ie adding parent job scope)
+        // I simply attached everything that this library did to the provided parent scope
+        // the result was that abandoning hanging processes would hang the parent job.
+        // At first this was a problem,
+        // but thinking about it, its probably best that abandon processes keep something open in their parent
+        // process since an abandon process is effectively a leaked process.
+
+        // Thus, to avoid "leaking" processes, we get this behaviour:
+        var actionSequence: List<String> = emptyList()
+        val jobThatSpawnsSubProcess = launch {
+            val proxy = this.execAsync {
+                command = hangingCommand()
+            }
+
+            actionSequence += "started sub-process"
+
+            // note: we never explicitly synchronize on `proxy.await()` or similar.
+            // meaning this job will collapse but the job wont change to "finished"
+        }
+
+        delay(10)
+        actionSequence += "sub-process status check: isComplete=${jobThatSpawnsSubProcess.isCompleted}"
+
+        jobThatSpawnsSubProcess.cancel()
+
+        assertEquals(listOf(
+                "started sub-process",
+                "sub-process status check: isComplete=false"
+        ), actionSequence)
+    }
+
+    @Test fun `when cancelling the parent job of a sub-process kill child process`() = runBlocking<Unit>{
+
+        // as a correllary to the above test, when cancelling the parent scope,
+        // we emit a `kill` command to the process.
+
+        var id: Int? = null
+        val jobThatSpawnsSubProcess = launch {
+            val proxy = this.execAsync {
+                command = hangingCommand()
+            }
+
+            id = proxy.processID
+        }
+
+        delay(10) // cant call `jobThatSpawnsProcess.join()`
+        // because it never finishes, because `hangingCommand` never exits
+
+        jobThatSpawnsSubProcess.cancel()
+
+        assertNotListed(id!!)
     }
 
     @Test fun `when cancelling a process with another consumer should simply close the resulting channel for that consumer`() = runBlocking<Unit>{
@@ -187,10 +239,11 @@ class JoinAwaitAndKillTests {
             null
         }
         catch (ex: InvalidExitValueException) { ex }
-        assertTrue(
-                //assert that this stack exists, but it points somewhere inside a coroutine,
-                (thrown?.stackTrace?.get(0)?.toString() ?: "").startsWith("groostav.kotlinx.exec")
-        )
+        val firstStackFrame = thrown?.stackTrace?.get(0)?.toString() ?: ""
+        assertTrue("stack frame: $firstStackFrame points inside kotlinx.exec") {
+            //assert that this stack exists, but it points somewhere inside a coroutine,
+            firstStackFrame.startsWith("groostav.kotlinx.exec")
+        }
         assertNotNull(thrown?.cause)
         assertEquals(
                 //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
@@ -229,12 +282,31 @@ class JoinAwaitAndKillTests {
         // it seems that kill -9 in this cercomstance is giving me the "end process tree" behaviour I wanted. 
     }
 
-    @Test fun `when calling kill forcefully should X`(){
-        TODO("found under coverage testing, no tests call kill forcefully.")
+    @Test fun `when calling kill forcefully should X`() = runBlocking<Unit>{
+
+        //setup
+        val process = execAsync {
+            command = hangingCommand()
+        }
+
+        //act
+        process.kill()
+
+        //assert
+
     }
 
-    @Test fun `when attempting to write to stdin after process sterminates should X`(){
-        TODO("hit groostav/kotlinx/exec/ChannelPumps.kt:25?")
+    @Test fun `when attempting to write to stdin after process sterminates should X`() = runBlocking<Unit> {
+        //setup
+        val process = execAsync {
+            command = emptyScriptCommand()
+        }
+        process.exitCode.await()
+
+        //act & assert
+        assertThrows<CancellationException> {
+            process.send("posthumously pestering")
+        }
     }
 }
 

@@ -1,17 +1,20 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.CommonPool
-import kotlinx.coroutines.experimental.CoroutineName
-import kotlinx.coroutines.experimental.Unconfined
-import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.launch
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.launch
 import java.util.*
 
 //TODO: why isn't this part of kotlinx.coroutines already? Something they know I dont?
 internal fun ReceiveChannel<Char>.lines(
         delimiters: List<String> = listOf("\r", "\n", "\r\n")
 ): ReceiveChannel<String> {
-    val result = produce<String>(Unconfined + CoroutineName("lines{$this@lines}")){
+    val result = GlobalScope.produce<String>(Unconfined + CoroutineName("lines{$this@lines}")){
 
         trace { "starting lines-${this@lines}" }
 
@@ -153,13 +156,13 @@ enum class State { NoMatch, NewMatch, ContinuedMatch }
 
 internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 
-    val buffer = object: ArrayChannel<T>(bufferSize) {
+    val buffer = object: Channel<T> by Channel(bufferSize) {
         override fun toString() = "tail$bufferSize-${this@tail}"
     }
 
     trace { "allocated buffer=$bufferSize for $buffer" }
 
-    launch(Unconfined + CoroutineName(buffer.toString())) {
+    GlobalScope.launch(Unconfined + CoroutineName(buffer.toString())) {
         try {
             for (item in this@tail) {
                 buffer.pushForward(item)
@@ -173,7 +176,7 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
     return buffer
 }
 
-private suspend inline fun <T> ArrayChannel<T>.pushForward(next: T){
+private suspend inline fun <T> Channel<T>.pushForward(next: T){
     while (! isClosedForSend && !offer(next)) {
         val bumpedElement = receiveOrNull()
         if (bumpedElement != null){

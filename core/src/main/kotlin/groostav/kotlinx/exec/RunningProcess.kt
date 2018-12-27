@@ -1,12 +1,13 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.selects.SelectClause1
-import kotlinx.coroutines.experimental.selects.SelectClause2
-import kotlinx.coroutines.experimental.selects.select
-import kotlinx.coroutines.experimental.sync.Mutex
-import kotlinx.coroutines.experimental.sync.withLock
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.selects.SelectClause1
+import kotlinx.coroutines.selects.SelectClause2
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -158,6 +159,10 @@ internal class RunningProcessFactory {
                 _standardErrorLines
         )
 
+        //TODO: ok so this is kind've illegal, the above constructor starts a number of coroutines.
+        // it seems like its trying to use launch(Unconfined) as a way to get them into a "ready" state synchronously.
+        // this is prone to failure. We need better state management.
+        // ok, so it turns out parentScope.launch(Unconfined) does **not** give you the above assumed behaviour. fuu.
         _standardOutputLines.syndicateAsync(_standardOutputSource.openSubscription().lines(config.delimiters))
         _standardErrorLines.syndicateAsync(_standardErrorSource.openSubscription().lines(config.delimiters))
         _standardOutputSource.syndicateAsync(processListenerProvider.standardOutputChannel.value)
@@ -209,7 +214,7 @@ internal class RunningProcessImpl(
     private val _standardInput: SendChannel<Char> by lazy { process.outputStream.toSendChannel(config) }
     private val inputLineLock = Mutex()
 
-    override val standardInput: SendChannel<Char> by lazy { actor<Char> {
+    override val standardInput: SendChannel<Char> by lazy { GlobalScope.actor<Char> {
         consumeEach {
             inputLineLock.withLock {
                 _standardInput.send(it)
@@ -224,7 +229,7 @@ internal class RunningProcessImpl(
 
     private val killed = AtomicBoolean(false)
 
-    private val _exitCode = async(Unconfined + CoroutineName("process(PID=$processID)._exitcode")) {
+    private val _exitCode = GlobalScope.async(CoroutineName("process(PID=$processID)._exitcode")) {
 
         val result = processListenerProvider.exitCodeDeferred.value.await()
 
@@ -236,7 +241,7 @@ internal class RunningProcessImpl(
         result
     }
 
-    private val errorHistory = async<Queue<String>>(Unconfined + CoroutineName("process(PID=$processID).errorHistory")) {
+    private val errorHistory = GlobalScope.async<Queue<String>>(Unconfined + CoroutineName("process(PID=$processID).errorHistory")) {
         val result = LinkedList<String>()
         if (config.linesForExceptionError > 0) {
             _standardErrorLines.openSubscription().consumeEach {
@@ -250,13 +255,13 @@ internal class RunningProcessImpl(
     }
 
     //user-facing control root.
-    override val exitCode: Deferred<Int> = async<Int>(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
+    override val exitCode: Deferred<Int> = GlobalScope.async<Int>(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
         return@async try {
             val result = _exitCode.await()
 
             when {
                 killed.get() -> throw CancellationException()
-                result in config.expectedOutputCodes -> result
+                config.expectedOutputCodes.let { it != null && result in it } -> result
                 else -> {
                     val errorLines = errorHistory.await().toList()
                     val exception = makeExitCodeException(config, result, errorLines)
@@ -287,7 +292,9 @@ internal class RunningProcessImpl(
         exitCode.join()
     }
 
-    //must be reentrant, this method is called in `finally{}` logic
+    // must be reentrant, this method is called in `finally{}` logic
+    // TODO: probably in shutdown we dont want to bother with graceful shutdown,
+    // or we could make that configurable.
     private suspend fun killOnceWithoutSync() {
 
         val gracefulTimeousMillis = config.gracefulTimeousMillis
@@ -300,7 +307,7 @@ internal class RunningProcessImpl(
 
             if (gracefulTimeousMillis > 0) {
 
-                withTimeoutOrNull(gracefulTimeousMillis, TimeUnit.MILLISECONDS) {
+                withTimeoutOrNull(gracefulTimeousMillis) {
                     processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
 
                     _exitCode.join()
@@ -321,7 +328,7 @@ internal class RunningProcessImpl(
     //region SendChannel
 
     private val inputLines by lazy {
-        actor<String>(Unconfined) {
+        GlobalScope.actor<String>(Unconfined) {
             val newlineString = System.lineSeparator()
             consumeEach { nextLine ->
                 inputLineLock.withLock {
@@ -341,6 +348,7 @@ internal class RunningProcessImpl(
         _standardInput.close(cause)
         return inputLines.close(cause)
     }
+    override fun invokeOnClose(handler: (cause: Throwable?) -> Unit) = inputLines.invokeOnClose(handler)
 
     //endregion
 
@@ -352,7 +360,7 @@ internal class RunningProcessImpl(
     private val aggregateChannel: ReceiveChannel<ProcessEvent> = when(config.aggregateOutputBufferLineCount){
         0 -> {
             val name = "aggregate[NoBufferedOutput, delay=$_exitCode]"
-            val actual = produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name"), capacity = 1){
+            val actual = GlobalScope.produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name"), capacity = 1){
                 val code = _exitCode.await()
                 send(ExitCode(code))
 
@@ -369,7 +377,7 @@ internal class RunningProcessImpl(
 
             val name = "aggregate[out=$outputLines,err=$errorLines]"
 
-            val actual = produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name")) {
+            val actual = GlobalScope.produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name")) {
                 try {
                     var stderrWasNull = false
                     var stdoutWasNull = false
@@ -420,8 +428,9 @@ internal class RunningProcessImpl(
     override fun poll(): ProcessEvent? = aggregateChannel.poll()
     override suspend fun receive(): ProcessEvent = aggregateChannel.receive()
     override suspend fun receiveOrNull(): ProcessEvent? = aggregateChannel.receiveOrNull()
+    override fun cancel() { cancel(null); Unit }
     override fun cancel(cause: Throwable?): Boolean {
-        launch(Unconfined + CoroutineName("process(PID=$processID).cancel-kill")) { killOnceWithoutSync() }
+        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$processID).cancel-kill")) { killOnceWithoutSync() }
         return aggregateChannel.cancel(cause)
     }
 

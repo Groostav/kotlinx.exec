@@ -1,7 +1,7 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.ConflatedBroadcastChannel
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import org.junit.Test
 import java.util.*
 import java.util.concurrent.Executors
@@ -27,7 +27,7 @@ class DelayMachineTests{
             while(state.any { it > 0 }){
                 val next = Math.abs(random.nextInt()) % 3
                 state[next] = (state[next] - 1).coerceAtLeast(0)
-                delay(random.nextInt() % 20)
+                delay((random.nextInt() % 20).toLong())
             }
         }
 

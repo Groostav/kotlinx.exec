@@ -1,6 +1,8 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.channels.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.channels.*
 import java.io.IOException
 import java.lang.ProcessBuilder as JProcBuilder
 
@@ -33,36 +35,37 @@ internal fun execAsync(config: ProcessBuilder): RunningProcess {
 
     val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
     trace { "selected facade=$processControllerFacade" }
+
     val listenerProvider = listenerProviderFactory.create(jvmRunningProcess, processID, config)
     trace { "selected listenerProvider=$listenerProvider" }
 
     return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
 }
 
-fun execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
-    val configActual = processBuilder {
-        config()
+fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
 
+    val configActual = processBuilder(coroutineScope = this@execAsync) {
+        config()
         source = AsynchronousExecutionStart(command.toList())
     }
     return execAsync(configActual)
 }
-fun execAsync(commandFirst: String, vararg commandRest: String): RunningProcess = execAsync {
+fun CoroutineScope.execAsync(commandFirst: String, vararg commandRest: String): RunningProcess = execAsync {
     command = listOf(commandFirst) + commandRest.toList()
 }
 
 suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult {
 
-    val configActual = processBuilder {
+    val configActual = processBuilder(GlobalScope) {
         standardErrorBufferCharCount = 0
         standardOutputBufferCharCount = 0
 
-        config()
+        apply(config)
 
         source = SynchronousExecutionStart(command.toList())
     }
-    val runningProcess = execAsync(configActual)
 
+    val runningProcess = execAsync(configActual)
     runningProcess.join()
 
     val output = runningProcess
@@ -76,12 +79,12 @@ suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResul
         = exec { command = listOf(commandFirst) + commandRest }
 
 suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
-    val configActual = processBuilder {
+    val configActual = processBuilder(GlobalScope) {
         aggregateOutputBufferLineCount = 0
         standardErrorBufferCharCount = 0
         standardErrorBufferCharCount = 0
 
-        config()
+        apply(config)
 
         source = SynchronousExecutionStart(command.toList())
     }
@@ -94,10 +97,10 @@ suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = ex
     command = listOf(commandFirst) + commandRest.toList()
 }
 
-class InvalidExitValueException internal constructor(
+class InvalidExitValueException(
         val command: List<String>,
         val exitValue: Int,
-        val expectedExitCodes: Set<Int>,
+        val expectedExitCodes: Set<Int>?,
         val recentStandardErrorLines: List<String>,
         message: String,
         stackTraceApplier: InvalidExitValueException.() -> Unit
@@ -113,14 +116,28 @@ class InvalidExitValueException internal constructor(
     }
 }
 
+fun `kotlin is pretty smart`(){
+    val nullableSet: Set<Int>? = setOf(1, 2, 3)
+
+    when(nullableSet?.size){
+        null -> {}
+        else -> { nullableSet.first() } //smart-cast knew that nullableSet isnt null through the ?. operator? wow.
+    }
+}
+
 internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): Throwable {
+    val expectedCodes = config.expectedOutputCodes
     val builder = StringBuilder().apply {
 
         appendln("exec '${config.command.joinToString(" ")}'")
 
-        val multipleOutputs = config.expectedOutputCodes.size > 1
-        val exitCodesScription = config.expectedOutputCodes.joinToString("', '")
-        appendln("exited with code $exitCode (expected ${if(multipleOutputs) "one of " else ""}'$exitCodesScription')")
+        val parentheticDescription = when(expectedCodes?.size){
+            null -> "any exit value".also { TODO("How did you get here!?") }
+            1 -> "${expectedCodes.single()}"
+            in 2 .. Int.MAX_VALUE -> "one of ${expectedCodes.joinToString()}"
+            else -> TODO()
+        }
+        appendln("exited with code $exitCode (expected $parentheticDescription)")
 
         if(recentErrorOutput.any()){
             appendln("the most recent standard-error output was:")
@@ -128,7 +145,7 @@ internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recent
         }
     }
 
-    val result = InvalidExitValueException(config.command, exitCode, config.expectedOutputCodes, recentErrorOutput, builder.toString()){
+    val result = InvalidExitValueException(config.command, exitCode, expectedCodes, recentErrorOutput, builder.toString()){
         val source = config.source
         when(source){
             is AsynchronousExecutionStart -> {

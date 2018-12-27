@@ -1,9 +1,9 @@
 package groostav.kotlinx.exec
 
-import com.sun.jna.Platform
-import kotlinx.coroutines.experimental.Unconfined
-import kotlinx.coroutines.experimental.channels.consumeEach
-import kotlinx.coroutines.experimental.launch
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.launch
 
 
 internal class UnixProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
@@ -20,9 +20,11 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
 
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
 
-        launch(Unconfined) {
+        GlobalScope.launch(Unconfined) {
 
             TODO("look into psmisc or pstree implementations, see if you can reach them via JNA.")
+            //note, javascript's doin it!
+            //https://github.com/pkrumins/node-tree-kill/blob/3b5b8feeb3175a3e16ea7e0e09fdf5b8d2b87b08/index.js#L41
 
 //            val pids = when {
 //                includeDescendants -> {
@@ -43,7 +45,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
 //        if(includeDescendants) return Unsupported
         TODO("look into psmisc or pstree implementations, see if you can reach them via JNA.")
 
-        launch(Unconfined) {
+        GlobalScope.launch(Unconfined) {
             execAsync { command = listOf("kill", "-9", "$pid") }.consumeEach { trace { it.formattedMessage } }
         }
 

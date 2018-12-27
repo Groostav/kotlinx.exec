@@ -1,16 +1,15 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.ConflatedBroadcastChannel
-import kotlinx.coroutines.experimental.channels.ReceiveChannel
-import kotlinx.coroutines.experimental.channels.produce
-import kotlinx.coroutines.experimental.channels.take
-import kotlinx.coroutines.experimental.selects.select
-import java.io.Closeable
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.channels.ChannelIterator
+import kotlinx.coroutines.channels.ConflatedBroadcastChannel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.selects.select
 import java.io.Reader
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.coroutines.experimental.CoroutineContext
+import kotlin.coroutines.CoroutineContext
 
 internal class PollingListenerProvider(val process: Process, val pid: Int, val config: ProcessBuilder): ProcessListenerProvider {
 
@@ -39,7 +38,7 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     }
 
     override val exitCodeDeferred = Supported(
-            async(Unconfined + CoroutineName("polling-process.waitFor")) {
+            GlobalScope.async(Unconfined + CoroutineName("polling-process.waitFor")) {
                 val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
                 delayMachine.waitForByPollingPeriodically { ! process.isAlive }
                 val result = process.exitValue()
@@ -55,7 +54,7 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
             delayMachine: DelayMachine
     ): ReceiveChannel<Char> {
 
-        val result = produce(context) {
+        val result = GlobalScope.produce(context) {
 
             val chunkBuffer = CharArray(128)
 
@@ -79,33 +78,34 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
 
             trace { "polling of ${this@toPolledReceiveChannel} completed" }
         }
+
         return object: ReceiveChannel<Char> by result {
-            override fun toString() = "pollchan-${this@toPolledReceiveChannel}"
+            override fun toString() = "poll-${this@toPolledReceiveChannel}"
         }
     }
 }
 
 internal class DelayMachine(
-        private val delayWindow: IntRange,
+        private val delayWindowMillis: IntRange,
         private val otherSignals: ConflatedBroadcastChannel<Unit>,
         private val delayFactor: Float = 1.5f
 ) {
 
     init {
-        require(delayWindow.start > 0)
-        require(delayWindow.endInclusive >= delayWindow.start)
+        require(delayWindowMillis.start > 0)
+        require(delayWindowMillis.endInclusive >= delayWindowMillis.start)
         require(delayFactor > 1.0f)
     }
 
-    private val backoff = AtomicInteger(delayWindow.first)
+    private val backoffMillis = AtomicInteger(delayWindowMillis.first)
     private val otherSignalsSubscription = otherSignals.openSubscription()
 
     suspend fun waitForByPollingPeriodically(condition: () -> Boolean){
         while( ! condition()) {
-            val backoff = backoff.updateAndGet { updateBackoff(it, delayWindow) }
+            val backoff = backoffMillis.updateAndGet { updateBackoff(it, delayWindowMillis) }
 
             select<Unit> {
-                onTimeout(backoff.toLong(), TimeUnit.MILLISECONDS) { Unit }
+                onTimeout(backoff.toLong()) { Unit }
                 otherSignalsSubscription.onReceiveOrNull { Unit }
             }
 
@@ -116,7 +116,7 @@ internal class DelayMachine(
     }
 
     fun signalPollResult(){
-        backoff.set(delayWindow.start)
+        backoffMillis.set(delayWindowMillis.start)
         otherSignals.offer(Unit)
     }
 
@@ -132,4 +132,9 @@ internal fun getIntRange(key: String): IntRange? = System.getProperty(key)?.let 
             ?: throw UnsupportedOperationException("couldn't parse $it as IntRange (please use format '#..#' eg '1..234')")
     val (start, end) = match.groupValues.apply { require(size == 3) }.takeLast(2).map { it.toInt() }
     start .. end
+}
+
+object EmptyChannelIterator: ChannelIterator<Nothing> {
+    override suspend fun hasNext() = false
+    override suspend fun next() = throw NoSuchElementException()
 }

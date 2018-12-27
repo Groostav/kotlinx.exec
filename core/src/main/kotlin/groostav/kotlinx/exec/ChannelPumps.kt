@@ -1,15 +1,19 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.CoroutineName
-import kotlinx.coroutines.experimental.Unconfined
-import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.channels.Channel.Factory.UNLIMITED
-import java.io.*
-import kotlin.coroutines.experimental.CoroutineContext
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.channels.actor
+import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.coroutineScope
+import java.io.IOException
+import java.io.OutputStream
+import java.io.OutputStreamWriter
 
 
 internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Char> {
-    return actor<Char>(Unconfined + CoroutineName("process.stdin")) {
+    return GlobalScope.actor<Char>(Unconfined + CoroutineName("process.stdin")) {
 
         val writer = OutputStreamWriter(this@toSendChannel, config.encoding)
 

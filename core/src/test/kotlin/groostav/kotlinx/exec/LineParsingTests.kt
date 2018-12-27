@@ -1,9 +1,9 @@
 package groostav.kotlinx.exec
 
 import org.junit.Assert.assertEquals
-import kotlinx.coroutines.experimental.channels.produce
-import kotlinx.coroutines.experimental.channels.toList
-import kotlinx.coroutines.experimental.runBlocking
+import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.channels.toList
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
 

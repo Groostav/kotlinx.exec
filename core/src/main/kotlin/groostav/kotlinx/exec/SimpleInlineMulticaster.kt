@@ -1,9 +1,11 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.ReceiveChannel
-import kotlinx.coroutines.experimental.channels.RendezvousChannel
-import kotlinx.coroutines.experimental.channels.consumeEach
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers.Unconfined
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.Channel.Factory.RENDEZVOUS
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.consumeEach
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -15,15 +17,14 @@ class SimpleInlineMulticaster<T>(val name: String) {
     constructor(): this("anonymous-caster")
 
     sealed class State<T> {
-        data class Registration<T>(val subs: List<RendezvousChannel<T>> = emptyList()): State<T>()
-        data class Running<T>(val subs: List<RendezvousChannel<T>> = emptyList()): State<T>()
+        data class Registration<T>(val subs: List<Channel<T>> = emptyList()): State<T>()
+        data class Running<T>(val subs: List<Channel<T>> = emptyList()): State<T>()
         class Closed<T>(): State<T>()
     }
 
     private val state: AtomicReference<State<T>> = AtomicReference(State.Registration())
     private var source: ReceiveChannel<T>? = null
     private val sourceJob = CompletableDeferred<Unit>()
-    private val subId = AtomicInteger(0)
 
     init {
         trace { "instanced $this" }
@@ -46,7 +47,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
         this.source = source
         trace { "publishing src=$source to $this, locked-in subs: ${newState.subs.joinToString()}" }
 
-        return launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
+        return GlobalScope.launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
             try {
                 source.consumeEach { next ->
                     for (sub in newState.subs) {
@@ -85,7 +86,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             when(it){
                 is State.Registration<T> -> {
 
-                    val subscription = object: RendezvousChannel<T>() {
+                    val subscription = object: Channel<T> by Channel() {
                         val id = it.subs.size+1
                         override fun toString() = "sub$id-$name"
                     }

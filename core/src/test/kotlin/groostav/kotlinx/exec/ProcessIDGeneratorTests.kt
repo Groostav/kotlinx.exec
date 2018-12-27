@@ -1,6 +1,6 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.runBlocking
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
 class ProcessIDGeneratorTests {

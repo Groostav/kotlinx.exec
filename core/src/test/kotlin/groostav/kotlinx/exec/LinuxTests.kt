@@ -1,8 +1,8 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.experimental.channels.map
-import kotlinx.coroutines.experimental.channels.toList
-import kotlinx.coroutines.experimental.runBlocking
+import kotlinx.coroutines.channels.map
+import kotlinx.coroutines.channels.toList
+import kotlinx.coroutines.runBlocking
 import org.amshove.kluent.shouldBe
 import org.amshove.kluent.shouldEqual
 import org.junit.Assume
