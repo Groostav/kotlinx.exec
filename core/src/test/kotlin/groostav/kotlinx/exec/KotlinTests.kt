@@ -5,8 +5,9 @@ import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.select
 import org.junit.Ignore
 import org.junit.Test
+import java.io.IOException
 import kotlin.test.*
-
+import java.lang.ProcessBuilder as JProcBuilder
 
 class KotlinTests {
 
@@ -314,5 +315,26 @@ class KotlinTests {
 
             if(cancel) runningJob.cancel()
         }
+    }
+
+    @Test @Ignore fun `when writing to stdin of dead process should XYZ`(){
+        //setup
+        val proc = JProcBuilder("calc.exe")
+        val running = proc.start()
+        val result = running.waitFor()
+
+        //act & assert
+        running.outputStream.write(42) //nothing, it just buffers it.
+        assertThrows<IOException> { running.outputStream.flush() } //blam
+    }
+
+    @Ignore("I dont understand why this isnt a compiler error.")
+    //shouldnt it be "cannot use inferred return type of 'Unit' for 'x: (Int) -> Int' or some such?
+    @Test fun `things`(){
+        asdf { when(it) {} }
+    }
+
+    fun asdf(x: (Int) -> Int): Unit {
+        println("result from x(10) is ${x(10)}")
     }
 }

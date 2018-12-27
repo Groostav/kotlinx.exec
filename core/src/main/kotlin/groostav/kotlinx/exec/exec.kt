@@ -1,50 +1,18 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.channels.*
-import java.io.IOException
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.filter
+import kotlinx.coroutines.channels.map
+import kotlinx.coroutines.channels.toList
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import java.lang.ProcessBuilder as JProcBuilder
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
 
-internal fun execAsync(config: ProcessBuilder): RunningProcess {
-
-    val jvmProcessBuilder = JProcBuilder(config.command).apply {
-
-        environment().apply {
-            if(this !== config.environment) {
-                clear()
-                putAll(config.environment)
-            }
-        }
-
-        directory(config.workingDirectory.toFile())
-    }
-
-    val runningProcessFactory = RunningProcessFactory()
-
-    val listenerProviderFactory = makeListenerProviderFactory()
-
-    val jvmRunningProcess = try { jvmProcessBuilder.start() }
-            catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message!!, config, ex.takeIf { TRACE }) }
-
-    val pidProvider = makePIDGenerator(jvmRunningProcess)
-    trace { "selected pidProvider=$pidProvider" }
-    val processID = pidProvider.pid.value
-
-    val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
-    trace { "selected facade=$processControllerFacade" }
-
-    val listenerProvider = listenerProviderFactory.create(jvmRunningProcess, processID, config)
-    trace { "selected listenerProvider=$listenerProvider" }
-
-    return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
-}
-
 fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
 
-    val configActual = processBuilder(coroutineScope = this@execAsync) {
+    val configActual = processBuilder() {
         config()
         source = AsynchronousExecutionStart(command.toList())
     }
@@ -65,7 +33,13 @@ suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult {
         source = SynchronousExecutionStart(command.toList())
     }
 
-    val runningProcess = execAsync(configActual)
+    val runningProcess = GlobalScope.execAsync(configActual)
+    delay(10_000)
+    val x = 4;
+
+//    fail; //ok, TODOs afte rlunch:
+    //       - what if, really simply, we set a flag and had the actor check it? Or emitted a special message to the actor?
+    // - get syncing on the exit code working.
     runningProcess.join()
 
     val output = runningProcess
@@ -79,7 +53,7 @@ suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResul
         = exec { command = listOf(commandFirst) + commandRest }
 
 suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
-    val configActual = processBuilder(GlobalScope) {
+    val configActual = processBuilder() {
         aggregateOutputBufferLineCount = 0
         standardErrorBufferCharCount = 0
         standardErrorBufferCharCount = 0
@@ -88,7 +62,7 @@ suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
 
         source = SynchronousExecutionStart(command.toList())
     }
-    val runningProcess = execAsync(configActual)
+    val runningProcess = GlobalScope.execAsync(configActual)
     val result = runningProcess.exitCode.await()
 
     return result
@@ -164,3 +138,42 @@ internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recent
 
 class InvalidExecConfigurationException(message: String, val configuration: ProcessBuilder, cause: Exception? = null)
     : RuntimeException(message, cause)
+
+internal fun CoroutineScope.execAsync(config: ProcessBuilder): RunningProcess {
+    val scope: CoroutineScope = this@execAsync
+    val context = EmptyCoroutineContext  // TODO: what do we do with this?
+    return (ExecImplementation as ExecImplementation).execAsync(scope, context, config)
+}
+
+internal interface ExecImplementation {
+
+    fun execAsync(scope: CoroutineScope, context: CoroutineContext, config: ProcessBuilder): RunningProcess
+
+    companion object: ExecImplementation {
+
+        @InternalCoroutinesApi
+        override fun execAsync(scope: CoroutineScope, context: CoroutineContext, config: ProcessBuilder): RunningProcess {
+            val jvmProcessBuilder = JProcBuilder(config.command).apply {
+
+                val env: MutableMap<String, String> = environment()
+
+                if(env !== config.environment) {
+                    env.clear()
+                    env.putAll(config.environment)
+                }
+
+                directory(config.workingDirectory.toFile())
+            }
+
+            val listenerFactory = makeListenerProviderFactory()
+            val state = Unstarted(jvmProcessBuilder, Channels(config, listenerFactory))
+
+
+            val newContext = scope.newCoroutineContext(context)
+
+            val result = RunningProcessImpl(config, state, newContext)
+            if(config.createStarted) result.kickoff()
+            return result
+        }
+    }
+}

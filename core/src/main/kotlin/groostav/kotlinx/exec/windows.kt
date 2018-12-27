@@ -38,6 +38,7 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         return Supported(Unit)
     }
 
+    @InternalCoroutinesApi
     override fun killForcefullyAsync(includeDescendants: Boolean): Supported<Unit> {
 
         var command = listOf("taskkill")

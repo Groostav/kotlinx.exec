@@ -9,12 +9,14 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.launch
 import java.util.*
+import kotlinx.coroutines.Dispatchers.Unconfined
 
 //TODO: why isn't this part of kotlinx.coroutines already? Something they know I dont?
 internal fun ReceiveChannel<Char>.lines(
         delimiters: List<String> = listOf("\r", "\n", "\r\n")
 ): ReceiveChannel<String> {
-    val result = GlobalScope.produce<String>(Unconfined + CoroutineName("lines{$this@lines}")){
+
+    val result = GlobalScope.produce<String>(Dispatchers.Unconfined + CoroutineName("lines{$this@lines}")){
 
         trace { "starting lines-${this@lines}" }
 
@@ -27,14 +29,14 @@ internal fun ReceiveChannel<Char>.lines(
             val newState = stateMachine.translate(nextChar)
 
             when (newState) {
-                State.NoMatch -> {
+                MatchState.NoMatch -> {
                     buffer.append(nextChar)
                 }
-                State.NewMatch -> {
+                MatchState.NewMatch -> {
                     val line = buffer.takeAndClear()
                     send(line)
                 }
-                State.ContinuedMatch -> {
+                MatchState.ContinuedMatch -> {
                     //noop, drop the character.
                 }
             }
@@ -58,9 +60,9 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
     var currentMatchColumn: Int = -1
     val activeRows: BitSet = BitSet().apply { set(0, delimiters.size) }
 
-    var previousState: State = State.NoMatch
+    var previousState: MatchState = MatchState.NoMatch
 
-    fun translate(next: Char): State {
+    fun translate(next: Char): MatchState {
 
         // strategy:
         // array delimieters into a jaggad matrix,
@@ -109,15 +111,15 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
 
         //generate new state
         val nextState = when {
-            activeRows.isEmpty() -> State.NoMatch
-            currentMatchColumn == 0 -> State.NewMatch
-            previousState == State.NoMatch -> State.NewMatch
-            previousState == State.NewMatch -> State.ContinuedMatch
-            previousState == State.ContinuedMatch -> State.ContinuedMatch
+            activeRows.isEmpty() -> MatchState.NoMatch
+            currentMatchColumn == 0 -> MatchState.NewMatch
+            previousState == MatchState.NoMatch -> MatchState.NewMatch
+            previousState == MatchState.NewMatch -> MatchState.ContinuedMatch
+            previousState == MatchState.ContinuedMatch -> MatchState.ContinuedMatch
             else -> TODO()
         }
 
-        if(nextState == State.NoMatch){ reset() }
+        if(nextState == MatchState.NoMatch){ reset() }
 
         previousState = nextState
 
@@ -152,20 +154,22 @@ private inline fun BitSet.removeIf(predicate: (Int) -> Boolean){
     }
 }
 
-enum class State { NoMatch, NewMatch, ContinuedMatch }
+private enum class MatchState { NoMatch, NewMatch, ContinuedMatch }
 
 internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 
     val buffer = object: Channel<T> by Channel(bufferSize) {
-        override fun toString() = "tail$bufferSize-${this@tail}"
+        override fun toString() = "tail[$bufferSize]-${this@tail}"
     }
 
     trace { "allocated buffer=$bufferSize for $buffer" }
 
     GlobalScope.launch(Unconfined + CoroutineName(buffer.toString())) {
         try {
-            for (item in this@tail) {
-                buffer.pushForward(item)
+            if(bufferSize > 0) {
+                for (item in this@tail) {
+                    buffer.pushForward(item)
+                }
             }
         }
         finally {

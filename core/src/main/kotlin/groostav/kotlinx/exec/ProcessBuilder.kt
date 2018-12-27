@@ -32,11 +32,18 @@ data class ProcessBuilder internal constructor(
         var delimiters: List<String> = listOf("\r", "\n", "\r\n"),
 
         /**
-         * value that results in flushing values to operating system standard-input buffers.
+         * Specifies an input character that should result result in flushing the stdin stream.
+         *
+         * Using `null` will indicate that the stream must be flushed manually
+         *
+         * Flushing `stdin` is required by the java platform to push the written bytes
+         * to the sub-processes stdin buffer.
+         *
+         * @see FlushableSendChannel.flush
          */
-        // this sucks, cant use delimeters because you might flush \r separately from \n.
+        // cant use delimeters because you might flush \r separately from \n.
         // which does illicit a different behaviour from powershell.
-        var inputFlushMarker: Char = '\n',
+        var inputFlushMarker: Char? = '\n',
 
 
         var encoding: Charset = Charsets.UTF_8,
@@ -116,7 +123,14 @@ data class ProcessBuilder internal constructor(
          */
         var linesForExceptionError: Int = 15,
 
-        //used to point at caller of exec() through suspension context
+        /**
+         * Describes whether the exec call should start the process or simply create the object
+         * without starting the process.
+         */
+        var createStarted: Boolean = true,
+
+        // used to point at caller of exec() through suspension context
+        // not concerned with perf since stack trace resources are an order of magnitude smaller than sub process resources.
         internal var source: ExecEntryPoint? = null
 //        internal val scope: CoroutineScope
 )
@@ -132,6 +146,8 @@ internal inline fun processBuilder(coroutineScope: CoroutineScope, configureBloc
     val initial = ProcessBuilder().apply(configureBlock)
     val initialCommandList = initial.command.toList()
 
+    // defensive copy, user's lambda might give us a weird list instance or otherwise be nasty
+    // TODO: using named params might better solve this problem.
     val result = initial.copy (
             command = initialCommandList,
             delimiters = initial.delimiters.toList(),
@@ -151,7 +167,7 @@ internal inline fun processBuilder(coroutineScope: CoroutineScope, configureBloc
         require(standardOutputBufferCharCount >= 0)
 
         require(source != null) { "internal error: no known start point for trace" }
-    }
+    } // what the heckers
 
     return result
 }

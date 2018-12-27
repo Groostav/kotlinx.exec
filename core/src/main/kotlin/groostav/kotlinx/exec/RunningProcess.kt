@@ -1,16 +1,18 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
-import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.SelectClause2
+import kotlinx.coroutines.selects.SelectInstance
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.*
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
+import java.io.IOException
+import java.lang.IllegalStateException
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.*
+import java.lang.ProcessBuilder as JProcBuilder
 
 @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE") //renames a couple of the param names for SendChannel & ReceiveChannel
 /**
@@ -100,7 +102,7 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
      * [ProcessBuilder.standardErrorBufferCharCount] and [ProcessBuilder.aggregateOutputBufferLineCount]
      * to zero.
      */
-    override fun cancel(cause: Throwable?): Boolean
+    override fun cancel()
 
     override val isClosedForSend: Boolean
     override val isFull: Boolean
@@ -131,258 +133,498 @@ data class ExitCode(val code: Int): ProcessEvent() {
     override val formattedMessage: String get() = "Process finished with exit code $code"
 }
 
-internal class RunningProcessFactory {
+internal class Channels(val config: ProcessBuilder, val listenerFactory: ProcessListenerProvider.Factory) {
 
-    val _standardOutputLines = SimpleInlineMulticaster<String>("stdout-lines")
-    val _standardErrorLines = SimpleInlineMulticaster<String>("stderr-lines")
+    val exitCode = CompletableDeferred<Int>()
 
-    internal fun create(
-            config: ProcessBuilder,
-            process: Process,
-            processID: Int,
-            processControl: ProcessControlFacade,
-            processListenerProvider: ProcessListenerProvider
-    ): RunningProcessImpl {
+    val stdoutLines = SimpleInlineMulticaster<String>("stdout-lines")
+    val stderrLines = SimpleInlineMulticaster<String>("stderr-lines")
 
-        val _standardOutputSource = SimpleInlineMulticaster<Char>("stdout$processID")
-        val _standardErrorSource = SimpleInlineMulticaster<Char>("stderr$processID")
+    val stdout: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster<Char>("stdout")
+    val stderr: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster<Char>("stderr")
 
-        val result = RunningProcessImpl(
-                config,
-                processID,
-                process,
-                processControl,
-                processListenerProvider,
-                _standardOutputSource,
-                _standardOutputLines,
-                _standardErrorSource,
-                _standardErrorLines
-        )
+    val stdin = CompletableDeferred<FlushableSendChannel<Char>>()
 
-        //TODO: ok so this is kind've illegal, the above constructor starts a number of coroutines.
-        // it seems like its trying to use launch(Unconfined) as a way to get them into a "ready" state synchronously.
-        // this is prone to failure. We need better state management.
-        // ok, so it turns out parentScope.launch(Unconfined) does **not** give you the above assumed behaviour. fuu.
-        _standardOutputLines.syndicateAsync(_standardOutputSource.openSubscription().lines(config.delimiters))
-        _standardErrorLines.syndicateAsync(_standardErrorSource.openSubscription().lines(config.delimiters))
-        _standardOutputSource.syndicateAsync(processListenerProvider.standardOutputChannel.value)
-        _standardErrorSource.syndicateAsync(processListenerProvider.standardErrorChannel.value)
+    // region input
+    private val inputLineLock = Mutex()
 
-        return result
+    val standardInputChars: SendChannel<Char> = GlobalScope.actor<Char> {
+
+        val stdin = stdin.await() //TODO: what if we never connect? is abandoning this ok?
+        consumeEach {
+            inputLineLock.withLock {
+                stdin.send(it)
+            }
+        }
+    }
+    val standardInputLines: SendChannel<String> = GlobalScope.actor<String> {
+
+        val stdin = stdin.await()
+        val newlineChar = config.inputFlushMarker
+
+        consumeEach { nextLine ->
+            inputLineLock.withLock {
+                nextLine.forEach { stdin.send(it) }
+                newlineChar?.also { stdin.send(it) }
+                Unit
+            }
+        }
+    }
+
+    fun connect(pid: Int, process: Process){
+
+        val listenerProvider = listenerFactory.create(process, pid, config)
+
+        stdoutLines.syndicateAsync(stdout.openSubscription().lines(config.delimiters))
+        stderrLines.syndicateAsync(stderr.openSubscription().lines(config.delimiters))
+
+        stdout.syndicateAsync(listenerProvider.standardOutputChannel.value)
+        stderr.syndicateAsync(listenerProvider.standardOutputChannel.value)
+
+        GlobalScope.launch {
+            exitCode.complete(listenerProvider.exitCodeDeferred.value.await())
+        }
+
+        stdin.complete(process.outputStream.toSendChannel(config, pid))
     }
 }
 
+internal data class Proxy(
+        val config: ProcessBuilder,
+        val processID: Int,
+        val process: Process,
+        val processControlWrapper: ProcessControlFacade
+)
+
+internal sealed class State(val ordinal: Int){
+    abstract val channels: Channels
+    abstract val waiters: List<Continuation<Unit>>
+}
+internal sealed class PeeredState(ordinal: Int): State(ordinal) {
+    abstract val proxy: Proxy
+}
+
+internal data class Unstarted(
+        val jBuilder: JProcBuilder,
+        override val channels: Channels,
+        override val waiters: List<Continuation<Unit>> = emptyList()
+): State(ordinal) {
+    companion object { val ordinal: Int = 0 }
+}
+//required because j.l.Process.start() cannot be atomic
+internal data class Starting(
+        val jBuilder: java.lang.ProcessBuilder,
+        override val channels: Channels,
+        override val waiters: List<Continuation<Unit>> = emptyList()
+        // this thing represents a
+): State(1)
+
+internal data class Running(
+        val process: Process,
+        override val proxy: Proxy,
+        override val channels: Channels,
+        override val waiters: List<Continuation<Unit>> = emptyList()
+): PeeredState(ordinal){
+    companion object { val ordinal: Int = 2}
+}
+
+internal data class Doomed(
+        val stdoutEOF: Boolean = false,
+        val stderrEOF: Boolean = false,
+        val hasKillOrder: Boolean = false,
+        val exitCode: Int? = null,
+        override val proxy: Proxy,
+        override val channels: Channels,
+        override val waiters: List<Continuation<Unit>> = emptyList()
+): PeeredState(ordinal){
+    companion object { val ordinal: Int = 3 }
+}
+
+internal data class Finished(
+        val exitCode: Int,
+        override val proxy: Proxy,
+        override val channels: Channels,
+        override val waiters: List<Continuation<Unit>> = emptyList()
+): PeeredState(ordinal){
+    companion object { val ordinal: Int = 4 }
+}
+
+internal operator fun State.plus(waiter: Continuation<Unit>): State = when(this){
+    // well heres some fun kotlin boilerplate.
+    // why do I need this?
+    // unfortunately a `sealed data class` doesn't exist.
+    // we could handle this a bit more polymorphically but then I'm just putting each
+    // of the below boiler-plate into the subclasses
+    // and replacing a `when(x) is A` with a vtable lookup.
+    // yeah I think.. `sealed data class X`, which requires that all subclasses of X are data classes,
+    // but **does not** state rules about `component1()` and `component2()` would do the trick.
+    // frankly, I dont use that component1(), component2() stuff much anyways.
+    is Running -> copy(waiters = waiters + waiter)
+    is Doomed -> copy(waiters = waiters + waiter)
+    is Finished -> copy(waiters = waiters + waiter)
+    is Unstarted -> copy(waiters = waiters + waiter)
+    is Starting -> copy(waiters = waiters + waiter)
+}
+
+internal fun Doomed.copyOrFinish(
+        encounteredStdoutEOF: Boolean = stdoutEOF,
+        encounteredStderrEOF: Boolean = stderrEOF,
+        newHasKillOrder: Boolean = hasKillOrder,
+        encounteredExitCode: Int? = exitCode
+): State
+        = if(encounteredStdoutEOF && encounteredStderrEOF && encounteredExitCode != null) Finished(encounteredExitCode, proxy, channels)
+          else Doomed(encounteredStdoutEOF, encounteredStderrEOF, newHasKillOrder, encounteredExitCode, proxy, channels)
+
+
+private inline class AtomicState(private val ref: AtomicReference<State>){
+    constructor(state: State): this(AtomicReference(state))
+
+    fun getAndUpdate(update: (State) -> State): State {
+        val (initial: State, _) = getAndUpdateAndGet(update)
+        return initial
+    }
+
+    fun updateAndGet(update: (State) -> State): State {
+        val (_, updated: State) = getAndUpdateAndGet(update)
+        return updated
+    }
+
+    fun get(): State = ref.get()
+    fun set(value: State): Unit = ref.set(value)
+
+    // this is fundamentally a bad idea because it would require synchronization
+    // on the read that assumes your not in whatever state you want to select for!
+    // in other words, if you write atomicState.onChange { (it as? Finished)... } '
+    // how can you be sure its not already finished?
+
+//    @InternalCoroutinesApi
+//    val onChange: SelectClause1<State> get() = object: SelectClause1<State> {
+//        @InternalCoroutinesApi
+//        override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (State) -> R) {
+//
+//            //so there's the issue of buffering here, do we notify of previous state changes?
+//
+//            val wrapper: suspend () -> R = { block(ref.get()) }
+//
+//            val continuation = wrapper.createCoroutine(select.completion)
+//
+//            getAndUpdateAndGet { it + continuation }
+//
+////            block.startCoroutine(asdf, select.completion)
+//        }
+//    }
+
+    private fun getAndUpdateAndGet(update: (State) -> State): Pair<State, State> {
+        var initial: State
+        var updated: State
+        do {
+            initial = ref.get()
+            updated = update(initial)
+        } while (!ref.compareAndSet(initial, updated))
+
+        if (!updated::class.isInstance(initial)) {
+            initial.waiters.forEach { it.resume(Unit) }
+        }
+        return Pair(initial, updated)
+    }
+}
+
+@InternalCoroutinesApi
 internal class RunningProcessImpl(
-        _config: ProcessBuilder,
-        override val processID: Int,
-        private val process: Process,
-        private val processControlWrapper: ProcessControlFacade,
-        private val processListenerProvider: ProcessListenerProvider,
-        _standardOutputSource: SimpleInlineMulticaster<Char>,
-        _standardOutputLines: SimpleInlineMulticaster<String>,
-        _standardErrorSource: SimpleInlineMulticaster<Char>,
-        _standardErrorLines: SimpleInlineMulticaster<String>
+        val config: ProcessBuilder,
+        _state: State,
+        val parentContext: CoroutineContext
 ): RunningProcess {
 
-    private val config = _config.copy()
-    //private var state: Any = fail;
-    // we should formalize the state of this object into fields on the state machine.
-    // this will make it clearer from the debugger and easier to document.
+    // ok, so what does extending AbstractCoroutine get me?
+    // cancellation behaviour...?
 
-    // region output
+    private val state = AtomicState(_state)
+    private val finished = CompletableDeferred<Int>()
 
-    private val _standardOutput: ReceiveChannel<Char>? = run {
-        if(config.standardOutputBufferCharCount == 0) null
-        else _standardOutputSource.openSubscription().tail(config.standardOutputBufferCharCount)
+    fun kickoff() {
+
+        trace { "in onStart()" }
+
+        val oldState = state.getAndUpdate {
+            require(it is Unstarted) { "expected Unstarted but was $it" }
+            Starting(it.jBuilder, it.channels)
+        } as Unstarted
+
+        val jvmRunningProcess = try { oldState.jBuilder.start() }
+        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message!!, config, ex.takeIf { TRACE }) }
+
+        val pidProvider = makePIDGenerator(jvmRunningProcess)
+//            trace { "selected pidProvider=$pidProvider" }
+
+        val processID = pidProvider.pid.value
+//            trace { "pid=$processID" }
+
+        val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
+//            trace { "selected facade=$processControllerFacade" }
+//
+//            val listenerProvider = listenerProviderFactory.create(jvmRunningProcess, processID, config)
+//            trace { "selected listenerProvider=$listenerProvider" }
+
+        val channels = oldState.channels
+        channels.connect(processID, jvmRunningProcess)
+
+        val stdout = channels.stdout
+        launchReaper("$stdout-reaper") {
+
+            waitForState(Running.ordinal)
+            stdout.join()
+
+            val x = 4;
+
+            state.updateAndGet { when(it){
+                is Unstarted, is Starting -> TODO("state=$it")
+                is Running -> Doomed(stdoutEOF = true, proxy = it.proxy, channels = it.channels)
+                is Doomed -> it.copyOrFinish(encounteredStdoutEOF = true)
+                is Finished -> throw IllegalStateException("obtrusion of stdout completion")
+            }}
+        }
+
+        val stderr = channels.stderr
+        launchReaper("$stderr-reaper") {
+
+            waitForState(Running.ordinal)
+            stderr.join()
+
+            val x = 4;
+
+            state.updateAndGet { when(it){
+                is Unstarted, is Starting -> TODO("state=$it")
+                is Running -> Doomed(stderrEOF = true, proxy = it.proxy, channels = it.channels)
+                is Doomed -> it.copyOrFinish(encounteredStderrEOF = true)
+                is Finished -> throw IllegalStateException("obtrusion of stderr completion")
+            }}
+        }
+
+        val exitValue = channels.exitCode
+        launchReaper("$processID-exitcode-reaper") {
+
+            // TODO: ok so, consider cancellation vs kill vs aborted.
+            // the java API can probably be reasonably relied upon to produce an exit value regardless of exceptions
+            // but what about cancellation?
+            waitForState(Running.ordinal)
+            val result = exitValue.await()
+
+            val x = 4;
+
+            state.updateAndGet { when(it) {
+                is Unstarted, is Starting -> TODO("state=$it")
+                is Running -> Doomed(exitCode = result, proxy = it.proxy, channels = it.channels)
+                is Doomed -> it.copyOrFinish(encounteredExitCode = result)
+                is Finished -> throw IllegalStateException("obtrusion exit code $result for $processID")
+            }}
+        }
+
+        val proxy = Proxy(
+                config,
+                processID,
+                jvmRunningProcess,
+                processControllerFacade
+        )
+
+        this.state.set(Running(jvmRunningProcess, proxy, channels))
+
+        trace { "done onStart()" }
     }
-    override val standardOutput: ReceiveChannel<Char> get() = _standardOutput ?: throw IllegalStateException(
-            "no buffer specified for standard-output"
-    )
 
-    private val _standardError: ReceiveChannel<Char>? = run {
-        if(config.standardErrorBufferCharCount == 0) null
-        else _standardErrorSource.openSubscription().tail(config.standardErrorBufferCharCount)
+    private fun launchReaper(name: String, block: suspend CoroutineScope.() -> State){
+        // TODO I need to verify the parent-child relationship here,
+        // and the impact on cancellation
+        GlobalScope.launch(parentContext + CoroutineName(name)){
+            val newState = block()
+            teardownIfFinished(newState)
+        }
     }
-    override val standardError: ReceiveChannel<Char> get() = _standardError ?: throw IllegalStateException(
-            "no buffer specified for standard-error"
-    )
 
-    // endregion
+    private fun teardownIfFinished(newState: State) {
+        if(newState !is Finished) { return }
+
+        finished.complete(newState.exitCode);
+    }
+
+    private fun killOnceWithoutSync() {
+        val oldState = state.getAndUpdate { oldState -> when(oldState){
+            is Unstarted -> throw IllegalStateException() //TODO: cancelling an unstarted coroutine... AFAIK thats fine? Can we just hop to Finished?
+            is Starting -> throw IllegalStateException() //TODO: I have to do better here, if you create unstarted, then asynchronously cancel it, we could end up here.
+            is Running -> Doomed(hasKillOrder = true, proxy = oldState.proxy, channels = oldState.channels)
+            is Doomed -> oldState.copy(hasKillOrder = true)
+            is Finished -> oldState
+        }}
+
+        val needsToBeKilled = oldState is Running || (oldState is Doomed && !oldState.hasKillOrder)
+
+        if(needsToBeKilled){
+            val control = (oldState as? PeeredState)?.proxy?.processControlWrapper
+                    ?: throw IllegalStateException("cannot cancel process in state=$state")
+
+            // note: i'd like to synchronize on this, but the docs say
+            // This function is invoked once when this coroutine is cancelled similarly to invokeOnCompletion
+            // => Implementations of CompletionHandler must be fast and lock-free
+            // so I cant block until the resource comes back.
+            control.killForcefullyAsync(config.includeDescendantsInKill)
+        }
+    }
+
+    //TODO: this violates the "don't throw" convention of getters.
+    override val processID: Int get() = when(val state = state.get()){
+        is PeeredState -> state.proxy.processID
+        is Unstarted -> throw IllegalStateException("Process not yet started")
+        is Starting -> throw IllegalStateException("Process not yet started")
+    }
+
+    override val standardOutput: ReceiveChannel<Char> = state.get().channels.stdout.openSubscription().tail(config.standardOutputBufferCharCount)
+    override val standardError: ReceiveChannel<Char> = state.get().channels.stderr.openSubscription().tail(config.standardErrorBufferCharCount)
 
     // region input
 
-    private val _standardInput: SendChannel<Char> by lazy { process.outputStream.toSendChannel(config) }
-    private val inputLineLock = Mutex()
-
-    override val standardInput: SendChannel<Char> by lazy { GlobalScope.actor<Char> {
-        consumeEach {
-            inputLineLock.withLock {
-                _standardInput.send(it)
-            }
-        }
-        _standardInput.close()
-    }}
+    override val standardInput: SendChannel<Char> = state.get().channels.standardInputChars
 
     // endregion input
 
     //region join, kill
 
-    private val killed = AtomicBoolean(false)
+//    private val killed = AtomicBoolean(false)
 
-    private val _exitCode = GlobalScope.async(CoroutineName("process(PID=$processID)._exitcode")) {
+//    private val _exitCode = config.scope.async(Unconfined + CoroutineName("process(PID=$processID)._exitcode")) {
+//
+//        val result = processListenerProvider.exitCodeDeferred.value.await()
+//
+//        trace { "$processID exited with $result, closing streams" }
+//
+//        _standardOutputSource.join()
+//        _standardErrorSource.join()
+//        standardInput.close()
+//        inputLines.close()
+//
+//        resumeWith(Result.success(Unit))
+//        result
+//    }
 
-        val result = processListenerProvider.exitCodeDeferred.value.await()
-
-        trace { "$processID exited with $result, closing streams" }
-
-        _standardOutputSource.join()
-        _standardErrorSource.join()
-
-        result
+    override val exitCode: Deferred<Int> = GlobalScope.async {
+        waitForState(Finished.ordinal)
+        (state.get() as Finished).exitCode
     }
 
-    private val errorHistory = GlobalScope.async<Queue<String>>(Unconfined + CoroutineName("process(PID=$processID).errorHistory")) {
-        val result = LinkedList<String>()
-        if (config.linesForExceptionError > 0) {
-            _standardErrorLines.openSubscription().consumeEach {
-                result.addLast(it)
-                if (result.size > config.linesForExceptionError) {
-                    result.removeFirst()
+    //hmm, can get better safety with
+    // inline suspend fun <refied T: State> waitForState(): T
+    // but that would require converting static type info into ordinal values,
+    // and it would require states to keep a kind of history so that if somebody says
+    // Process{state=finished}.waitForState<Doomed>()
+    // we can still get them that value.
+    private suspend fun waitForState(targetStateOrdinal: Int): Unit {
+        while(state.get().ordinal < targetStateOrdinal) {
+            suspendCoroutine<Unit> { cont ->
+                val oldState = state.getAndUpdate { state ->
+                    if (state.ordinal < targetStateOrdinal) state + cont else state
+                }
+
+                //already at that state, no need to suspend.
+                if (oldState.ordinal >= targetStateOrdinal) {
+                    cont.resume(Unit)
                 }
             }
+
+            val x = 4;
         }
-        result
     }
-
-    //user-facing control root.
-    override val exitCode: Deferred<Int> = GlobalScope.async<Int>(Unconfined + CoroutineName("process(PID=$processID).exitCode")) {
-        return@async try {
-            val result = _exitCode.await()
-
-            when {
-                killed.get() -> throw CancellationException()
-                config.expectedOutputCodes.let { it != null && result in it } -> result
-                else -> {
-                    val errorLines = errorHistory.await().toList()
-                    val exception = makeExitCodeException(config, result, errorLines)
-                    throw exception
-                }
-            }
-        }
-        catch (ex: CancellationException) {
-            killOnceWithoutSync()
-            _exitCode.join()
-            throw ex
-        }
-        finally {
-            shutdownZipper.waitFor(ShutdownItem.ExitCodeJoin)
-            trace { "exitCode pid=$processID in finally block, killed=$killed" }
-        }
+    @Suppress("FINAL_UPPER_BOUND")//yeah I know, im just looking to see how well this gets used...
+    private inline suspend fun <reified T: Finished> waitForState(): T {
+        waitForState(Finished.ordinal)
+        return state.get() as Finished as T
     }
 
 
-    override suspend fun join(): Unit {
-        exitCode.join()
-        shutdownZipper.waitFor(ShutdownItem.ProcessJoin)
-        trace { "process joined" }
+    override suspend fun join() {
+        waitForState(Finished.ordinal)
     }
+
+    //    private val errorHistory = config.scope.async<Queue<String>>(Unconfined + CoroutineName("process(PID=$processID).errorHistory")) {
+//        val result = LinkedList<String>()
+//        if (config.linesForExceptionError > 0) {
+//            _standardErrorLines.openSubscription().consumeEach {
+//                result.addLast(it)
+//                if (result.size > config.linesForExceptionError) {
+//                    result.removeFirst()
+//                }
+//            }
+//        }
+//        result
+//    }
 
     override suspend fun kill(): Unit {
-        killOnceWithoutSync()
-        exitCode.join()
+        TODO()
+//        killOnceWithoutSync()
+//        join()
     }
 
-    // must be reentrant, this method is called in `finally{}` logic
-    // TODO: probably in shutdown we dont want to bother with graceful shutdown,
-    // or we could make that configurable.
-    private suspend fun killOnceWithoutSync() {
-
-        val gracefulTimeousMillis = config.gracefulTimeousMillis
-
-        if( ! killed.getAndSet(true)) {
-
-            if (_exitCode.isCompleted) return
-
-            trace { "killing $processID" }
-
-            if (gracefulTimeousMillis > 0) {
-
-                withTimeoutOrNull(gracefulTimeousMillis) {
-                    processControlWrapper.tryKillGracefullyAsync(config.includeDescendantsInKill)
-
-                    _exitCode.join()
-                }
-
-                if (_exitCode.isCompleted) {
-                    return
-                }
-            }
-
-            processControlWrapper.killForcefullyAsync(config.includeDescendantsInKill)
-        }
-    }
 
 
     //endregion
 
     //region SendChannel
 
-    private val inputLines by lazy {
-        GlobalScope.actor<String>(Unconfined) {
-            val newlineString = System.lineSeparator()
-            consumeEach { nextLine ->
-                inputLineLock.withLock {
-                    nextLine.forEach { _standardInput.send(it) }
-                    newlineString.forEach { _standardInput.send(it) }
-                }
-            }
-        }
-    }
+    private val inputLines: SendChannel<String> get() = TODO()
+//            by lazy {
+//        config.scope.actor<String>(Unconfined) {
+//            val newlineString = System.lineSeparator()
+//            consumeEach { nextLine ->
+//                inputLineLock.withLock {
+//                    nextLine.forEach { _standardInput.send(it) }
+//                    newlineString.forEach { _standardInput.send(it) }
+//                }
+//            }
+//            _standardInput.close()
+//        }
+//    }
+
+    override fun cancel() = TODO()
+    @ObsoleteCoroutinesApi override fun cancel(cause: Throwable?): Boolean = TODO()
 
     override val isClosedForSend: Boolean get() = inputLines.isClosedForSend
     override val isFull: Boolean get() = inputLines.isFull
-    override val onSend: SelectClause2<String, SendChannel<String>> = inputLines.onSend
+    override val onSend: SelectClause2<String, SendChannel<String>> get() = inputLines.onSend
     override fun offer(element: String): Boolean = inputLines.offer(element)
     override suspend fun send(element: String) = inputLines.send(element)
     override fun close(cause: Throwable?): Boolean {
-        _standardInput.close(cause)
+        TODO()
+//        _standardInput.close(cause)
         return inputLines.close(cause)
     }
     override fun invokeOnClose(handler: (cause: Throwable?) -> Unit) = inputLines.invokeOnClose(handler)
 
     //endregion
 
-    enum class ShutdownItem { ExitCodeJoin, AggregateChannel, ProcessJoin } //order matters
-    val shutdownZipper = ShutdownZipper(ShutdownItem.values().asList())
-
     //region ReceiveChannel
 
     private val aggregateChannel: ReceiveChannel<ProcessEvent> = when(config.aggregateOutputBufferLineCount){
         0 -> {
-            val name = "aggregate[NoBufferedOutput, delay=$_exitCode]"
-            val actual = GlobalScope.produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name"), capacity = 1){
-                val code = _exitCode.await()
+            val name = "aggregate[NoBufferedOutput]"
+            val actual = GlobalScope.produce<ProcessEvent>(CoroutineName("TODO"), capacity = 1){
+                val code = waitForState<Finished>().exitCode
                 send(ExitCode(code))
-
-                shutdownZipper.waitFor(ShutdownItem.AggregateChannel)
             }
             object: ReceiveChannel<ProcessEvent> by actual{
                 override fun toString() = name
             }
         }
         else -> {
-
-            val errorLines = _standardErrorLines.openSubscription()
-            val outputLines = _standardOutputLines.openSubscription()
+            val channels = state.get().channels
+            val errorLines = channels.stderrLines.openSubscription()
+            val outputLines = channels.stdoutLines.openSubscription()
 
             val name = "aggregate[out=$outputLines,err=$errorLines]"
 
-            val actual = GlobalScope.produce<ProcessEvent>(Unconfined + CoroutineName("Process(PID=$processID).$name")) {
+            val actual = GlobalScope.produce<ProcessEvent>(CoroutineName("TODO")) {
                 try {
                     var stderrWasNull = false
                     var stdoutWasNull = false
 
-                    loop@ while (isActive) {
+                    pumpingOutputs@ while (isActive && (!stderrWasNull || !stdoutWasNull) ) {
 
                         val next = select<ProcessEvent?> {
                             if (!stderrWasNull) errorLines.onReceiveOrNull { errorMessage ->
@@ -393,18 +635,19 @@ internal class RunningProcessImpl(
                                 if(outputMessage == null){ stdoutWasNull = true }
                                 outputMessage?.let { StandardOutputMessage(it) }
                             }
-                            _exitCode.onAwait { ExitCode(it) }
                         }
 
                         when (next) {
-                            null -> { }
-                            is ExitCode -> { send(next); break@loop }
-                            else -> send(next)
-                        } as Any
+                            null -> continue@pumpingOutputs
+                            else -> { send(next); continue@pumpingOutputs }
+                        }
                     }
+
+                    val result = finished.await()
+
+                    send(ExitCode(result))
                 }
                 finally {
-                    shutdownZipper.waitFor(ShutdownItem.AggregateChannel)
                     trace { "aggregate channel done" }
                 }
             }
@@ -428,11 +671,10 @@ internal class RunningProcessImpl(
     override fun poll(): ProcessEvent? = aggregateChannel.poll()
     override suspend fun receive(): ProcessEvent = aggregateChannel.receive()
     override suspend fun receiveOrNull(): ProcessEvent? = aggregateChannel.receiveOrNull()
-    override fun cancel() { cancel(null); Unit }
-    override fun cancel(cause: Throwable?): Boolean {
-        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$processID).cancel-kill")) { killOnceWithoutSync() }
-        return aggregateChannel.cancel(cause)
-    }
+
+    @Suppress("INAPPLICABLE_JVM_NAME")
+    @Deprecated(level = DeprecationLevel.HIDDEN, message = "Left here for binary compatibility")
+    @JvmName("cancel") public override fun cancel0(): Boolean = cancel(null)
 
     //endregion
 }

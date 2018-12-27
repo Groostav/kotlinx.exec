@@ -9,6 +9,8 @@ import kotlinx.coroutines.channels.consumeEach
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
+private typealias RendezvousChannel<T> = Channel<T>
+
 // the express purpose of this object is to block on send,
 // adhere to all back-pressure provided by any of the subscribers!
 // in this way we pass on any problems back up to source!
@@ -86,7 +88,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             when(it){
                 is State.Registration<T> -> {
 
-                    val subscription = object: Channel<T> by Channel() {
+                    val subscription = object: RendezvousChannel<T> by Channel(RENDEZVOUS) {
                         val id = it.subs.size+1
                         override fun toString() = "sub$id-$name"
                     }

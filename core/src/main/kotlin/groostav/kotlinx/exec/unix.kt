@@ -2,6 +2,7 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.launch
 
@@ -40,6 +41,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
         return Supported(Unit)
     }
 
+    @InternalCoroutinesApi
     override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
         //can we issue a pgrep -P call here
 //        if(includeDescendants) return Unsupported
