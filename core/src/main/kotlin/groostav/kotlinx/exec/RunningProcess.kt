@@ -5,13 +5,9 @@ import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.SelectClause2
 import kotlinx.coroutines.selects.SelectInstance
-import kotlinx.coroutines.selects.select
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import java.io.IOException
 import java.lang.IllegalStateException
 import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.suspendCoroutine
 
 @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE") //renames a couple of the param names for SendChannel & ReceiveChannel
 /**
@@ -440,9 +436,10 @@ data class ExitCode(val code: Int): ProcessEvent() {
 //}
 
 class ProcessChannels(
-        val stdin: SendChannel<Char> = Channel(),
-        val stdout: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(),
-        val stderr: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster()
+        val name: String,
+        val stdin: Channel<Char> = Channel(Channel.RENDEZVOUS),
+        val stdout: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$name-stdout"),
+        val stderr: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$name-stderr")
 )
 
 @InternalCoroutinesApi internal class ExecCoroutine(
@@ -455,18 +452,13 @@ class ProcessChannels(
         inputLines: SendChannel<String>,
         private val pidGen: ProcessIDGenerator
 ):
-        AbstractCoroutine<Int>(parentContext, true),
+        AbstractCoroutine<Int>(parentContext + makeName(config), true),
         RunningProcess,
         SelectClause1<Int>,
         ReceiveChannel<ProcessEvent> by aggregateChannel,
         SendChannel<String> by inputLines
 {
-    private var process: Process? = null
-
-    internal val listeners: ProcessListenerProvider get() {
-        val x = 4;
-        return TODO()
-    }
+    internal var process: Process? = null
 
     override val processID: Int get() = process?.let { pidGen.findPID(it) } ?: throw IllegalStateException()
 
@@ -481,46 +473,30 @@ class ProcessChannels(
     override fun onCancellation(cause: Throwable?) {
         when(cause){
             null -> {} //completed normally
-            is CancellationException -> { TODO() } // cancelled --killOnceWithoutSync?
-            else -> { TODO() } // failed --killOnceWithoutSync?
+            is CancellationException -> {  } // cancelled --killOnceWithoutSync?
+            else -> {  } // failed --killOnceWithoutSync?
         }
     }
 
     override fun cancel0(): Boolean = cancel(null)
 
     override fun cancel(cause: Throwable?): Boolean {
-        val wasCancelled: Boolean = TODO("_channel.cancel(cause)")
+        val wasCancelled: Boolean = true
         if (wasCancelled) super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
         return wasCancelled
     }
 
     override fun onStart() {
-
-        val jvmProcessBuilder = java.lang.ProcessBuilder(config.command).apply {
-
-            environment().apply {
-                if (this !== config.environment) {
-                    clear()
-                    putAll(config.environment)
-                }
-            }
-
-            directory(config.workingDirectory.toFile())
-        }
-
-        process = try { jvmProcessBuilder.start() }
-        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message!!, config, ex.takeIf { TRACE }) }
+        require(process != null)
+        require(processID != 0)
+        trace { "onStart ${config.command.first()} with PID=$processID" }
     }
 
     internal suspend fun onProcessEvent(event: ProcessEvent){
         aggregateChannel.send(event)
     }
 
-    //regarding subclassing this obnoxious internal methods:
-    // see if maybe you can find the mangled generated access method,
-    // something like super.internal$getCompletedInternal, that prevents you from forking this.
-    //
-    // then, I think we can take this, you'll need to call `process.start()` somewhere.
+
 
     //regarding cancellation:
     // problem: our cancellation is long-running.
@@ -535,9 +511,26 @@ class ProcessChannels(
     // - input lines, needs an actor.
 
     override val cancelsParent: Boolean get() = true
-    override fun getCompleted(): Int = TODO("getCompletedInternal() as Int")
-    override suspend fun await(): Int = TODO("awaitInternal() as Int")
+
+    //regarding subclassing this obnoxious internal methods:
+    // see if maybe you can find the mangled generated access method,
+    // something like super.internal$getCompletedInternal, that prevents you from forking this.
+    //
+    // then, I think we can take this, you'll need to call `process.start()` somewhere.
+    private val _methods = this::class.java.methods
+
+    private val _getCompleted = _methods.single { it.name == "getCompletedInternal\$kotlinx_coroutines_core" }
+    override fun getCompleted(): Int = _getCompleted(this) as Int
+
+    private val _await = _methods.single { it.name == "awaitInternal\$kotlinx_coroutines_core" }
+    override suspend fun await(): Int = suspendCoroutine { _await(this, it) }
+
     override val onAwait: SelectClause1<Int> get() = this
-    override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R) =
-            TODO("registerSelectClause1Internal(select, block)")
+
+    private val _registerSelectClause1 = _methods.single { it.name == "registerSelectClause1Internal\$kotlinx_coroutines_core" }
+    override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R): Unit = _registerSelectClause1(this, select, block) as Unit
+
+    companion object {
+        fun makeName(config: ProcessBuilder) = CoroutineName("exec ${config.command.joinToString()}")
+    }
 }

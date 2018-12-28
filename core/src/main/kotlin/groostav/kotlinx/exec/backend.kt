@@ -5,7 +5,8 @@ import java.io.InputStreamReader
 import java.io.Reader
 import java.nio.CharBuffer
 
-internal val TRACE = java.lang.Boolean.getBoolean("kotlinx.exec.trace")
+//internal val TRACE = java.lang.Boolean.getBoolean("kotlinx.exec.trace")
+internal val TRACE = true
 
 internal inline fun trace(message: () -> String){
     if(TRACE){

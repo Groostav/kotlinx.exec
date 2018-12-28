@@ -17,28 +17,60 @@ internal fun CoroutineScope.execAsync(
         start: CoroutineStart = CoroutineStart.DEFAULT
 ): RunningProcess {
 
-    val listenerProviderFactory = makeListenerProviderFactory()
-
     val newContext = newCoroutineContext(EmptyCoroutineContext)
-    val channels = ProcessChannels()
 
-    val aggregateChannel = Channel<ProcessEvent>(Channel.RENDEZVOUS)
+    val channels = ProcessChannels(config.command.first())
+    val stdout = channels.stdout.openSubscription().lines(config.delimiters)
+    val stderr = channels.stderr.openSubscription().lines(config.delimiters)
+
+    val aggregateChannel = Channel<ProcessEvent>(config.aggregateOutputBufferLineCount)
 
     val block: suspend ExecCoroutine.() -> Int = {
 
-        val stdout = listeners.standardOutputChannel.value.lines()
-        val exitCode = listeners.exitCodeDeferred.value
-        while(isActive){
-            val next = select<ProcessEvent> {
-                stdout.onReceive { StandardOutputMessage(it) }
-                exitCode.onAwait { ExitCode(it) }
+        val jvmProcessBuilder = java.lang.ProcessBuilder(config.command).apply {
+
+            environment().apply {
+                if (this !== config.environment) {
+                    clear()
+                    putAll(config.environment)
+                }
             }
-            onProcessEvent(next)
+
+            directory(config.workingDirectory.toFile())
         }
 
-        (stdout as Job).join()
-        //stderr..join
-        exitCode.await()
+        val process = try { jvmProcessBuilder.start() }
+        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message ?: "", config, ex) }
+
+        this.process = process
+        val listeners = makeListenerProviderFactory().create(process, processID, config)
+
+        channels.stdout.syndicateAsync(listeners.standardOutputChannel.value)
+        channels.stderr.syndicateAsync(listeners.standardErrorChannel.value)
+        GlobalScope.launch { channels.stdin.mapTo(process.outputStream.toSendChannel(config)) { it } }
+
+        val exitCode = listeners.exitCodeDeferred.value
+        var hasCode: Boolean = false
+
+        if(config.aggregateOutputBufferLineCount > 0) do {
+            val stdoutWasOpen = !stdout.isClosedForReceive
+            val stderrWasOpen = !stderr.isClosedForReceive
+
+            val next = select<ProcessEvent?> {
+                if (stdoutWasOpen) stdout.onReceiveOrNull { it?.let(::StandardOutputMessage) }
+                if (stderrWasOpen) stderr.onReceiveOrNull { it?.let(::StandardErrorMessage) }
+                if ( ! hasCode) exitCode.onAwait { ExitCode(it).also { hasCode = true } }
+            }
+            onProcessEvent(next ?: continue)
+        }
+        while (isActive && (stderrWasOpen || stdoutWasOpen || !hasCode))
+
+        val result = exitCode.await()
+
+        aggregateChannel.close()
+        standardInput.close()
+
+        result
     }
 
     val stdinMutex = Mutex()
@@ -50,7 +82,8 @@ internal fun CoroutineScope.execAsync(
             channels.stdout.openSubscription().tail(config.standardOutputBufferCharCount),
             channels.stderr.openSubscription().tail(config.standardErrorBufferCharCount),
             aggregateChannel,
-            channels.stdin.lockedBy(stdinMutex).flatMap { it.asIterable() },
+            fail; //this isnt tested: you need to make sure this actually flushes and that it actually hits the input stream.
+            channels.stdin.lockedBy(stdinMutex).flatMap { (it + config.inputFlushMarker).asIterable() },
             makePIDGenerator()
     )
     coroutine.start(start, coroutine, block)
@@ -99,6 +132,7 @@ suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResul
 
 @InternalCoroutinesApi
 suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int = coroutineScope {
+
     val configActual = processBuilder(GlobalScope) {
         aggregateOutputBufferLineCount = 0
         standardErrorBufferCharCount = 0
@@ -109,9 +143,8 @@ suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int = coroutineScope {
         source = SynchronousExecutionStart(command.toList())
     }
     val runningProcess = execAsync(configActual)
-    val result = runningProcess.await()
 
-    result
+        runningProcess.await()
 }
 @InternalCoroutinesApi
 suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = execVoid {

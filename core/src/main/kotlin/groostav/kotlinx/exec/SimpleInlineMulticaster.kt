@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicReference
 // in this way we pass on any problems back up to source!
 class SimpleInlineMulticaster<T>(val name: String) {
 
-    constructor(): this("anonymous-caster")
+    constructor(): this("anonymous${counter.getAndIncrement()}")
 
     sealed class State<T> {
         data class Registration<T>(val subs: List<Channel<T>> = emptyList()): State<T>()
@@ -86,7 +86,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             when(it){
                 is State.Registration<T> -> {
 
-                    val subscription = object: Channel<T> by Channel() {
+                    val subscription = object: Channel<T> by Channel(RENDEZVOUS) {
                         val id = it.subs.size+1
                         override fun toString() = "sub$id-$name"
                     }
@@ -113,4 +113,8 @@ class SimpleInlineMulticaster<T>(val name: String) {
     }
 
     override fun toString() = "caster-$name"
+
+    companion object {
+        private val counter = AtomicInteger(1)
+    }
 }
