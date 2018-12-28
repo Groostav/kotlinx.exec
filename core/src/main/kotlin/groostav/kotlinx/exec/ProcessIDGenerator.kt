@@ -9,6 +9,8 @@ internal interface ProcessIDGenerator {
     /**
      * The OS-relevant process ID integer.
      */
+    //TODO this is funny, this type can be merged with the factory
+    // findPID(p: Proc): Maybe<Int>
     val pid: Maybe<Int>
 
     interface Factory {

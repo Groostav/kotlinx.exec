@@ -84,7 +84,7 @@ data class ProcessBuilder internal constructor(
          * Using a time of zero will result in no SIG_INT signals at all, instead using only kill -9,
          * or similar techniques.
          */
-        var gracefulTimeousMillis: Long = 1500L,
+        var gracefulTimeoutMillis: Long = 1500L,
 
         /**
          * Indication of whether a `kill` call should be interpreted aa _kill process-tree_ or _kill (single process)_

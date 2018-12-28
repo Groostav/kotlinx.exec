@@ -3,11 +3,13 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.io.IOException
+import java.io.OutputStream
+import java.io.OutputStreamWriter
 import java.util.*
 
 //TODO: why isn't this part of kotlinx.coroutines already? Something they know I dont?
@@ -181,6 +183,48 @@ private suspend inline fun <T> Channel<T>.pushForward(next: T){
         val bumpedElement = receiveOrNull()
         if (bumpedElement != null){
             trace { "WARN: back-pressure forced drop '$bumpedElement' from ${this@pushForward}" }
+        }
+    }
+}
+
+internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Char> {
+    return GlobalScope.actor<Char>(Unconfined + CoroutineName("process.stdin")) {
+
+        val writer = OutputStreamWriter(this@toSendChannel, config.encoding)
+
+        try {
+            consumeEach { nextChar ->
+
+                try {
+                    writer.append(nextChar)
+                    if (nextChar == config.inputFlushMarker) writer.flush()
+                }
+                catch (ex: IOException) {
+                    //writer was closed, process was terminated.
+                    //TODO need a test to induce this, verify correctness.
+                    return@actor
+                }
+            }
+        }
+        finally {
+            writer.close()
+        }
+    }
+}
+
+internal fun <T> SendChannel<T>.lockedBy(mutex: Mutex): SendChannel<T> = GlobalScope.actor {
+    consumeEach {
+        mutex.withLock {
+            send(it)
+        }
+    }
+}
+
+internal fun <T, R> SendChannel<R>.flatMap(transform: (T) -> Iterable<R>): SendChannel<T> = GlobalScope.actor {
+    consumeEach {
+        val nextBatch = transform(it)
+        for(element in nextBatch){
+            send(element)
         }
     }
 }
