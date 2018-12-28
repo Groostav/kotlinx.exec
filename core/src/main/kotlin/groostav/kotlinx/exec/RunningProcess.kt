@@ -43,7 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * [execVoid] and [execAsync] are the most concise process-builder factories.
  */
-interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
+interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Deferred<Int> {
 
     val standardOutput: ReceiveChannel<Char>
     val standardError: ReceiveChannel<Char>
@@ -76,12 +76,6 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
      */
     suspend fun kill(): Unit
 
-    /**
-     * joins on this process
-     *
-     * suspends until the child process exits normally or is killed via a [kill] command.
-     */
-    suspend fun join(): Unit
 
     override val isClosedForReceive: Boolean
     override val isEmpty: Boolean
@@ -100,6 +94,8 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent> {
      * [ProcessBuilder.standardErrorBufferCharCount] and [ProcessBuilder.aggregateOutputBufferLineCount]
      * to zero.
      */
+    override fun cancel(): Unit { cancel(null) }
+    override fun cancel0(): Boolean = cancel(null)
     override fun cancel(cause: Throwable?): Boolean
 
     override val isClosedForSend: Boolean

@@ -2,9 +2,13 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.selects.SelectClause1
+import kotlinx.coroutines.selects.SelectInstance
 import kotlinx.coroutines.selects.select
 import org.junit.Ignore
 import org.junit.Test
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.*
 
 
@@ -314,5 +318,264 @@ class KotlinTests {
 
             if(cancel) runningJob.cancel()
         }
+    }
+
+    public interface MyUsefulConcurrentDataStructure: Deferred<Int> {
+
+    }
+
+    public interface MyCoroutineScope : CoroutineScope {
+
+    }
+
+    @InternalCoroutinesApi
+    class MyCoroutine(
+            parentContext: CoroutineContext,
+            active: Boolean
+    ): AbstractCoroutine<Int>(parentContext, active), MyCoroutineScope, MyUsefulConcurrentDataStructure, SelectClause1<Int>  {
+
+//        val _channel: Channel<Int> = TODO()
+
+        //region copied from ChannelCoroutine
+//
+//        override val cancelsParent: Boolean get() = true
+//
+////        val channel: Channel<Int> get() = this
+//
+//        override fun cancel(): Unit {
+//            cancel(null)
+//        }
+//
+//        override fun cancel0(): Boolean = cancel(null)
+//
+//        override fun cancel(cause: Throwable?): Boolean {
+////            val wasCancelled = _channel.cancel(cause)
+////            if (wasCancelled) super.cancel(cause) // cancel the job
+////            return wasCancelled
+//
+//            return super.cancel(cause)
+//        }
+
+        //endregion
+
+        //region copied from ProducerCoroutine
+//
+//        override val isActive: Boolean
+//            get() = super.isActive
+//
+////        override fun onCompletionInternal(state: Any?, mode: Int, suppressed: Boolean) {
+////            val cause = (state as? CompletedExceptionally)?.cause
+////            val processed = _channel.close(cause)
+////            if (cause != null && !processed && suppressed) handleExceptionViaHandler(context, cause)
+////        }
+
+        //endregion
+
+        //region copied from DeferredCoroutine
+
+//        override val cancelsParent: Boolean get() = true
+        override fun getCompleted(): Int = TODO("delegates to internal method with bad type: getCompletedInternal() as Int")
+        override suspend fun await(): Int = TODO("delegates to internal method with bad type: awaitInternal() as Int")
+        override val onAwait: SelectClause1<Int> get() = this
+        override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R) =
+                TODO("delegates to internal method with bad type: registerSelectClause1Internal(select, block)")
+
+        //endregion
+
+        companion object {
+            public fun CoroutineScope.doMyCoroutine(
+                    context: CoroutineContext = EmptyCoroutineContext,
+                    capacity: Int = 0,
+                    onCompletion: CompletionHandler? = null,
+                    block: suspend MyCoroutineScope.() -> Int
+            ): MyUsefulConcurrentDataStructure {
+                val newContext = newCoroutineContext(context)
+                val coroutine = MyCoroutine(newContext, true)
+                if (onCompletion != null) coroutine.invokeOnCompletion(handler = onCompletion)
+                coroutine.start(CoroutineStart.DEFAULT, coroutine as MyCoroutineScope, block)
+                return coroutine
+            }
+
+        }
+    }
+
+    @InternalCoroutinesApi
+    @Ignore("written to poke at the internals of coroutines, doesnt actually check anything.")
+    @Test fun `when using my coroutine should coroutine things nicely`() = with(MyCoroutine){
+
+        val result = GlobalScope.doMyCoroutine {
+            delay(100)
+            val x = 4
+            42
+        }
+
+        runBlocking {
+            val output = result.join()
+
+            val x = 4
+
+            coroutineScope {
+
+            }
+        }
+    }
+
+    //ok so, a couple lessons learned:
+    // 1. there's still a good chunk of 'hidden' API that means writing 'ProducerCoroutine' et al, as implied by
+    // the myriad of classes that extend AbstractCoroutine, is not feasible.
+    // We have to rely on the existing AbstractCoroutine implementations.
+    //
+    // 2. there is an enormous amount of composition-by-inheritence-by-delegation happening.
+    // in general, this `AbstractCoroutine` type extends both the return type and the 'Scope' type,
+    // which is in effect both the input and output of a coroutine builder. This means you get some pretty neat
+    // syntax with minimal object allocation --infact, shockingly so--, but it sure is confusing.
+    //
+    // 3. all coroutine builders assume they have some block which is long running,
+    // whose completion warrants some significance. This is kinda true for an exec() call,
+    // but the obvious threading abstraction (read: the "ProcessListener") doesnt really fit with this process.
+    // so these blocks are likely to be pretty simple --although, the Aggregate channel is pretty complex.
+
+    // Ok, so, new plan, can we compose with this massive types?
+
+    /*
+    func execAsync(): RunningProcess {
+
+        val listeners = makeListeners()
+        val someChannels = ProcUnstartedChannels(listeners);
+
+        val scope = ???
+
+        val aggregateProducer: ReceiveChannel<ProcessEvent> = produce(scope) {
+            while stuff {
+                select {
+                    someChannels.stdout.onReceieve {
+                        //...
+                }
+            }
+        }
+
+        val result: Deferred<Int> = async(scope){
+            someChannels.exitCode.value.await()
+        }
+
+        return ProcessImpl(
+            aggregate = aggregateProducer,
+            result = result,
+            stdout = someChannels.stdout.openSubscription().tail(buffer)
+            stderr = someChannels.stderr.openSubscription().tail(errBuffer)
+        )
+    }
+    */
+
+
+    //for reference:
+    //region copied from Produce.kt
+
+//    @InternalCoroutinesApi
+//    public fun <E> CoroutineScope.produce(
+//            context: CoroutineContext = EmptyCoroutineContext,
+//            capacity: Int = 0,
+//            onCompletion: CompletionHandler? = null,
+//            @BuilderInference block: suspend ProducerScope<E>.() -> Unit
+//    ): ReceiveChannel<E> {
+//        val channel = Channel<E>(capacity)
+//        val newContext = newCoroutineContext(context)
+//        val coroutine = ProducerCoroutine(newContext, channel)
+//        if (onCompletion != null) coroutine.invokeOnCompletion(handler = onCompletion)
+//        coroutine.start(CoroutineStart.DEFAULT, coroutine, block)
+//        return coroutine
+//   }
+
+    //endregion
+
+    //copied from
+
+    @InternalCoroutinesApi
+    @Suppress("UNREACHABLE_CODE")
+    fun CoroutineScope.execAsync(
+            start: CoroutineStart = CoroutineStart.DEFAULT
+    ): RunningProcess {
+
+        val newContext = newCoroutineContext(EmptyCoroutineContext)
+        val listeners: ProcessListenerProvider = TODO()
+
+        val block: suspend ExecScope.() -> Int = {
+
+            val stdout = listeners.standardOutputChannel.value.lines()
+            val exitCode = listeners.exitCodeDeferred.value
+            while(isActive){
+                val next = select<ProcessEvent> {
+                    stdout.onReceive { StandardOutputMessage(it) }
+                    exitCode.onAwait { ExitCode(it) }
+                }
+                onProcessEvent(next)
+            }
+
+            (stdout as Job).join()
+            //stderr..join
+            exitCode.await()
+        }
+
+        val coroutine = ExecCoroutine(newContext)
+        coroutine.start(start, coroutine, block)
+        return coroutine
+    }
+
+    interface ExecScope{
+        fun onProcessEvent(event: ProcessEvent)
+    }
+
+    @InternalCoroutinesApi class ExecCoroutine(
+            parentContext: CoroutineContext
+    ): AbstractCoroutine<Int>(parentContext, true), RunningProcess, ExecScope, SelectClause1<Int> {
+
+        override fun cancel(): Unit {
+            cancel(null)
+        }
+
+
+
+        override fun onCancellation(cause: Throwable?) {
+            when(cause){
+                null -> {} //completed normally
+                is CancellationException -> { fail } // cancelled --killOnceWithoutSync?
+                else -> { fail } // failed --killOnceWithoutSync?
+            }
+        }
+
+        override fun cancel0(): Boolean = cancel(null)
+
+        override fun cancel(cause: Throwable?): Boolean {
+            val wasCancelled = TODO("_channel.cancel(cause)")
+            if (wasCancelled) super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
+            return wasCancelled
+        }
+
+        fail;
+
+        //regarding subclassing this obnoxious internal methods:
+        // see if maybe you can find the mangled generated access method,
+        // something like super.internal$getCompletedInternal, that prevents you from forking this.
+        //
+        // then, I think we can take this, you'll need to call `process.start()` somewhere.
+
+        //regarding cancellation:
+        // problem: our cancellation is long-running.
+        // [potential] solution: attach an unstarted job as a child.
+        //                       override `onCancellation()` to call that job
+        //                       that job an atomic (non-cancellable) impl of killOnceWITHSync
+
+        //other things:
+        // - error history
+        // - PID -- getter that throws illegal state exception
+        // - kill with sync, kill without sync.
+        // - input lines, needs an actor.
+
+        override val cancelsParent: Boolean get() = true
+        override fun getCompleted(): Int = getCompletedInternal() as Int
+        override suspend fun await(): Int = awaitInternal() as Int
+        override val onAwait: SelectClause1<Int> get() = this
+        override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R) =
+                registerSelectClause1Internal(select, block)
     }
 }
