@@ -3,6 +3,7 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -48,9 +49,10 @@ internal fun ReceiveChannel<Char>.lines(
         trace { "finished lines-${this@lines}" }
     }
 
-    return object: ReceiveChannel<String> by result {
-        override fun toString() = "lines-${this@lines}"
-    }
+//    return object: ReceiveChannel<String> by result {
+//        override fun toString() = "lines-${this@lines}"
+//    }
+    return result;
 }
 
 private fun StringBuilder.takeAndClear(): String = toString().also { setLength(0) }

@@ -98,10 +98,19 @@ class WindowsTests {
             }
             is ExitCode -> event
         }}
-        val result = runningOutputChannel
-                .map { (it as? StandardOutputMessage)?.run { copy(line = line.replace(IP_REGEX, "1.2.3.4"))} ?: it }
-                .map { it.also { trace { it.toString() } } }
-                .toList()
+        val result = select<List<ProcessEvent>?> {
+            async {
+                runningOutputChannel
+                        .map {
+                            (it as? StandardOutputMessage)?.run { copy(line = line.replace(IP_REGEX, "1.2.3.4")) } ?: it
+                        }
+                        .map { it.also { trace { it.toString() } } }
+                        .toList()
+            }.onAwait { it }
+            onTimeout(10_000_000) { null }
+        }
+
+        val x= 4;
 
         //assert
         val expectedAlmostSequence = listOf(
@@ -136,10 +145,10 @@ class WindowsTests {
         // so to avoid flappers, we'll do set equality on the whole thing,
         // then sequence equality on the channels separately.
         // assertEquals(expectedAlmostSequence, result) passes _most_ of the time.
-        assertEquals(expectedAlmostSequence.toSet(), result.toSet())
-        assertEquals(expectedAlmostSequence.filterIsInstance<StandardOutputMessage>(), result.filterIsInstance<StandardOutputMessage>())
-        assertEquals(expectedAlmostSequence.filterIsInstance<StandardErrorMessage>(), result.filterIsInstance<StandardErrorMessage>())
-        assertEquals(expectedAlmostSequence.last(), result.last())
+        assertEquals(expectedAlmostSequence.toSet(), result?.toSet())
+        assertEquals(expectedAlmostSequence.filterIsInstance<StandardOutputMessage>(), result?.filterIsInstance<StandardOutputMessage>())
+        assertEquals(expectedAlmostSequence.filterIsInstance<StandardErrorMessage>(), result?.filterIsInstance<StandardErrorMessage>())
+        assertEquals(expectedAlmostSequence.last(), result?.last())
     }
 
     @Test fun `when using script with Write-Progress style progress bar should only see echo statements`() = runBlocking <Unit>{

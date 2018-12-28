@@ -56,10 +56,21 @@ internal fun CoroutineScope.execAsync(
             val stdoutWasOpen = !stdout.isClosedForReceive
             val stderrWasOpen = !stderr.isClosedForReceive
 
+            fail; //gah this sucks
+            // it seems like trying to get notified of a channels closure is really difficult.
+            // considering all the "oncompletion" logic thrown around, this suprises me.
+            // ok so, you could just push EOF Into the stream, make an EOF ProcessEvent,
+            // and simply leverage that here to switch state.
+
             val next = select<ProcessEvent?> {
                 if (stdoutWasOpen) stdout.onReceiveOrNull { it?.let(::StandardOutputMessage) }
+                (stdout as Job).onJoin { null }
                 if (stderrWasOpen) stderr.onReceiveOrNull { it?.let(::StandardErrorMessage) }
+                (stderr as Job).onJoin { null }
                 if ( ! hasCode) exitCode.onAwait { ExitCode(it).also { hasCode = true } }
+
+//                fail; //ok, so onReceiveOrNull doesnt actually give you null when the channel closes. Fuck.
+//                onTimeout(1_000) { null }
             }
             onProcessEvent(next ?: continue)
         }
@@ -69,6 +80,11 @@ internal fun CoroutineScope.execAsync(
 
         aggregateChannel.close()
         standardInput.close()
+        channels.stdout.asJob().join()
+        channels.stderr.asJob().join()
+        channels.stdin.close()
+
+        trace { "coroutine block for $processID is done" }
 
         result
     }
@@ -82,7 +98,6 @@ internal fun CoroutineScope.execAsync(
             channels.stdout.openSubscription().tail(config.standardOutputBufferCharCount),
             channels.stderr.openSubscription().tail(config.standardErrorBufferCharCount),
             aggregateChannel,
-            fail; //this isnt tested: you need to make sure this actually flushes and that it actually hits the input stream.
             channels.stdin.lockedBy(stdinMutex).flatMap { (it + config.inputFlushMarker).asIterable() },
             makePIDGenerator()
     )

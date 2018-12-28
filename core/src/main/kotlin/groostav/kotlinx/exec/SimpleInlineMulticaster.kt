@@ -107,10 +107,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
 
     // suspends until source is empty and all elements have been dispatched to all subscribers.
     // key functional difference here vs BroadcastChannel.
-    suspend fun join(): Unit {
-        sourceJob.join()
-        trace { "$this.join() completed" }
-    }
+    fun asJob(): Job = sourceJob
 
     override fun toString() = "caster-$name"
 
