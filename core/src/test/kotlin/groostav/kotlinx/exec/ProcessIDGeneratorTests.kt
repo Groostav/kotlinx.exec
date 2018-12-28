@@ -1,8 +1,10 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
+@InternalCoroutinesApi
 class ProcessIDGeneratorTests {
 
     @Test fun `when attempting to get PID for dead process should succeed`() = runBlocking<Unit> {

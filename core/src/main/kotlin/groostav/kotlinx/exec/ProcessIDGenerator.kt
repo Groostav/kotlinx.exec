@@ -1,29 +1,22 @@
 package groostav.kotlinx.exec
 
-import com.sun.jna.Pointer
-import com.sun.jna.platform.win32.Kernel32
-import com.sun.jna.platform.win32.WinNT
-import org.zeroturnaround.process.PidUtil
-
 internal interface ProcessIDGenerator {
     /**
      * The OS-relevant process ID integer.
      */
-    //TODO this is funny, this type can be merged with the factory
-    // findPID(p: Proc): Maybe<Int>
-    val pid: Maybe<Int>
+    fun findPID(process: Process): Int
 
     interface Factory {
-        fun create(process: Process): Maybe<ProcessIDGenerator>
+        fun create(): Maybe<ProcessIDGenerator>
     }
 }
 
-internal fun makePIDGenerator(jvmRunningProcess: Process): ProcessIDGenerator{
+internal fun makePIDGenerator(): ProcessIDGenerator {
     val factories = listOf(
             JEP102ProcessIDGenerator,
             WindowsReflectiveNativePIDGen, UnixReflectivePIDGen,
             ZeroTurnaroundPIDGenerator
     )
 
-    return factories.firstSupporting { it.create(jvmRunningProcess) }
+    return factories.firstSupporting { it.create() }
 }

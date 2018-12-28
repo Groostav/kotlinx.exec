@@ -1,6 +1,7 @@
 package groostav.kotlinx.exec
 
 import org.zeroturnaround.process.PidProcess
+import org.zeroturnaround.process.PidUtil
 import org.zeroturnaround.process.Processes
 import org.zeroturnaround.process.WindowsProcess
 import java.lang.Boolean.getBoolean
@@ -58,12 +59,13 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
     }
 }
 
-internal class ZeroTurnaroundPIDGenerator(val process: PidProcess): ProcessIDGenerator {
-    override val pid: Maybe<Int> get() = Supported(process.pid)
+internal class ZeroTurnaroundPIDGenerator(): ProcessIDGenerator {
+
+    override fun findPID(process: Process): Int = PidUtil.getPid(process)
 
     companion object: ProcessIDGenerator.Factory {
-        override fun create(process: Process) = supportedIf(ZTOnClassPath) {
-            ZeroTurnaroundPIDGenerator(Processes.newPidProcess(process))
+        override fun create() = supportedIf(ZTOnClassPath) {
+            ZeroTurnaroundPIDGenerator()
         }
     }
 }

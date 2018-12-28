@@ -18,6 +18,7 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         }
     }
 
+    @InternalCoroutinesApi
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Supported<Unit> {
 
         //so, zero-turnaround uses this strategy,
@@ -38,6 +39,7 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         return Supported(Unit)
     }
 
+    @InternalCoroutinesApi
     override fun killForcefullyAsync(includeDescendants: Boolean): Supported<Unit> {
 
         var command = listOf("taskkill")
@@ -59,27 +61,29 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
     // => dont bother, no matter the API we're still polling the bastard.
 }
 
-internal class WindowsReflectiveNativePIDGen(private val process: Process): ProcessIDGenerator {
+internal class WindowsReflectiveNativePIDGen(): ProcessIDGenerator {
 
     init {
         if(JavaVersion >= 9) trace { "WARN: using Windows reflection-based PID generator on java-9" }
     }
 
     companion object: ProcessIDGenerator.Factory {
-        override fun create(process: Process) = supportedIf(JavaProcessOS == ProcessOS.Windows){
-            WindowsReflectiveNativePIDGen(process)
+        override fun create() = supportedIf(JavaProcessOS == ProcessOS.Windows){
+            WindowsReflectiveNativePIDGen()
         }
     }
 
-    private val field = process::class.java.getDeclaredField("handle").apply { isAccessible = true }
+    private val field = Class.forName("java.lang.ProcessImpl")
+            .getDeclaredField("handle")
+            .apply { isAccessible = true }
 
-    override val pid: Supported<Int> by lazy {
+    override fun findPID(process: Process): Int {
 
         val handlePeer = field.getLong(process)
         val handle = WinNT.HANDLE(Pointer.createConstant(handlePeer))
         val pid = Kernel32.INSTANCE.GetProcessId(handle)
 
-        Supported(pid)
+        return pid
     }
 }
 

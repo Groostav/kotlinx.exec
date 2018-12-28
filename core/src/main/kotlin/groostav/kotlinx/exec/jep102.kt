@@ -61,12 +61,12 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
     }
 }
 
-internal class JEP102ProcessIDGenerator(private val process: Process): ProcessIDGenerator {
+internal class JEP102ProcessIDGenerator(): ProcessIDGenerator {
 
     companion object: ProcessIDGenerator.Factory {
-        override fun create(process: Process) = supportedIf(JavaVersion >= 9) { JEP102ProcessIDGenerator(process) }
+        override fun create() = supportedIf(JavaVersion >= 9) { JEP102ProcessIDGenerator() }
     }
 
-    override val pid: Maybe<Int> = Supported(process.pid().toInt())
+    override fun findPID(process: Process): Int = process.pid().toInt()
 
 }

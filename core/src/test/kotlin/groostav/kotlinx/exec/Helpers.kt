@@ -4,6 +4,8 @@ package groostav.kotlinx.exec
 import groostav.kotlinx.exec.ProcessOS.Unix
 import groostav.kotlinx.exec.ProcessOS.Windows
 import groostav.kotlinx.exec.WindowsTests
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.InternalCoroutinesApi
 import java.nio.file.Paths
 import java.util.*
 import java.util.regex.Pattern
@@ -15,8 +17,10 @@ inline fun <T> queueOf(vararg elements: T): Queue<T> {
     return result
 }
 
+private object ReflectionHardPoint
+
 fun getLocalResourcePath(localName: String): String {
-    val rsx = WindowsTests::class.java.getResource(localName) ?: throw UnsupportedOperationException("cant find $localName")
+    val rsx = ReflectionHardPoint::class.java.getResource(localName) ?: throw UnsupportedOperationException("cant find $localName")
     val resource = Paths.get(rsx.toURI()).toString()
     return resource
 }
@@ -92,7 +96,8 @@ inline fun <reified X: Exception> assertThrows(action: () -> Any?): X? {
 internal inline fun <reified X: Exception> Catch(action: () -> Any?): X? =
         try { action(); null } catch(ex: Exception){ if(ex is X) ex else throw ex }
 
-internal suspend fun assertNotListed(deadProcessID: Int){
+@InternalCoroutinesApi
+internal suspend fun CoroutineScope.assertNotListed(deadProcessID: Int){
 
     // both powershell and ps have output formatting options,
     // but I'd rather demo working line-by-line with a regex.

@@ -1,47 +1,63 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.IOException
+import kotlin.coroutines.EmptyCoroutineContext
 import java.lang.ProcessBuilder as JProcBuilder
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
 
-internal fun execAsync(config: ProcessBuilder): RunningProcess {
-
-    val jvmProcessBuilder = JProcBuilder(config.command).apply {
-
-        environment().apply {
-            if(this !== config.environment) {
-                clear()
-                putAll(config.environment)
-            }
-        }
-
-        directory(config.workingDirectory.toFile())
-    }
-
-    val runningProcessFactory = RunningProcessFactory()
+@InternalCoroutinesApi
+internal fun CoroutineScope.execAsync(
+        config: ProcessBuilder,
+        start: CoroutineStart = CoroutineStart.DEFAULT
+): RunningProcess {
 
     val listenerProviderFactory = makeListenerProviderFactory()
 
-    val jvmRunningProcess = try { jvmProcessBuilder.start() }
-            catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message!!, config, ex.takeIf { TRACE }) }
+    val newContext = newCoroutineContext(EmptyCoroutineContext)
+    val channels = ProcessChannels()
 
-    val pidProvider = makePIDGenerator(jvmRunningProcess)
-    trace { "selected pidProvider=$pidProvider" }
-    val processID = pidProvider.pid.value
+    val aggregateChannel = Channel<ProcessEvent>(Channel.RENDEZVOUS)
 
-    val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
-    trace { "selected facade=$processControllerFacade" }
+    val block: suspend ExecCoroutine.() -> Int = {
 
-    val listenerProvider = listenerProviderFactory.create(jvmRunningProcess, processID, config)
-    trace { "selected listenerProvider=$listenerProvider" }
+        val stdout = listeners.standardOutputChannel.value.lines()
+        val exitCode = listeners.exitCodeDeferred.value
+        while(isActive){
+            val next = select<ProcessEvent> {
+                stdout.onReceive { StandardOutputMessage(it) }
+                exitCode.onAwait { ExitCode(it) }
+            }
+            onProcessEvent(next)
+        }
 
-    return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
+        (stdout as Job).join()
+        //stderr..join
+        exitCode.await()
+    }
+
+    val stdinMutex = Mutex()
+
+    val coroutine = ExecCoroutine(
+            config,
+            newContext,
+            channels.stdin.lockedBy(stdinMutex),
+            channels.stdout.openSubscription().tail(config.standardOutputBufferCharCount),
+            channels.stderr.openSubscription().tail(config.standardErrorBufferCharCount),
+            aggregateChannel,
+            channels.stdin.lockedBy(stdinMutex).flatMap { it.asIterable() },
+            makePIDGenerator()
+    )
+    coroutine.start(start, coroutine, block)
+    return coroutine
 }
 
+@InternalCoroutinesApi
 fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
 
     val configActual = processBuilder(coroutineScope = this@execAsync) {
@@ -50,11 +66,13 @@ fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
     }
     return execAsync(configActual)
 }
+@InternalCoroutinesApi
 fun CoroutineScope.execAsync(commandFirst: String, vararg commandRest: String): RunningProcess = execAsync {
     command = listOf(commandFirst) + commandRest.toList()
 }
 
-suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult {
+@InternalCoroutinesApi
+suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult = coroutineScope {
 
     val configActual = processBuilder(GlobalScope) {
         standardErrorBufferCharCount = 0
@@ -72,13 +90,15 @@ suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult {
             .filter { it !is ExitCode }
             .map { it.formattedMessage }
 
-    return ProcessResult(output.toList(), runningProcess.exitCode.getCompleted())
+    ProcessResult(output.toList(), runningProcess.getCompleted())
 }
 
+@InternalCoroutinesApi
 suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResult
         = exec { command = listOf(commandFirst) + commandRest }
 
-suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
+@InternalCoroutinesApi
+suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int = coroutineScope {
     val configActual = processBuilder(GlobalScope) {
         aggregateOutputBufferLineCount = 0
         standardErrorBufferCharCount = 0
@@ -89,10 +109,11 @@ suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
         source = SynchronousExecutionStart(command.toList())
     }
     val runningProcess = execAsync(configActual)
-    val result = runningProcess.exitCode.await()
+    val result = runningProcess.await()
 
-    return result
+    result
 }
+@InternalCoroutinesApi
 suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = execVoid {
     command = listOf(commandFirst) + commandRest.toList()
 }
@@ -113,15 +134,6 @@ class InvalidExitValueException(
 
     override fun fillInStackTrace(): Throwable = this.also {
         //noop, this is handled by init
-    }
-}
-
-fun `kotlin is pretty smart`(){
-    val nullableSet: Set<Int>? = setOf(1, 2, 3)
-
-    when(nullableSet?.size){
-        null -> {}
-        else -> { nullableSet.first() } //smart-cast knew that nullableSet isnt null through the ?. operator? wow.
     }
 }
 

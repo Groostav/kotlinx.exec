@@ -18,6 +18,7 @@ import kotlin.test.assertNotNull
 
 // Wow, so powershell takes 10X longer to start (~1 second) than cmd (~100ms)
 // I suppose thats .netframework startup time, which is supposidly faster than the jvm, but it sure ain't fast.
+@InternalCoroutinesApi
 class WindowsTests {
 
     companion object {
@@ -45,7 +46,7 @@ class WindowsTests {
             is ExitCode -> "exit code: ${event.code}"
         }}
 
-        val exitCode = runningProcess.exitCode.await()
+        val exitCode = runningProcess.await()
         val messagesList = messages.toList()
 
         messagesList.shouldEqual(listOf(
@@ -233,7 +234,7 @@ class WindowsTests {
                     "-ThrowError",
                     "-ExecutionPolicy", "Bypass"
             )
-            running.exitCode.await()
+            running.await()
             null
         }
         catch(ex: InvalidExitValueException){ ex }
@@ -298,7 +299,7 @@ class WindowsTests {
         do {
             val next = select<String> {
                 runningProc.onReceiveOrNull { it?.formattedMessage ?: "closed" }
-                runningProc.exitCode.onAwait { "exited" }
+                runningProc.onAwait { "exited" }
 
                 if("hello!" in result) {
                     onTimeout(200) {
@@ -341,7 +342,7 @@ class WindowsTests {
         while( ! runningProc.isClosedForReceive) {
             val next = select<String> {
                 runningProc.onReceive { it.formattedMessage }
-                runningProc.exitCode.onAwait { "exited" }
+                runningProc.onAwait { "exited" }
             }
             result += next
 

@@ -8,6 +8,7 @@ import kotlinx.coroutines.selects.SelectInstance
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.IOException
 import java.lang.IllegalStateException
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -438,62 +439,10 @@ data class ExitCode(val code: Int): ProcessEvent() {
 //    //endregion
 //}
 
-@ObsoleteCoroutinesApi //actor is obsolete? I cant believe the concept is going to go away, probably just reformatted.
-@InternalCoroutinesApi
-@Suppress("UNREACHABLE_CODE")
-fun CoroutineScope.execAsync(
-        config: ProcessBuilder,
-        start: CoroutineStart = CoroutineStart.DEFAULT
-): RunningProcess {
-
-    val newContext = newCoroutineContext(EmptyCoroutineContext)
-    val listeners: ProcessListenerProvider = TODO()
-    val channels: ProcessChannels = TODO()
-
-    val aggregateChannel = Channel<ProcessEvent>(Channel.RENDEZVOUS)
-
-    val block: suspend ExecCoroutine.() -> Int = {
-
-        val stdout = listeners.standardOutputChannel.value.lines()
-        val exitCode = listeners.exitCodeDeferred.value
-        while(isActive){
-            val next = select<ProcessEvent> {
-                stdout.onReceive { StandardOutputMessage(it) }
-                exitCode.onAwait { ExitCode(it) }
-            }
-            onProcessEvent(next)
-        }
-
-        (stdout as Job).join()
-        //stderr..join
-        exitCode.await()
-    }
-
-    val stdinMutex = Mutex()
-
-    val stdinLineActor = GlobalScope.actor<String> {
-        for(line in this){
-            stdinMutex.withLock { for(char in line) channels.stdin.send(char) }
-        }
-    }
-
-    val coroutine = ExecCoroutine(
-            config,
-            newContext,
-            channels.stdin.lockedBy(stdinMutex),
-            channels.stdout.openSubscription().tail(config.standardOutputBufferCharCount),
-            channels.stderr.openSubscription().tail(config.standardErrorBufferCharCount),
-            aggregateChannel,
-            channels.stdin.lockedBy(stdinMutex).flatMap { it.asIterable() }
-    )
-    coroutine.start(start, coroutine, block)
-    return coroutine
-}
-
 class ProcessChannels(
-        val stdin: SendChannel<Char>,
-        val stdout: SimpleInlineMulticaster<Char>,
-        val stderr: SimpleInlineMulticaster<Char>
+        val stdin: SendChannel<Char> = Channel(),
+        val stdout: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster(),
+        val stderr: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster()
 )
 
 @InternalCoroutinesApi internal class ExecCoroutine(
@@ -504,7 +453,7 @@ class ProcessChannels(
         override val standardError: ReceiveChannel<Char>,
         private val aggregateChannel: Channel<ProcessEvent>,
         inputLines: SendChannel<String>,
-        private val pidGen: ProcessIDGenerator.Factory
+        private val pidGen: ProcessIDGenerator
 ):
         AbstractCoroutine<Int>(parentContext, true),
         RunningProcess,
@@ -514,7 +463,16 @@ class ProcessChannels(
 {
     private var process: Process? = null
 
-    override val processID: Int get() = process?.let { pidGen.create(it).value.pid.value } ?: throw IllegalStateException()
+    internal val listeners: ProcessListenerProvider get() {
+        val x = 4;
+        return TODO()
+    }
+
+    override val processID: Int get() = process?.let { pidGen.findPID(it) } ?: throw IllegalStateException()
+
+    override suspend fun kill() {
+        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+    }
 
     override fun cancel(): Unit {
         cancel(null)
@@ -523,8 +481,8 @@ class ProcessChannels(
     override fun onCancellation(cause: Throwable?) {
         when(cause){
             null -> {} //completed normally
-            is CancellationException -> { fail } // cancelled --killOnceWithoutSync?
-            else -> { fail } // failed --killOnceWithoutSync?
+            is CancellationException -> { TODO() } // cancelled --killOnceWithoutSync?
+            else -> { TODO() } // failed --killOnceWithoutSync?
         }
     }
 
@@ -534,6 +492,24 @@ class ProcessChannels(
         val wasCancelled: Boolean = TODO("_channel.cancel(cause)")
         if (wasCancelled) super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
         return wasCancelled
+    }
+
+    override fun onStart() {
+
+        val jvmProcessBuilder = java.lang.ProcessBuilder(config.command).apply {
+
+            environment().apply {
+                if (this !== config.environment) {
+                    clear()
+                    putAll(config.environment)
+                }
+            }
+
+            directory(config.workingDirectory.toFile())
+        }
+
+        process = try { jvmProcessBuilder.start() }
+        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message!!, config, ex.takeIf { TRACE }) }
     }
 
     internal suspend fun onProcessEvent(event: ProcessEvent){
@@ -559,9 +535,9 @@ class ProcessChannels(
     // - input lines, needs an actor.
 
     override val cancelsParent: Boolean get() = true
-    override fun getCompleted(): Int = getCompletedInternal() as Int
-    override suspend fun await(): Int = awaitInternal() as Int
+    override fun getCompleted(): Int = TODO("getCompletedInternal() as Int")
+    override suspend fun await(): Int = TODO("awaitInternal() as Int")
     override val onAwait: SelectClause1<Int> get() = this
     override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R) =
-            registerSelectClause1Internal(select, block)
+            TODO("registerSelectClause1Internal(select, block)")
 }

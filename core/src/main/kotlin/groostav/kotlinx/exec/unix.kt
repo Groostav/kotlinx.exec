@@ -2,6 +2,7 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.launch
 
@@ -18,6 +19,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
         }
     }
 
+    @InternalCoroutinesApi
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
 
         GlobalScope.launch(Unconfined) {
@@ -40,6 +42,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
         return Supported(Unit)
     }
 
+    @InternalCoroutinesApi
     override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
         //can we issue a pgrep -P call here
 //        if(includeDescendants) return Unsupported
@@ -53,15 +56,17 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
     }
 }
 
-internal class UnixReflectivePIDGen(private val process: Process): ProcessIDGenerator {
+internal class UnixReflectivePIDGen: ProcessIDGenerator {
 
     companion object: ProcessIDGenerator.Factory {
-        override fun create(process: Process) = supportedIf(JavaProcessOS == ProcessOS.Unix){
-            UnixReflectivePIDGen(process)
+        override fun create() = supportedIf(JavaProcessOS == ProcessOS.Unix){
+            UnixReflectivePIDGen()
         }
     }
 
-    private val field = process.javaClass.getDeclaredField("pid").apply { isAccessible = true }
+    val field = Class.forName("java.lang.UNIXProcess")
+            .getDeclaredField("pid")
+            .apply { isAccessible = true }
 
-    override val pid: Supported<Int> = Supported(field.getInt(process))
+    override fun findPID(process: Process): Int = field.getInt(process)
 }

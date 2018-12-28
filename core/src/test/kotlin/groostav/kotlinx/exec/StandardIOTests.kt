@@ -1,6 +1,7 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
@@ -8,6 +9,7 @@ import org.amshove.kluent.shouldEqual
 import org.junit.Test
 import kotlin.test.assertEquals
 
+@InternalCoroutinesApi
 class StandardIOTests {
 
     @Test
@@ -32,7 +34,7 @@ class StandardIOTests {
                 command = chattyErrorScriptCommand()
                 linesForExceptionError = 5
             }
-            running.exitCode.await()
+            running.await()
             null
         }
         catch(ex: InvalidExitValueException){ ex }
@@ -82,7 +84,7 @@ class StandardIOTests {
 
         //act
         runningProc.send("42")
-        val result = runningProc.exitCode.await()
+        val result = runningProc.await()
 
         //assert
         assertEquals(42, result)

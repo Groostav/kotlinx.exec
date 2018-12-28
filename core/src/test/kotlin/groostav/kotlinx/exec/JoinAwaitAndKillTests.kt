@@ -11,6 +11,7 @@ import java.util.*
 import java.util.regex.Pattern
 import kotlin.test.*
 
+@InternalCoroutinesApi
 class JoinAwaitAndKillTests {
 
 
@@ -41,8 +42,8 @@ class JoinAwaitAndKillTests {
 
         //assert
         assertFalse(completedAfter100ms)
-        assertTrue(runningProcess.exitCode.isCompleted)
-        assertFalse(runningProcess.exitCode.isActive)
+        assertTrue(runningProcess.isCompleted)
+        assertFalse(runningProcess.isActive)
         assertNotListed(runningProcess.processID)
     }
 
@@ -121,7 +122,7 @@ class JoinAwaitAndKillTests {
         assertEquals(2, messages.size)
         assertEquals(StandardOutputMessage("Hello!"), messages.first())
         assertNotEquals(ExitCode(0), messages.last())
-        assertThrows<CancellationException> { runningProcess.exitCode.await() }
+        assertThrows<CancellationException> { runningProcess.await() }
         assertNotListed(runningProcess.processID)
     }
 
@@ -135,7 +136,7 @@ class JoinAwaitAndKillTests {
 
         //act
         val procJoin = launch { process.join(); results += "procJoin" }
-        val exitCodeJoin = launch { process.exitCode.join(); results += "exitCodeJoin" }
+        val exitCodeJoin = launch { process.join(); results += "exitCodeJoin" }
         val aggregateChannelJoin = launch { process.toList(); results += "aggregateChannelJoin" }
 
         process.send("OK")
@@ -164,8 +165,8 @@ class JoinAwaitAndKillTests {
         runningProcess.join()
 
         //assert
-        assertTrue(runningProcess.exitCode.isCompleted)
-        assertFalse(runningProcess.exitCode.isActive)
+        assertTrue(runningProcess.isCompleted)
+        assertFalse(runningProcess.isActive)
         assertNotListed(runningProcess.processID)
 
         // I'd like this, but elizarov's own notes say its not a requirement
@@ -181,7 +182,7 @@ class JoinAwaitAndKillTests {
 
         //act
         val joinResult = runningProcess.join()                                                      // exits normally
-        val exitCodeResult = Catch<InvalidExitValueException> { runningProcess.exitCode.await() }   // throws exception
+        val exitCodeResult = Catch<InvalidExitValueException> { runningProcess.await() }   // throws exception
         val aggregateChannelList = runningProcess.toList()                                          // produces list with exit code
         val errorChannel = runningProcess.standardError.toList()                                    // exits normally
         val stdoutChannel = runningProcess.standardOutput.toList()                                  // exits normally
@@ -235,7 +236,7 @@ class JoinAwaitAndKillTests {
             execAsync {
                 command = errorAndExitCodeOneCommand()
                 expectedOutputCodes = setOf(0) //make default explicity for clarity --exit code 1 => exception
-            }.exitCode.await()
+            }.await()
             null
         }
         catch (ex: InvalidExitValueException) { ex }
@@ -301,7 +302,7 @@ class JoinAwaitAndKillTests {
         val process = execAsync {
             command = emptyScriptCommand()
         }
-        process.exitCode.await()
+        process.await()
 
         //act & assert
         assertThrows<CancellationException> {
