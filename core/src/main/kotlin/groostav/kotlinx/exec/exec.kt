@@ -2,13 +2,10 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.lang.ProcessBuilder.Redirect.*
 import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.math.exp
 import java.lang.ProcessBuilder as JProcBuilder
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
@@ -22,8 +19,9 @@ internal fun CoroutineScope.execAsync(
     val newContext = newCoroutineContext(EmptyCoroutineContext)
 
     val channels = ProcessChannels(config.command.first())
-    val stdout = channels.stdout.openSubscription().lines(config.delimiters)
-    val stderr = channels.stderr.openSubscription().lines(config.delimiters)
+    val aggregateStdLines = channels.stdout.openSubscription().lines(config.delimiters)
+    val aggregateErrorLines = channels.stderr.openSubscription().lines(config.delimiters)
+    val errorCacheLines = channels.stderr.openSubscription().lines(config.delimiters)
 
     val aggregateChannel = Channel<ProcessEvent>(config.aggregateOutputBufferLineCount.asQueueChannelCapacity())
 
@@ -58,16 +56,20 @@ internal fun CoroutineScope.execAsync(
         channels.stderr.syndicateAsync(listeners.standardErrorChannel.value)
         GlobalScope.launch { channels.stdin.mapTo(process.outputStream.toSendChannel(config)) { it } }
 
-        val exitCode = listeners.exitCodeDeferred.value
+        launch {
+            for(message in errorCacheLines){
+                recentErrorOutput.enqueue(message)
+            }
+        }
 
         if(config.aggregateOutputBufferLineCount > 0){
             val stdoutJob = launch(Dispatchers.Unconfined) {
-                for(message in stdout){
+                for(message in aggregateStdLines){
                     onProcessEvent(StandardOutputMessage(message))
                 }
             }
             val stderrJob = launch(Dispatchers.Unconfined) {
-                for(message in stderr){
+                for(message in aggregateErrorLines){
                     onProcessEvent(StandardErrorMessage(message))
                 }
             }
@@ -76,7 +78,7 @@ internal fun CoroutineScope.execAsync(
             stderrJob.join()
         }
 
-        val result = exitCode.await()
+        val result = listeners.exitCodeDeferred.value.await()
         if(config.aggregateOutputBufferLineCount > 0) onProcessEvent(ExitCode(result))
 
         aggregateChannel.close()
@@ -92,7 +94,7 @@ internal fun CoroutineScope.execAsync(
         return@execBlock when {
             expectedExitCodes == null -> result
             result in expectedExitCodes -> result
-            else -> throw makeExitCodeException(config, result, recentErrorOutput)
+            else -> throw makeExitCodeException(config, result, recentErrorOutput.toList())
         }
     }
 
@@ -110,10 +112,6 @@ internal fun CoroutineScope.execAsync(
     )
     coroutine.start(start, coroutine, block)
     return coroutine
-}
-
-private fun validateOrThrowError(){
-
 }
 
 @InternalCoroutinesApi

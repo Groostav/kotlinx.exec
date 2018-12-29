@@ -157,7 +157,7 @@ class ProcessChannels(
         SendChannel<String> by inputLines
 {
     internal var process: Process? = null
-    internal val recentErrorOutput = LinkedList<String>()
+    internal val recentErrorOutput = CircularArrayQueue<String>(config.linesForExceptionError)
 
     override val processID: Int get() = process?.let { pidGen.findPID(it) } ?: throw IllegalStateException()
 

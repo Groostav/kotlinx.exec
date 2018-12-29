@@ -1,7 +1,5 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.ReceiveChannel
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.Reader
@@ -142,4 +140,49 @@ data class IntProgressionSet(val src: IntProgression): Set<Int> {
     override fun containsAll(elements: Collection<Int>) = elements.all { it in this }
     override fun isEmpty(): Boolean = src.isEmpty()
     override fun iterator(): Iterator<Int> = src.iterator()
+}
+
+
+internal class CircularArrayQueue<T : Any>(override val size: Int): AbstractCollection<T>() {
+
+    init { require(size > 0) }
+
+    private var elements = arrayOfNulls<Any>(size)
+    private var head = 0
+    private var tail = 0
+
+    override fun isEmpty() = head == tail
+
+    fun enqueue(element: T) {
+        elements[tail] = element
+        tail = (tail + 1) % size
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun dequeueOrNull(): T? {
+        if (head == tail) return null
+        val element = elements[head]
+        elements[head] = null
+        head = (head + 1) % size
+        return element as T
+    }
+
+    fun clear() {
+        head = 0
+        tail = 0
+        elements = arrayOfNulls(elements.size)
+    }
+
+    override fun iterator(): Iterator<T> = object: Iterator<T>{
+        var current = head
+
+        @Suppress("UNCHECKED_CAST")
+        override fun next(): T {
+            if(current == tail) throw NoSuchElementException()
+            return (elements[current] as T).also { current = (current + 1) % size }
+        }
+
+        override fun hasNext() = current != tail
+
+    }
 }
