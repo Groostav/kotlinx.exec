@@ -148,7 +148,8 @@ class ProcessChannels(
         override val standardError: ReceiveChannel<Char>,
         private val aggregateChannel: Channel<ProcessEvent>,
         inputLines: SendChannel<String>,
-        private val pidGen: ProcessIDGenerator
+        private val pidGen: ProcessIDGenerator,
+        private val processControl: ProcessControlFacade
 ):
         AbstractCoroutine<Int>(parentContext + makeName(config), true),
         RunningProcess,
@@ -162,7 +163,27 @@ class ProcessChannels(
     override val processID: Int get() = process?.let { pidGen.findPID(it) } ?: throw IllegalStateException()
 
     override suspend fun kill() {
-        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+        // whats my strategy?
+        // who am i suspending?
+        // how can i atomically move to a cancelled state?
+
+        //how about this:
+
+        //kill:
+        // we atomically update a state to 'Doomed', that state is checked before return in the exec body
+        // we call kill gracefully
+        // val success = withTimeoutOrNull(gracefulTime) { join() }
+        // if (success == null) cancel()
+        // listener.await()
+
+        //cancel:
+        // kill forcefully
+
+        //so...
+        // I think the block should probably start an actor in global scope
+        // each of these feed it an input
+        // at least that way we can reduce the concurrency to an actor managing its state.
+        fail;
     }
 
     override fun cancel(): Unit {
@@ -172,17 +193,15 @@ class ProcessChannels(
     override fun onCancellation(cause: Throwable?) {
         when(cause){
             null -> {} //completed normally
-            is CancellationException -> {  } // cancelled --killOnceWithoutSync?
-            else -> {  } // failed --killOnceWithoutSync?
+            is CancellationException -> {  } // cancelled --> kill -9
+            else -> {  } // failed --> kill -9
         }
     }
 
     override fun cancel0(): Boolean = cancel(null)
 
     override fun cancel(cause: Throwable?): Boolean {
-        val wasCancelled: Boolean = true
-        if (wasCancelled) super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
-        return wasCancelled
+        return super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
     }
 
     override fun onStart() {
