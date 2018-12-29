@@ -6,6 +6,7 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
+import java.lang.ProcessBuilder.Redirect.*
 import kotlin.coroutines.EmptyCoroutineContext
 import java.lang.ProcessBuilder as JProcBuilder
 
@@ -36,6 +37,13 @@ internal fun CoroutineScope.execAsync(
                 }
             }
 
+            if(config.standardErrorBufferCharCount == 0){
+                redirectError(DISCARD)
+            }
+            if(config.standardOutputBufferCharCount == 0){
+                redirectOutput(DISCARD)
+            }
+
             directory(config.workingDirectory.toFile())
         }
 
@@ -50,46 +58,33 @@ internal fun CoroutineScope.execAsync(
         GlobalScope.launch { channels.stdin.mapTo(process.outputStream.toSendChannel(config)) { it } }
 
         val exitCode = listeners.exitCodeDeferred.value
-        var hasCode: Boolean = false
 
-        if(config.aggregateOutputBufferLineCount > 0) do {
-            val stdoutWasOpen = !stdout.isClosedForReceive
-            val stderrWasOpen = !stderr.isClosedForReceive
-
-            fail; //gah this sucks
-            // it seems like trying to get notified of a channels closure is really difficult.
-            // considering all the "oncompletion" logic thrown around, this suprises me.
-            // ok so, you could just push EOF Into the stream, make an EOF ProcessEvent,
-            // and simply leverage that here to switch state.
-
-            morefail;
-            // yeah! what about a simple side channel!!
-            // this could be used for flushing and for EOF tokens. Its so simple to implement.
-            // one note about polling: when we receive an exit code,
-            // can we stop polling and instead simply block on the `read()` calls?
-            // is that ever not safe?
-
-            val next = select<ProcessEvent?> {
-                if (stdoutWasOpen) stdout.onReceiveOrNull { it?.let(::StandardOutputMessage) }
-                (stdout as Job).onJoin { null }
-                if (stderrWasOpen) stderr.onReceiveOrNull { it?.let(::StandardErrorMessage) }
-                (stderr as Job).onJoin { null }
-                if ( ! hasCode) exitCode.onAwait { ExitCode(it).also { hasCode = true } }
-
-//                fail; //ok, so onReceiveOrNull doesnt actually give you null when the channel closes. Fuck.
-//                onTimeout(1_000) { null }
+        if(config.aggregateOutputBufferLineCount > 0){
+            val stdoutJob = launch(Dispatchers.Unconfined) {
+                for(message in stdout){
+                    onProcessEvent(StandardOutputMessage(message))
+                }
             }
-            onProcessEvent(next ?: continue)
+            val stderrJob = launch(Dispatchers.Unconfined) {
+                for(message in stderr){
+                    onProcessEvent(StandardErrorMessage(message))
+                }
+            }
+
+            stdoutJob.join()
+            stderrJob.join()
         }
-        while (isActive && (stderrWasOpen || stdoutWasOpen || !hasCode))
 
         val result = exitCode.await()
+        onProcessEvent(ExitCode(result))
 
         aggregateChannel.close()
         standardInput.close()
+
+        channels.stdin.close()
         channels.stdout.asJob().join()
         channels.stderr.asJob().join()
-        channels.stdin.close()
+
 
         trace { "coroutine block for $processID is done" }
 
@@ -130,9 +125,6 @@ fun CoroutineScope.execAsync(commandFirst: String, vararg commandRest: String): 
 suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult = coroutineScope {
 
     val configActual = processBuilder(GlobalScope) {
-        standardErrorBufferCharCount = 0
-        standardOutputBufferCharCount = 0
-
         apply(config)
 
         source = SynchronousExecutionStart(command.toList())

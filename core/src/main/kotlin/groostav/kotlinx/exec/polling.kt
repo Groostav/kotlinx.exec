@@ -54,6 +54,8 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
             delayMachine: DelayMachine
     ): ReceiveChannel<Char> {
 
+        val name = this.toString()
+
         val result = GlobalScope.produce(context) {
 
             val chunkBuffer = CharArray(128)
@@ -76,11 +78,11 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
                 }
             }
 
-            trace { "polling of ${this@toPolledReceiveChannel} completed" }
+            trace { "polling of $name completed" }
         }
 
         return object: ReceiveChannel<Char> by result {
-            override fun toString() = "poll-${this@toPolledReceiveChannel}"
+            override fun toString() = "poll-$name"
         }
     }
 }

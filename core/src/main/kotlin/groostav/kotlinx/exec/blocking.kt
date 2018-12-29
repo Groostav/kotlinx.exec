@@ -57,7 +57,7 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
             }
         }
         return object: ReceiveChannel<Char> by result {
-            override fun toString() = "pumpchan-${this@toPumpedReceiveChannel}"
+            override fun toString() = "pump-${this@toPumpedReceiveChannel}"
         }
     }
 

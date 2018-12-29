@@ -128,6 +128,7 @@ data class StandardErrorMessage(val line: String): ProcessEvent() {
 data class ExitCode(val code: Int): ProcessEvent() {
     override val formattedMessage: String get() = "Process finished with exit code $code"
 }
+
 //
 //internal class RunningProcessFactory {
 //
@@ -435,11 +436,14 @@ data class ExitCode(val code: Int): ProcessEvent() {
 //    //endregion
 //}
 
+typealias FlushCommand = Unit
+
 class ProcessChannels(
         val name: String,
         val stdin: Channel<Char> = Channel(Channel.RENDEZVOUS),
         val stdout: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$name-stdout"),
-        val stderr: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$name-stderr")
+        val stderr: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$name-stderr"),
+        val flush: Channel<FlushCommand> = Channel(Channel.RENDEZVOUS)
 )
 
 @InternalCoroutinesApi internal class ExecCoroutine(

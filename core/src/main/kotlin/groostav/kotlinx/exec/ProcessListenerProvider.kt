@@ -17,7 +17,7 @@ internal interface ProcessListenerProvider {
     }
 }
 
-internal val UseBlockableThreads = getBoolean("groostav.kotlinx.exec.UseBlockableThreads")
+internal val UseBlockableThreads = getBoolean("kotlinx.exec.UseBlockableThreads")
 
 internal fun makeListenerProviderFactory(): ProcessListenerProvider.Factory {
     return when {

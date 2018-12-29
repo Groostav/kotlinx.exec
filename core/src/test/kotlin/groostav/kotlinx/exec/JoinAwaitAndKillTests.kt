@@ -228,6 +228,8 @@ class JoinAwaitAndKillTests {
                 "groostav.kotlinx.exec.ExecKt.execVoid(exec.kt:LINE_NUM)",
                 thrown?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
         )
+
+        val x = 4;
     }
 
     @Test fun `when asynchronous exec sees bad exit code should throw ugly exception with good cause`() = runBlocking {

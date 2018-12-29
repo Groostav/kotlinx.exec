@@ -24,6 +24,7 @@ class ConfigurationTests {
     @Test fun `when running with specified environment parameter should see that environment parameter`() = runBlocking<Unit> {
         val uniqueKey = UUID.randomUUID()
         val (result, code) = exec {
+
             command = printASDFEnvironmentParameterCommand()
             environment += "ASDF" to "1234-$uniqueKey"
         }
