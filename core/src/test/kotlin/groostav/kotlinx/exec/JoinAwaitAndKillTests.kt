@@ -14,7 +14,6 @@ import kotlin.test.*
 @InternalCoroutinesApi
 class JoinAwaitAndKillTests {
 
-
     @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
 
         // because '1' is an expected code, and the script exited with code 1, we see that as a regular return value,
@@ -225,11 +224,9 @@ class JoinAwaitAndKillTests {
 
         assertEquals(
                 //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
-                "groostav.kotlinx.exec.ExecKt.execVoid(exec.kt:LINE_NUM)",
+                "groostav.kotlinx.exec.ExecKt\$execVoid\$2.invokeSuspend(exec.kt:LINE_NUM)",
                 thrown?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
         )
-
-        val x = 4;
     }
 
     @Test fun `when asynchronous exec sees bad exit code should throw ugly exception with good cause`() = runBlocking {

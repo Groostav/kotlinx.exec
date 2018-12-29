@@ -42,14 +42,24 @@ data class ProcessBuilder internal constructor(
         var encoding: Charset = Charsets.UTF_8,
 
         /**
-         * character count of output buffered by [RunningProcess.standardError].
+         * Character count of output buffered for [RunningProcess.standardError].
          *
-         * This value controls the number of characters buffered for the standard-error character channel.
+         * This value controls the number of most recent characters queued for the standard-error character channel.
+         * If the buffer is full then any new characters received will cause the buffer to drop old characters
+         * out of the queue in FIFO order.
          *
-         * This buffer is only for the character stream, line-aggregation is done before buffering and is
+         * the channel behaviour will be as follows: if the `charCount` value is...
+         * - 0: an empty channel (will not produce any elements)
+         * - 1: a Conflated channel keeping only the most recent character
+         * - in 2 until [Int.MAX_VALUE]: an ArrayChannel buffering like a queue
+         * - [Int.MAX_VALUE]: a LinkedListChannel keeping all output
+         *
+         * In each case the channel will be closed when the process has no more error messages.
+         *
+         * This buffer is only for the character stream. The line-aggregation is separate and is
          * buffered by the aggregate channel as part of the [aggregateOutputBufferLineCount]
          *
-         * Note also, implementations of java platform types may allocate their own small buffers,
+         * Note also implementations of java platform types may allocate their own small buffers:
          * - [java.io.InputStreamReader]'s use of a 8KB buffer in [sun.nio.cs.StreamDecoder].
          * - [java.lang.Process.getInputStream] also returns a [java.io.BufferedInputStream]
          *   instance with a non-configurable byte-buffer of 8KB [java.io.BufferedInputStream.DEFAULT_BUFFER_SIZE]
@@ -57,15 +67,27 @@ data class ProcessBuilder internal constructor(
         var standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
         /**
-         * character count of output buffered by [RunningProcess.standardOutput].
+         * Character count of output buffered for [RunningProcess.standardOutput].
          *
-         * This value controls the number of characters buffered for the standard-output character stream.
+         * This value controls the number of most recent characters queued for the standard-output character channel.
+         * If the buffer is full then any new characters received will cause the buffer to drop old characters
+         * out of the queue in FIFO order.
          *
-         * Note also, implementations of java platform types may allocate their own small buffers,
-         * namely [java.io.InputStreamReader]'s use of a 8KB buffer in [sun.nio.cs.StreamDecoder]
+         * the channel behaviour will be as follows: if the `charCount` value is...
+         * - 0: an empty channel (will not produce any elements)
+         * - 1: a Conflated channel keeping only the most recent character
+         * - in 2 until [Int.MAX_VALUE]: an ArrayChannel buffering like a queue
+         * - [Int.MAX_VALUE]: a LinkedListChannel keeping all output
          *
-         * This buffer is only for the character stream, line-aggregation is done before buffering and is
+         * In each case the channel will be closed when the process has no more output messages.
+         *
+         * This buffer is only for the character stream. The line-aggregation is separate and is
          * buffered by the aggregate channel as part of the [aggregateOutputBufferLineCount]
+         *
+         * Note also implementations of java platform types may allocate their own small buffers:
+         * - [java.io.InputStreamReader]'s use of a 8KB buffer in [sun.nio.cs.StreamDecoder].
+         * - [java.lang.Process.getInputStream] also returns a [java.io.BufferedInputStream]
+         *   instance with a non-configurable byte-buffer of 8KB [java.io.BufferedInputStream.DEFAULT_BUFFER_SIZE]
          */
         var standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
@@ -73,8 +95,20 @@ data class ProcessBuilder internal constructor(
          * Number of lines to buffer in the aggregate channel
          *
          * This value controls the number of lines of combined standard-output and standard-error
-         * that will be kept by the running process. In the event that this buffer is filled,
-         * the oldest line will be dropped, giving a behaviour similar to posix `tail`.
+         * that will be kept by the running process in a queue. In the event that this buffer is filled,
+         * the oldest line will be dropped out of the queue in FIFO order.
+         *
+         * the channel behaviour will be as follows: if the `lineCount` value is...
+         * - 0: an empty channel (will not produce any elements)
+         * - 1: a Conflated channel keeping only the most recent character
+         * - in 2 until [Int.MAX_VALUE]: an ArrayChannel buffering like a queue
+         * - [Int.MAX_VALUE]: a LinkedListChannel keeping all output
+         *
+         * In each case the channel will be closed when the process has no more output messages.
+         *
+         * This buffer is only for the aggregate line channel. The [RunningProcess.standardOutput]
+         * character channel is controlled by [standardOutputBufferCharCount] and
+         * the [RunningProcess.standardError] character channel is controlled by [standardErrorBufferCharCount]
          */
         var aggregateOutputBufferLineCount: Int = 2000,
 

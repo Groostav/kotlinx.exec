@@ -3,7 +3,6 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -158,9 +157,15 @@ private inline fun BitSet.removeIf(predicate: (Int) -> Boolean){
 
 enum class State { NoMatch, NewMatch, ContinuedMatch }
 
-internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
+internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): ReceiveChannel<T> {
 
-    val buffer = object: Channel<T> by Channel(bufferSize) {
+    // see [ProcessBuilder.standardErrorBufferCharCount]
+    val channelTypeOrArrayBufferSize = bufferSize.asQueueChannelCapacity()
+
+    //if we request a buffer size of 0, we use a simple conflated channel.
+    val channelActual = Channel<T>(channelTypeOrArrayBufferSize)
+
+    val buffer = object: Channel<T> by channelActual {
         override fun toString() = "tail$bufferSize-${this@tail}"
     }
 
@@ -168,8 +173,10 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
 
     GlobalScope.launch(Unconfined + CoroutineName(buffer.toString())) {
         try {
-            for (item in this@tail) {
-                buffer.pushForward(item)
+            this@tail.consumeEach { nextChar ->
+                if (bufferSize != 0) {
+                    buffer.pushForward(nextChar)
+                }
             }
         }
         finally {
@@ -180,8 +187,16 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): Channel<T> {
     return buffer
 }
 
+internal fun Int.asQueueChannelCapacity(): Int = when (this) {
+    0 -> Channel.UNLIMITED //TODO: a custom channel impl here would be neat
+    1 -> Channel.CONFLATED
+    in 2 until Int.MAX_VALUE -> this
+    Int.MAX_VALUE -> Channel.UNLIMITED
+    else -> TODO("cant allocate buffer for size=${this}")
+}
+
 private suspend inline fun <T> Channel<T>.pushForward(next: T){
-    while (! isClosedForSend && !offer(next)) {
+    while (!offer(next) && ! isClosedForSend) {
         val bumpedElement = receiveOrNull()
         if (bumpedElement != null){
             trace { "WARN: back-pressure forced drop '$bumpedElement' from ${this@pushForward}" }

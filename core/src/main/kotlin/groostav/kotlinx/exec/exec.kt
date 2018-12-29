@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.lang.ProcessBuilder.Redirect.*
 import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.math.exp
 import java.lang.ProcessBuilder as JProcBuilder
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
@@ -24,9 +25,9 @@ internal fun CoroutineScope.execAsync(
     val stdout = channels.stdout.openSubscription().lines(config.delimiters)
     val stderr = channels.stderr.openSubscription().lines(config.delimiters)
 
-    val aggregateChannel = Channel<ProcessEvent>(config.aggregateOutputBufferLineCount)
+    val aggregateChannel = Channel<ProcessEvent>(config.aggregateOutputBufferLineCount.asQueueChannelCapacity())
 
-    val block: suspend ExecCoroutine.() -> Int = {
+    val block: suspend ExecCoroutine.() -> Int = execBlock@ {
 
         val jvmProcessBuilder = java.lang.ProcessBuilder(config.command).apply {
 
@@ -37,10 +38,10 @@ internal fun CoroutineScope.execAsync(
                 }
             }
 
-            if(config.standardErrorBufferCharCount == 0){
+            if(config.run { standardErrorBufferCharCount == 0 && aggregateOutputBufferLineCount == 0 }){
                 redirectError(DISCARD)
             }
-            if(config.standardOutputBufferCharCount == 0){
+            if(config.run { standardOutputBufferCharCount == 0 && aggregateOutputBufferLineCount == 0}){
                 redirectOutput(DISCARD)
             }
 
@@ -76,7 +77,7 @@ internal fun CoroutineScope.execAsync(
         }
 
         val result = exitCode.await()
-        onProcessEvent(ExitCode(result))
+        if(config.aggregateOutputBufferLineCount > 0) onProcessEvent(ExitCode(result))
 
         aggregateChannel.close()
         standardInput.close()
@@ -85,10 +86,14 @@ internal fun CoroutineScope.execAsync(
         channels.stdout.asJob().join()
         channels.stderr.asJob().join()
 
-
         trace { "coroutine block for $processID is done" }
 
-        result
+        val expectedExitCodes = config.expectedOutputCodes
+        return@execBlock when {
+            expectedExitCodes == null -> result
+            result in expectedExitCodes -> result
+            else -> throw makeExitCodeException(config, result, recentErrorOutput)
+        }
     }
 
     val stdinMutex = Mutex()
@@ -105,6 +110,10 @@ internal fun CoroutineScope.execAsync(
     )
     coroutine.start(start, coroutine, block)
     return coroutine
+}
+
+private fun validateOrThrowError(){
+
 }
 
 @InternalCoroutinesApi

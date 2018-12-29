@@ -50,6 +50,8 @@ class SimpleInlineMulticaster<T>(val name: String) {
         return GlobalScope.launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
             try {
                 source.consumeEach { next ->
+                    // note: even if we have zero subs, we still want to read to completion
+                    // this is because source is likely a rendezvous channel, and thus we need to block on it.
                     for (sub in newState.subs) {
                         sub.send(next)
                         // apply back-pressure from _all_ subs,

@@ -8,6 +8,9 @@ import java.lang.Boolean.getBoolean
 
 internal interface ProcessListenerProvider {
 
+    // note: these channels will be used even when the buffer size is set to zero.
+    // at time of writing, it seems better so synchronize on stdout completing even if its not used.
+
     val standardErrorChannel: Maybe<ReceiveChannel<Char>>// get() = Unsupported
     val standardOutputChannel: Maybe<ReceiveChannel<Char>>// get() = Unsupported
     val exitCodeDeferred: Maybe<Deferred<Int>>// get() = Unsupported
