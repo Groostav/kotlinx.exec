@@ -62,6 +62,13 @@ internal fun CoroutineScope.execAsync(
             // ok so, you could just push EOF Into the stream, make an EOF ProcessEvent,
             // and simply leverage that here to switch state.
 
+            morefail;
+            // yeah! what about a simple side channel!!
+            // this could be used for flushing and for EOF tokens. Its so simple to implement.
+            // one note about polling: when we receive an exit code,
+            // can we stop polling and instead simply block on the `read()` calls?
+            // is that ever not safe?
+
             val next = select<ProcessEvent?> {
                 if (stdoutWasOpen) stdout.onReceiveOrNull { it?.let(::StandardOutputMessage) }
                 (stdout as Job).onJoin { null }
