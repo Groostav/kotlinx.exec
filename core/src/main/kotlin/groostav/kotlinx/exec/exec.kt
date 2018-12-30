@@ -2,9 +2,6 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
-import kotlinx.coroutines.sync.Mutex
-import java.io.IOException
-import java.lang.ProcessBuilder.Redirect.*
 import kotlin.coroutines.EmptyCoroutineContext
 import java.lang.ProcessBuilder as JProcBuilder
 
@@ -21,7 +18,10 @@ internal fun CoroutineScope.execAsync(
             config, newContext, makePIDGenerator(), makeListenerProviderFactory()
     )
     coroutine.prestart()
-    coroutine.start(start, coroutine, ExecCoroutine::exec)
+    if(start != CoroutineStart.LAZY) { coroutine.kickoff() }
+
+    coroutine.start(start, coroutine, ExecCoroutine::waitFor)
+
     return coroutine
 }
 
@@ -29,7 +29,7 @@ internal fun CoroutineScope.execAsync(
 @InternalCoroutinesApi
 fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
 
-    val configActual = processBuilder(coroutineScope = this@execAsync) {
+    val configActual = processBuilder() {
         config()
         source = AsynchronousExecutionStart(command.toList())
     }
@@ -43,14 +43,15 @@ fun CoroutineScope.execAsync(commandFirst: String, vararg commandRest: String): 
 @InternalCoroutinesApi
 suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult = coroutineScope {
 
-    val configActual = processBuilder(GlobalScope) {
+    val configActual = processBuilder {
         apply(config)
 
         source = SynchronousExecutionStart(command.toList())
     }
 
     val runningProcess = execAsync(configActual)
-    runningProcess.join()
+
+    withTimeoutOrNull(3_000) { runningProcess.join() }
 
     val output = runningProcess
             .filter { it !is ExitCode }
@@ -66,7 +67,7 @@ suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResul
 @InternalCoroutinesApi
 suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int = coroutineScope {
 
-    val configActual = processBuilder(GlobalScope) {
+    val configActual = processBuilder() {
         aggregateOutputBufferLineCount = 0
         standardErrorBufferCharCount = 0
         standardErrorBufferCharCount = 0
@@ -103,9 +104,9 @@ class InvalidExitValueException(
     }
 }
 
-internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): Throwable {
+internal inline fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): Throwable {
     val expectedCodes = config.expectedOutputCodes
-    val builder = StringBuilder().apply {
+    val builder = buildString {
 
         appendln("exec '${config.command.joinToString(" ")}'")
 

@@ -32,6 +32,7 @@ private fun `powershell -ExecPolicy Bypass -File`(scriptFileName: String) = list
         "-ExecutionPolicy", "Bypass"
 )
 private fun bash(scriptFileName: String) = listOf("bash", getLocalResourcePath(scriptFileName))
+private fun cmd(scriptFileName: String) = listOf("cmd.exe", "/C", getLocalResourcePath(scriptFileName))
 
 fun emptyScriptCommand() = when(JavaProcessOS) {
     Windows -> `powershell -ExecPolicy Bypass -File`("EmptyScript.ps1")
@@ -62,7 +63,7 @@ fun printMultipleLinesCommand() = when(JavaProcessOS){
     Unix -> bash( "MultilineScript.sh")
 }
 fun chattyErrorScriptCommand() = when(JavaProcessOS){
-    Windows -> `powershell -ExecPolicy Bypass -File`("ChattyErrorScript.ps1")
+    Windows -> cmd("ChattyErrorScript.bat")
     Unix -> bash("ChattyErrorScript.sh")
 }
 fun printASDFEnvironmentParameterCommand() = when(JavaProcessOS){

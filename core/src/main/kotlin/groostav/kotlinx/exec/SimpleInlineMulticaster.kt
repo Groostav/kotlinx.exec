@@ -17,13 +17,18 @@ class SimpleInlineMulticaster<T>(val name: String) {
     constructor(): this("anonymous${counter.getAndIncrement()}")
 
     sealed class State<T> {
-        data class Registration<T>(val subs: List<Channel<T>> = emptyList()): State<T>()
-        data class Running<T>(val subs: List<Channel<T>> = emptyList()): State<T>()
-        class Closed<T>(): State<T>()
+        class Registration<T>(val subs: List<Channel<T>> = emptyList()): State<T>() {
+            override fun toString() = "Registration"
+        }
+        class Running<T>(val subs: List<Channel<T>> = emptyList(), val src: ReceiveChannel<T>): State<T>() {
+            override fun toString() = "Running{$src}"
+        }
+        class Closed<T>(): State<T>() {
+            override fun toString() = "Closed"
+        }
     }
 
     private val state: AtomicReference<State<T>> = AtomicReference(State.Registration())
-    private var source: ReceiveChannel<T>? = null
     private val sourceJob = CompletableDeferred<Unit>()
 
     init {
@@ -34,7 +39,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
 
         val newState = state.updateAndGet {
             when(it){
-                is State.Registration -> State.Running(it.subs)
+                is State.Registration -> State.Running(it.subs, source)
                 is State.Running -> throw IllegalStateException("already started")
                 is State.Closed -> throw IllegalStateException("already started")
             }
@@ -44,8 +49,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             throw IllegalStateException("can only start syndicating once")
         }
 
-        this.source = source
-        trace { "publishing src=$source to $this, locked-in subs: ${newState.subs.joinToString()}" }
+        trace { "publishing src=$source to $this, locked-in subs: ${newState.subs.joinToString("\n\t", "\n\t")}" }
 
         return GlobalScope.launch(Unconfined + CoroutineName(this@SimpleInlineMulticaster.toString())) {
             try {
@@ -88,11 +92,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
             when(it){
                 is State.Registration<T> -> {
 
-                    val subscription = object: Channel<T> by Channel(RENDEZVOUS) {
-                        val id = it.subs.size+1
-                        val subSuffix = if(description != null) "[$description]" else ""
-                        override fun toString() = "sub$id$subSuffix-$name"
-                    }
+                    val subscription = newSubscription(it, description)
 
                     State.Registration(it.subs + subscription)
                 }
@@ -108,11 +108,22 @@ class SimpleInlineMulticaster<T>(val name: String) {
         return subscription
     }
 
+    private fun newSubscription(registration: State.Registration<T>, description: String?): Channel<T> {
+
+        val subSuffix = if(description != null) "[$description]" else ""
+        val resultActual = Channel<T>(RENDEZVOUS)
+
+        return object: Channel<T> by resultActual {
+            val id = registration.subs.size+1
+            override fun toString() = "sub$id$subSuffix-$name[$resultActual]"
+        }
+    }
+
     // suspends until source is empty and all elements have been dispatched to all subscribers.
     // key functional difference here vs BroadcastChannel.
     fun asJob(): Job = sourceJob
 
-    override fun toString() = "caster-$name"
+    override fun toString() = "caster-$name{${state.get()}}"
 
     companion object {
         private val counter = AtomicInteger(1)

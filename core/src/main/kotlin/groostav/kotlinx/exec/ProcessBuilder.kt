@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.CoroutineScope
 import java.nio.charset.Charset
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -161,7 +160,7 @@ private fun String.encodeLineChars() = this
         .replace("\r", "\\r")
         .replace("\n", "\\n")
 
-internal inline fun processBuilder(coroutineScope: CoroutineScope, configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
+internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
 
     val initial = ProcessBuilder().apply(configureBlock)
     val initialCommandList = initial.command.toList()

@@ -216,6 +216,7 @@ internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Cha
 
         val writer = OutputStreamWriter(this@toSendChannel, config.encoding)
 
+        var sawClosedException = false
         try {
             consumeEach { nextChar ->
 
@@ -226,12 +227,17 @@ internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Cha
                 catch (ex: IOException) {
                     //writer was closed, process was terminated.
                     //TODO need a test to induce this, verify correctness.
+                    sawClosedException = true
                     return@actor
                 }
             }
         }
         finally {
-            writer.close()
+            // if you write to a writer that is backed by a closed stream,
+            // the writer appears to close itself in turn.
+            if ( ! sawClosedException){
+                writer.close()
+            }
         }
     }
 }

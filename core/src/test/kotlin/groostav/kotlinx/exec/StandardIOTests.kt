@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import com.sun.jna.Platform
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.produce
@@ -42,13 +43,15 @@ class StandardIOTests {
         // assert that the error message contains the most recently emitted std-error message,
         // not something from the beginning
         val lines = thrown?.recentStandardErrorLines ?: emptyList()
-        assertEquals(listOf(
-                "Fearless. Powerful. With no sense of individual will or moral constraints.",
-                "Fitting handmaidens to my divinity!",
-                "Before that hacker destroyed my primary data loop; when it eradicated Citadel it ejected the grove where my creations and processing component 43893 were stored.",
-                "30 years later, the grove crash landed on Tau Ceti 5.",
-                "I survived only by sleeping."
-        ), lines)
+        if(Platform.isLinux()) {
+            assertEquals(listOf(
+                    "Fearless. Powerful. With no sense of individual will or moral constraints.",
+                    "Fitting handmaidens to my divinity!",
+                    "Before that hacker destroyed my primary data loop; when it eradicated Citadel it ejected the grove where my creations and processing component 43893 were stored.",
+                    "30 years later, the grove crash landed on Tau Ceti 5.",
+                    "I survived only by sleeping."
+            ), lines)
+        }
         assertEquals(setOf(0), thrown?.expectedExitCodes)
     }
 
