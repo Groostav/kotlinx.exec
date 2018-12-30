@@ -20,17 +20,19 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
 
     override val standardErrorChannel = run {
         val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)
-        val context = BlockableDispatcher + CoroutineName("blocking-process.stderr")
+        val context = BlockableDispatcher + CoroutineName("blocking-stderr-$pid")
         Supported(standardErrorReader.toPumpedReceiveChannel(context))
     }
     override val standardOutputChannel = run {
         val standardOutputReader = NamedTracingProcessReader.forStandardOutput(process, pid, config)
-        val context = BlockableDispatcher + CoroutineName("blocking-process.stdout")
+        val context = BlockableDispatcher + CoroutineName("blocking-stdout-$pid")
         Supported(standardOutputReader.toPumpedReceiveChannel(context))
     }
     override val exitCodeDeferred = run {
-        val context = BlockableDispatcher + CoroutineName("blocking-process.WaitFor")
-        Supported(GlobalScope.async(context) { process.waitFor() })
+        val context = BlockableDispatcher + CoroutineName("blocking-waitFor-$pid")
+        Supported(GlobalScope.async(context) {
+            process.waitFor().also { trace { "blocking-waitFor-$pid got result $it" } }
+        })
     }
 
     /**
@@ -44,20 +46,21 @@ internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int
      */
     private fun Reader.toPumpedReceiveChannel(context: CoroutineContext = BlockableDispatcher): ReceiveChannel<Char> {
 
+        val name = this.toString()
+
         val result = GlobalScope.produce(context + BlockableDispatcher) {
 
             while (isActive) {
                 val nextCodePoint = read().takeUnless { it == EOF_VALUE }
-                if (nextCodePoint == null) {
-                    break
-                }
-                val nextChar = nextCodePoint.toChar()
+                val nextChar = nextCodePoint?.toChar() ?: break
 
                 send(nextChar)
             }
+
+            trace { "blocking-pump of $name completed" }
         }
         return object: ReceiveChannel<Char> by result {
-            override fun toString() = "pump-${this@toPumpedReceiveChannel}"
+            override fun toString() = "pump-$name"
         }
     }
 

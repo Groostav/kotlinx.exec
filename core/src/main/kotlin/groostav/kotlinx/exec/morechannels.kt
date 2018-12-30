@@ -1,22 +1,22 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Unconfined
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.channels.*
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.io.OutputStream
 import java.io.OutputStreamWriter
 import java.util.*
+import kotlin.coroutines.CoroutineContext
 
 //TODO: why isn't this part of kotlinx.coroutines already? Something they know I dont?
 internal fun ReceiveChannel<Char>.lines(
-        delimiters: List<String> = listOf("\r", "\n", "\r\n")
+        delimiters: List<String> = listOf("\r", "\n", "\r\n"),
+        context: CoroutineContext = Unconfined
 ): ReceiveChannel<String> {
-    val result = GlobalScope.produce<String>(Unconfined + CoroutineName("lines{$this@lines}")){
+    val result = GlobalScope.produce<String>(context + CoroutineName("lines{$this@lines}")){
 
         trace { "starting lines-${this@lines}" }
 
@@ -157,7 +157,7 @@ private inline fun BitSet.removeIf(predicate: (Int) -> Boolean){
 
 enum class State { NoMatch, NewMatch, ContinuedMatch }
 
-internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): ReceiveChannel<T> {
+internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int, context: CoroutineContext = Unconfined): ReceiveChannel<T> {
 
     // see [ProcessBuilder.standardErrorBufferCharCount]
     val channelTypeOrArrayBufferSize = bufferSize.asQueueChannelCapacity()
@@ -166,12 +166,12 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): ReceiveChannel<T> {
     val channelActual = Channel<T>(channelTypeOrArrayBufferSize)
 
     val buffer = object: Channel<T> by channelActual {
-        override fun toString() = "tail$bufferSize-${this@tail}"
+        override fun toString() = "tail[${bufferSize.toByteSizeString()}]-${this@tail}"
     }
 
-    trace { "allocated buffer=$bufferSize for $buffer" }
+    trace { "allocated buffer=$bufferSize (${bufferSize.toByteSizeString()}) for $buffer" }
 
-    GlobalScope.launch(Unconfined + CoroutineName(buffer.toString())) {
+    GlobalScope.launch(context + CoroutineName(buffer.toString())) {
         try {
             this@tail.consumeEach { nextChar ->
                 if (bufferSize != 0) {
@@ -187,8 +187,15 @@ internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int): ReceiveChannel<T> {
     return buffer
 }
 
+private fun Int.toByteSizeString(): String = when(this){
+    in 0 until 1024 ->  "${this}b"
+    in 1024 until 1024*1024 ->  "${this/1024}kb"
+    in 1024*1024 until Int.MAX_VALUE ->  "${this/(1024*1024)}mb"
+    else -> TODO()
+}
+
 internal fun Int.asQueueChannelCapacity(): Int = when (this) {
-    0 -> Channel.UNLIMITED //TODO: a custom channel impl here would be neat
+    0 -> Channel.UNLIMITED //TODO: a custom 'EmptyCloseableChannel' impl here would be neat
     1 -> Channel.CONFLATED
     in 2 until Int.MAX_VALUE -> this
     Int.MAX_VALUE -> Channel.UNLIMITED
@@ -229,7 +236,10 @@ internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Cha
     }
 }
 
-internal fun <T> SendChannel<T>.lockedBy(mutex: Mutex): SendChannel<T> = GlobalScope.actor {
+internal fun <T> SendChannel<T>.lockedBy(
+        mutex: Mutex,
+        context: CoroutineContext = Unconfined
+): SendChannel<T> = GlobalScope.actor(context, onCompletion = { ex -> close(ex) }) {
     consumeEach {
         mutex.withLock {
             send(it)
@@ -237,11 +247,55 @@ internal fun <T> SendChannel<T>.lockedBy(mutex: Mutex): SendChannel<T> = GlobalS
     }
 }
 
-internal fun <T, R> SendChannel<R>.flatMap(transform: (T) -> Iterable<R>): SendChannel<T> = GlobalScope.actor {
+// TODO what about exceptions?
+
+internal fun <R, T> SendChannel<R>.flatMap(
+        context: CoroutineContext = Unconfined,
+        transform: (T) -> Iterable<R>
+): SendChannel<T> = GlobalScope.actor(context, onCompletion = { ex -> close(ex) }) {
     consumeEach {
         val nextBatch = transform(it)
         for(element in nextBatch){
             send(element)
+        }
+    }
+}
+
+@InternalCoroutinesApi
+internal fun <T> ReceiveChannel<T>.sinkTo(
+        destination: SendChannel<T>,
+        context: CoroutineContext = Unconfined
+): Unit {
+    GlobalScope.launch(context) {
+        consumeEach {
+            destination.send(it)
+        }
+    }.invokeOnCompletion(onCancelling = true) { ex -> destination.close(ex) }
+}
+
+@InternalCoroutinesApi
+internal fun <T> SendChannel<T>.sinkFrom(
+        source: ReceiveChannel<T>,
+        context: CoroutineContext = Unconfined
+): Unit {
+    GlobalScope.launch(context) {
+        source.consumeEach {
+            send(it)
+        }
+    }.invokeOnCompletion(onCancelling = true) { ex -> close(ex) }
+}
+
+internal fun <T> CompletableDeferred<T>.sinkFrom(
+        source: Deferred<T>,
+        context: CoroutineContext = Unconfined
+): Unit {
+    GlobalScope.launch(context) {
+        try {
+            val result = source.await()
+            complete(result)
+        }
+        catch(ex: Exception){
+            completeExceptionally(ex)
         }
     }
 }

@@ -20,7 +20,7 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     private val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)
     private val standardOutputReader = NamedTracingProcessReader.forStandardOutput(process, pid, config)
 
-    val PollPeriodWindow = getIntRange("groostav.kotlinx.exec.PollPeriodMillis")?.also {
+    val PollPeriodWindow = getIntRange("kotlinx.exec.PollPeriodMillis")?.also {
         require(it.start > 0)
         require(it.endInclusive >= it.start)
     } ?: (2 .. 34) //30fps = 33.3ms period
@@ -29,21 +29,22 @@ internal class PollingListenerProvider(val process: Process, val pid: Int, val c
     private @Volatile var manualEOF = false
 
     override val standardErrorChannel = run {
-        val context = Unconfined + CoroutineName("polling-process.stderr")
+        val context = Unconfined + CoroutineName("polling-stderr-$pid")
         Supported(standardErrorReader.toPolledReceiveChannel(context, DelayMachine(PollPeriodWindow, otherSignals)))
     }
     override val standardOutputChannel = run {
-        val context = Unconfined + CoroutineName("polling-process.stdout")
+        val context = Unconfined + CoroutineName("polling-stdout-$pid")
         Supported(standardOutputReader.toPolledReceiveChannel(context, DelayMachine(PollPeriodWindow, otherSignals)))
     }
 
     override val exitCodeDeferred = Supported(
-            GlobalScope.async(Unconfined + CoroutineName("polling-process.waitFor")) {
+            GlobalScope.async(Unconfined + CoroutineName("polling-waitFor-$pid")) {
                 val delayMachine = DelayMachine(PollPeriodWindow, otherSignals)
                 delayMachine.waitForByPollingPeriodically { ! process.isAlive }
                 val result = process.exitValue()
                 manualEOF = true
                 delayMachine.signalPollResult()
+                trace { "polling-waitfor-$pid got result $result" }
                 result
             }
     )

@@ -5,8 +5,10 @@ import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.SelectClause2
 import kotlinx.coroutines.selects.SelectInstance
+import kotlinx.coroutines.sync.Mutex
+import java.io.IOException
 import java.lang.IllegalStateException
-import java.util.*
+import java.lang.ProcessBuilder.Redirect.*
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.suspendCoroutine
 
@@ -132,24 +134,13 @@ data class ExitCode(val code: Int): ProcessEvent() {
 
 typealias FlushCommand = Unit
 
-class ProcessChannels(
-        val name: String,
-        val stdin: Channel<Char> = Channel(Channel.RENDEZVOUS),
-        val stdout: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$name-stdout"),
-        val stderr: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$name-stderr"),
-        val flush: Channel<FlushCommand> = Channel(Channel.RENDEZVOUS)
-)
-
-@InternalCoroutinesApi internal class ExecCoroutine(
+@InternalCoroutinesApi internal class ExecCoroutine private constructor(
         private val config: ProcessBuilder,
         parentContext: CoroutineContext,
-        override val standardInput: SendChannel<Char>,
-        override val standardOutput: ReceiveChannel<Char>,
-        override val standardError: ReceiveChannel<Char>,
-        private val aggregateChannel: Channel<ProcessEvent>,
-        inputLines: SendChannel<String>,
         private val pidGen: ProcessIDGenerator,
-        private val processControl: ProcessControlFacade
+        private val listenerFactory: ProcessListenerProvider.Factory,
+        private val aggregateChannel: Channel<ProcessEvent>,
+        private val inputLines: Channel<String>
 ):
         AbstractCoroutine<Int>(parentContext + makeName(config), true),
         RunningProcess,
@@ -157,10 +148,159 @@ class ProcessChannels(
         ReceiveChannel<ProcessEvent> by aggregateChannel,
         SendChannel<String> by inputLines
 {
-    internal var process: Process? = null
-    internal val recentErrorOutput = CircularArrayQueue<String>(config.linesForExceptionError)
 
-    override val processID: Int get() = process?.let { pidGen.findPID(it) } ?: throw IllegalStateException()
+    sealed class State {
+        object Uninitialized: State()
+        class Prestarted(
+                val jvmProcessBuilder: java.lang.ProcessBuilder,
+                val recentErrorOutput: CircularArrayQueue<String>,
+                val stdoutAggregatorJob: Job?,
+                val stderrAggregatorJob: Job?,
+                val exitCodeAggregatorJob: Job
+        ): State()
+        data class Running(val process: Process, val pid: Int): State()
+        data class Completed(val pid: Int, val exitCode: Int): State()
+    }
+
+    private val shortName = config.command.first()
+
+    private @Volatile var state: State = State.Uninitialized
+        get() = field
+        set(value) { field = value.also { trace { "process $shortName moved to state $it"} } }
+
+    private val exitCodeInflection = CompletableDeferred<Int>()
+    private val stdinInflection: Channel<Char> = Channel(Channel.RENDEZVOUS)
+    private val stdoutInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$shortName-stdout")
+    private val stderrInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$shortName-stderr")
+
+    override val standardInput: Channel<Char> = Channel(Channel.RENDEZVOUS)
+    override val standardOutput = stdoutInflection.openSubscription().tail(config.standardOutputBufferCharCount)
+    override val standardError = stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount)
+
+    override val processID: Int by lazy {
+        when(val state = state){
+            State.Uninitialized, is State.Prestarted -> throw IllegalStateException("process not started")
+            is State.Running -> state.pid
+            is State.Completed -> state.pid
+        }
+    }
+
+    internal fun prestart(){
+        val state = state
+        require(state is State.Uninitialized)
+
+        run prestartStdin@{
+            val stdinMutex = Mutex()
+
+            inputLines.sinkTo(stdinInflection.flatMap<Char, String> { (it + config.inputFlushMarker).asIterable() }.lockedBy(stdinMutex))
+            standardInput.sinkTo(stdinInflection.lockedBy(stdinMutex))
+
+        }
+        run prestartStdout@ {
+//            stdoutInflection.openSubscription().tail(config.standardOutputBufferCharCount).sinkTo(standardOutput)
+        }
+        val recentErrorOutput = run prestartStderr@ {
+//            stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount).sinkTo(standardError)
+
+            CircularArrayQueue<String>(config.linesForExceptionError).also { recentErrorOutput ->
+                launch {
+                    stderrInflection.openSubscription("err-cache").lines().consumeEach { errorMessageLine ->
+                        recentErrorOutput.enqueue(errorMessageLine)
+                    }
+                }
+            }
+        }
+        var stdoutAggregatorJob: Job? = null
+        var stderrAggregatorJob: Job? = null
+        val exitCodeAggregatorJob: Job
+
+        run prestartAggregateChannel@ {
+            if(config.aggregateOutputBufferLineCount > 0) {
+                stdoutAggregatorJob = launch(Dispatchers.Unconfined) {
+                    for (message in stdoutInflection.openSubscription("aggregator").lines()) {
+                        onProcessEvent(StandardOutputMessage(message))
+                    }
+                }
+                stderrAggregatorJob = launch(Dispatchers.Unconfined) {
+                    for (message in stderrInflection.openSubscription("aggregator").lines()) {
+                        onProcessEvent(StandardErrorMessage(message))
+                    }
+                }
+            }
+            exitCodeAggregatorJob = launch(Dispatchers.Unconfined){
+                val result = exitCodeInflection.await()
+                stdoutAggregatorJob?.join()
+                stderrAggregatorJob?.join()
+                onProcessEvent(ExitCode(result))
+            }
+        }
+        val procBuilder = run prestartJvmProc@ {
+            java.lang.ProcessBuilder(config.command).apply {
+
+                environment().apply {
+                    if (this !== config.environment) {
+                        clear()
+                        putAll(config.environment)
+                    }
+                }
+
+                if(config.run { standardErrorBufferCharCount == 0 && aggregateOutputBufferLineCount == 0 }){
+                    redirectError(DISCARD)
+                }
+                if(config.run { standardOutputBufferCharCount == 0 && aggregateOutputBufferLineCount == 0}){
+                    redirectOutput(DISCARD)
+                }
+
+                directory(config.workingDirectory.toFile())
+            }
+        }
+
+        this.state = State.Prestarted(procBuilder, recentErrorOutput, stdoutAggregatorJob, stderrAggregatorJob, exitCodeAggregatorJob)
+    }
+
+    suspend fun exec(): Int = try {
+        val prestarted = state
+        require(prestarted is State.Prestarted)
+
+        val process = try { prestarted.jvmProcessBuilder.start() }
+        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message ?: "", config, ex) }
+
+        val pid = pidGen.findPID(process)
+        val running = State.Running(process, pid).also { this.state = it }
+
+        val listeners = listenerFactory.create(process, processID, config)
+
+        stdoutInflection.sinkFrom(listeners.standardOutputChannel.value)
+        stderrInflection.sinkFrom(listeners.standardErrorChannel.value)
+        exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value)
+        process.outputStream.toSendChannel(config).sinkFrom(stdinInflection)
+
+        prestarted.run {
+            stderrAggregatorJob?.join()
+            stdoutAggregatorJob?.join()
+            exitCodeAggregatorJob.join()
+        }
+
+        stderrInflection.asJob().join()
+        stdoutInflection.asJob().join()
+        val exitCode = exitCodeInflection.await()
+
+        val completed = State.Completed(running.pid, exitCode).also { this.state = it }
+
+        val expectedExitCodes = config.expectedOutputCodes
+
+        val result = when {
+            expectedExitCodes == null -> exitCode
+            exitCode in expectedExitCodes -> exitCode
+            else -> throw makeExitCodeException(config, exitCode, prestarted.recentErrorOutput.toList())
+        }
+
+        result.also { trace { "exec $shortName(PID=$pid) returned with code $result" }}
+    }
+    catch(ex: Exception){
+        trace { "exec $shortName threw an exception of '${ex.message}'" }
+        throw ex
+    }
 
     override suspend fun kill() {
         // whats my strategy?
@@ -183,7 +323,8 @@ class ProcessChannels(
         // I think the block should probably start an actor in global scope
         // each of these feed it an input
         // at least that way we can reduce the concurrency to an actor managing its state.
-        fail;
+//        fail;
+        TODO()
     }
 
     override fun cancel(): Unit {
@@ -202,12 +343,6 @@ class ProcessChannels(
 
     override fun cancel(cause: Throwable?): Boolean {
         return super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
-    }
-
-    override fun onStart() {
-        require(process != null)
-        require(processID != 0)
-        trace { "onStart ${config.command.first()} with PID=$processID" }
     }
 
     internal suspend fun onProcessEvent(event: ProcessEvent){
@@ -248,7 +383,18 @@ class ProcessChannels(
     private val _registerSelectClause1 = _methods.single { it.name == "registerSelectClause1Internal\$kotlinx_coroutines_core" }
     override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R): Unit = _registerSelectClause1(this, select, block) as Unit
 
-    companion object {
+    companion object Factory {
         fun makeName(config: ProcessBuilder) = CoroutineName("exec ${config.command.joinToString()}")
+
+        operator fun invoke(
+                config: ProcessBuilder,
+                parentContext: CoroutineContext,
+                pidGen: ProcessIDGenerator,
+                listenerFactory: ProcessListenerProvider.Factory
+        ) = ExecCoroutine(
+                config, parentContext, pidGen, listenerFactory,
+                aggregateChannel = Channel(config.aggregateOutputBufferLineCount.asQueueChannelCapacity()),
+                inputLines = Channel(Channel.RENDEZVOUS)
+        )
     }
 }

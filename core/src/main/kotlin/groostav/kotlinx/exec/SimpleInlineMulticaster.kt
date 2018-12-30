@@ -30,7 +30,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
         trace { "instanced $this" }
     }
 
-    fun syndicateAsync(source: ReceiveChannel<T>): Job {
+    fun sinkFrom(source: ReceiveChannel<T>): Job {
 
         val newState = state.updateAndGet {
             when(it){
@@ -82,7 +82,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
         }
     }
 
-    fun openSubscription(): ReceiveChannel<T> {
+    fun openSubscription(description: String? = null): ReceiveChannel<T> {
 
         val registered = state.updateAndGet {
             when(it){
@@ -90,7 +90,8 @@ class SimpleInlineMulticaster<T>(val name: String) {
 
                     val subscription = object: Channel<T> by Channel(RENDEZVOUS) {
                         val id = it.subs.size+1
-                        override fun toString() = "sub$id-$name"
+                        val subSuffix = if(description != null) "[$description]" else ""
+                        override fun toString() = "sub$id$subSuffix-$name"
                     }
 
                     State.Registration(it.subs + subscription)

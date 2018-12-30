@@ -17,102 +17,14 @@ internal fun CoroutineScope.execAsync(
 ): RunningProcess {
 
     val newContext = newCoroutineContext(EmptyCoroutineContext)
-
-    val channels = ProcessChannels(config.command.first())
-    val aggregateStdLines = channels.stdout.openSubscription().lines(config.delimiters)
-    val aggregateErrorLines = channels.stderr.openSubscription().lines(config.delimiters)
-    val errorCacheLines = channels.stderr.openSubscription().lines(config.delimiters)
-
-    val aggregateChannel = Channel<ProcessEvent>(config.aggregateOutputBufferLineCount.asQueueChannelCapacity())
-
-    val block: suspend ExecCoroutine.() -> Int = execBlock@ {
-
-        val jvmProcessBuilder = java.lang.ProcessBuilder(config.command).apply {
-
-            environment().apply {
-                if (this !== config.environment) {
-                    clear()
-                    putAll(config.environment)
-                }
-            }
-
-            if(config.run { standardErrorBufferCharCount == 0 && aggregateOutputBufferLineCount == 0 }){
-                redirectError(DISCARD)
-            }
-            if(config.run { standardOutputBufferCharCount == 0 && aggregateOutputBufferLineCount == 0}){
-                redirectOutput(DISCARD)
-            }
-
-            directory(config.workingDirectory.toFile())
-        }
-
-        val process = try { jvmProcessBuilder.start() }
-        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message ?: "", config, ex) }
-
-        this.process = process
-        val listeners = makeListenerProviderFactory().create(process, processID, config)
-
-        channels.stdout.syndicateAsync(listeners.standardOutputChannel.value)
-        channels.stderr.syndicateAsync(listeners.standardErrorChannel.value)
-        GlobalScope.launch { channels.stdin.mapTo(process.outputStream.toSendChannel(config)) { it } }
-
-        launch {
-            for(message in errorCacheLines){
-                recentErrorOutput.enqueue(message)
-            }
-        }
-
-        if(config.aggregateOutputBufferLineCount > 0){
-            val stdoutJob = launch(Dispatchers.Unconfined) {
-                for(message in aggregateStdLines){
-                    onProcessEvent(StandardOutputMessage(message))
-                }
-            }
-            val stderrJob = launch(Dispatchers.Unconfined) {
-                for(message in aggregateErrorLines){
-                    onProcessEvent(StandardErrorMessage(message))
-                }
-            }
-
-            stdoutJob.join()
-            stderrJob.join()
-        }
-
-        val result = listeners.exitCodeDeferred.value.await()
-        if(config.aggregateOutputBufferLineCount > 0) onProcessEvent(ExitCode(result))
-
-        aggregateChannel.close()
-        standardInput.close()
-
-        channels.stdin.close()
-        channels.stdout.asJob().join()
-        channels.stderr.asJob().join()
-
-        trace { "coroutine block for $processID is done" }
-
-        val expectedExitCodes = config.expectedOutputCodes
-        return@execBlock when {
-            expectedExitCodes == null -> result
-            result in expectedExitCodes -> result
-            else -> throw makeExitCodeException(config, result, recentErrorOutput.toList())
-        }
-    }
-
-    val stdinMutex = Mutex()
-
     val coroutine = ExecCoroutine(
-            config,
-            newContext,
-            channels.stdin.lockedBy(stdinMutex),
-            channels.stdout.openSubscription().tail(config.standardOutputBufferCharCount),
-            channels.stderr.openSubscription().tail(config.standardErrorBufferCharCount),
-            aggregateChannel,
-            channels.stdin.lockedBy(stdinMutex).flatMap { (it + config.inputFlushMarker).asIterable() },
-            makePIDGenerator()
+            config, newContext, makePIDGenerator(), makeListenerProviderFactory()
     )
-    coroutine.start(start, coroutine, block)
+    coroutine.prestart()
+    coroutine.start(start, coroutine, ExecCoroutine::exec)
     return coroutine
 }
+
 
 @InternalCoroutinesApi
 fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
