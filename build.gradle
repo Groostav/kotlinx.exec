@@ -40,8 +40,8 @@ project('core'){
         compile "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.0.1"
         compile "org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.0.1"
     
-        compile "net.java.dev.jna:jna:4.5.2"
-        compile "net.java.dev.jna:jna-platform:4.0.0"
+        compile "net.java.dev.jna:jna:5.2.0"
+        compile "net.java.dev.jna:jna-platform:5.2.0"
     
         compileOnly "org.zeroturnaround:zt-exec:1.9"
         compileOnly "org.zeroturnaround:zt-process-killer:1.7"
