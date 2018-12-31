@@ -16,6 +16,7 @@ import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 import javax.naming.ldap.ControlFactory
+import kotlin.ConcurrentModificationException
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.suspendCoroutine
@@ -174,8 +175,12 @@ typealias FlushCommand = Unit
                 val process: Process,
                 val pid: Int,
                 val reaper: Job? = null
-        ): State()
-        data class Completed(val pid: Int, val exitCode: Int): State()
+        ): State(){
+            override fun toString() = "Running(PID=$pid${if(reaper != null) ", hasReaper)" else ")"}"
+        }
+        class Completed(val pid: Int, val exitCode: Int): State(){
+            override fun toString() = "Completed(PID=$pid, exitCode=$exitCode)"
+        }
     }
 
     private val shortName = config.command.first()
@@ -273,14 +278,13 @@ typealias FlushCommand = Unit
             }
         }
 
-        if(state != uninitialized) throw ConcurrentModificationException()
-        state = State.Prestarted(
+        state = if(state == uninitialized) State.Prestarted(
                 procBuilder,
                 recentErrorOutput,
                 stdoutAggregatorJob = stdoutAggregatorJob,
                 stderrAggregatorJob = stderrAggregatorJob,
                 exitCodeAggregatorJob = exitCodeAggregatorJob
-        )
+        ) else throw makeCME(expected = uninitialized)
     }
 
     internal fun kickoff() {
@@ -294,8 +298,8 @@ typealias FlushCommand = Unit
 
         val pid = pidGen.findPID(process)
 
-        if(state != prestarted) throw ConcurrentModificationException()
-        state = State.Running(prestarted, process, pid)
+        state = if(state == prestarted) State.Running(prestarted, process, pid)
+                else throw makeCME(expected = prestarted)
     }
 
     internal suspend fun waitFor(): Int = try {
@@ -331,12 +335,18 @@ typealias FlushCommand = Unit
         stdoutInflection.asJob().join()
         val exitCode = exitCodeInflection.await()
 
-        if(state != running) throw ConcurrentModificationException()
-        state = State.Completed(running.pid, exitCode)
+        val stateBeforeCompletion = atomicState.getAndUpdate(this){ when(it){
+            running -> State.Completed(running.pid, exitCode)
+            // somebody concurrently updated us to running, adding a reaper
+            // either way we're done.
+            is State.Running -> State.Completed(running.pid, exitCode)
+            else -> throw makeCME(expected = running)
+        }} as State.Running
 
         val expectedExitCodes = config.expectedOutputCodes
 
         val result = when {
+            stateBeforeCompletion.reaper != null -> throw CancellationException()
             expectedExitCodes == null -> exitCode
             exitCode in expectedExitCodes -> exitCode
             else -> throw makeExitCodeException(config, exitCode, prestarted.recentErrorOutput.toList())
@@ -356,12 +366,7 @@ typealias FlushCommand = Unit
         standardInput.close()
     }
 
-    override suspend fun kill() {
-        // whats my strategy?
-        // who am i suspending?
-        // how can i atomically move to a cancelled state?
-
-        //how about this:
+    private fun killAsync(): Job? {
         fun makeUnstartedReaper(running: State.Running) = GlobalScope.launch(start = CoroutineStart.LAZY){
             val killer = processControlFacade.create(running.process, running.pid).value
             killer.killForcefullyAsync(config.includeDescendantsInKill)
@@ -376,10 +381,21 @@ typealias FlushCommand = Unit
             is State.Prestarted -> TODO() //nothing we can do, no way to know if process.start() has gone off or not.
         }}
 
-        if (newState is State.Running) {
-            newState.reaper!!.let { reaper -> reaper.start(); reaper.join() }
+        val reaper = if (newState is State.Running) {
+            newState.reaper!!.also { it.start() }
         }
+        else null
 
+        return reaper
+    }
+
+    override suspend fun kill() {
+        // whats my strategy?
+        // who am i suspending?
+        // how can i atomically move to a cancelled state?
+
+        //how about this:
+        killAsync()?.join()
         join()
 
         // we call kill gracefully
@@ -404,8 +420,8 @@ typealias FlushCommand = Unit
     override fun onCancellation(cause: Throwable?) {
         when(cause){
             null -> {} //completed normally
-            is CancellationException -> {  } // cancelled --> kill -9
-            else -> {  } // failed --> kill -9
+            is CancellationException -> { killAsync() }
+            else -> { killAsync() } // failed --> kill -9
         }
         trace { "completed/cancelled $this" }
     }
@@ -465,7 +481,8 @@ typealias FlushCommand = Unit
     override fun getCompleted(): Int = _getCompleted<Int>()
     override suspend fun await(): Int = suspendCoroutine<Int> { _await<Any>(it) }
     override val onAwait: SelectClause1<Int> get() = this
-    override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R): Unit = _registerSelectClause1<Unit>(select, block)
+    override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R): Unit
+            = _registerSelectClause1<Unit>(select, block)
 
     private inline operator fun <reified T> Method.invoke(vararg args: Any): T {
         val result = try {
@@ -493,6 +510,10 @@ typealias FlushCommand = Unit
             throw ex
         }
     }
+
+    private fun makeCME(expected: State) = ConcurrentModificationException(
+            "expected state=$expected but was actually $state"
+    )
 
     companion object Factory {
         private val jobId = AtomicInteger(1)

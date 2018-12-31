@@ -1,6 +1,8 @@
 package groostav.kotlinx.exec
 
+import junit.framework.Assert.assertTrue
 import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import java.nio.file.Paths
@@ -44,19 +46,21 @@ class UnhappyConfigurationTests {
         assertEquals("cannot exec empty command", result?.message)
     }
 
-    @Test fun `when attempting to read from unbufferred channel should get exception`() = runBlocking<Unit> {
+    @Test fun `when attempting to read from unbufferred channel should get empty channel behaviour`() = runBlocking<Unit> {
         //setup
         val runningProcess = execAsync {
-            command = emptyScriptCommand()
+            command = printMultipleLinesCommand()
 
             standardOutputBufferCharCount = 0
             standardErrorBufferCharCount = 0
             aggregateOutputBufferLineCount = 0
         }
 
+        delay(100)
+
         //act & assert
-        assertThrows<IllegalStateException> { runningProcess.standardError }
-        assertThrows<IllegalStateException> { runningProcess.standardOutput }
+        assertTrue(runningProcess.standardError.isEmpty)
+        assertTrue(runningProcess.standardOutput.isEmpty)
 
         //cleanup --done outside of finally block because above errors are more important
         runningProcess.join()

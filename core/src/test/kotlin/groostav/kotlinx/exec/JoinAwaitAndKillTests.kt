@@ -306,6 +306,14 @@ class JoinAwaitAndKillTests {
             process.send("posthumously pestering")
         }
     }
+
+    @Test fun `todo`(): Unit = TODO("""
+        ook, so I implemented a kill -9 behaviour on cancellation and all of these tests pass,
+        so we need some tests that assert on kill gracefully, and also things like :
+        1. killing gracefully immediately before killing forcefully,
+        2. killing gracefully immediately before cancellation,
+        etc.
+        """.trimIndent())
 }
 
 
