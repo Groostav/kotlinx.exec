@@ -78,6 +78,10 @@ fun hangingCommand() = when(JavaProcessOS){
     Windows -> `powershell -ExecPolicy Bypass -File`("Hanging.ps1")
     Unix -> TODO()
 }
+fun interruptableHangingCommand() = when(JavaProcessOS){
+    Windows -> `powershell -ExecPolicy Bypass -File`("InterruptableHanging.ps1")
+    Unix -> TODO()
+}
 
 
 

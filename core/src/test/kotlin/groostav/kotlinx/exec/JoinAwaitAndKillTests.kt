@@ -1,10 +1,7 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.filter
-import kotlinx.coroutines.channels.map
-import kotlinx.coroutines.channels.take
-import kotlinx.coroutines.channels.toList
+import kotlinx.coroutines.channels.*
 import org.junit.Ignore
 import org.junit.Test
 import java.util.*
@@ -30,17 +27,16 @@ class JoinAwaitAndKillTests {
     @Test fun `when killing a process should exit without finishing`() = runBlocking<Unit>{
         //setup
         val runningProcess = execAsync {
-            command = promptScriptCommand()
+            command = hangingCommand()
         }
 
         //act
-        val completedAfter100ms = withTimeoutOrNull(1000) { runningProcess.join() } != null
+        val completedAfter100ms = withTimeoutOrNull(100) { runningProcess.join() } != null
         runningProcess.kill()
 
         //assert
         assertFalse(completedAfter100ms)
         assertTrue(runningProcess.isCompleted)
-        assertFalse(runningProcess.isActive)
         assertNotListed(runningProcess.processID)
     }
 
@@ -65,15 +61,39 @@ class JoinAwaitAndKillTests {
             // meaning this job will collapse but the job wont change to "finished"
         }
 
+        //act 1: wait for the job to start
         delay(10)
+
+        //assert 1: the "started sub-process" was added but `jobThatSpawnsSubProcess` is not done.
+        assertEquals(listOf("started sub-process"), actionSequence)
+        assertFalse(jobThatSpawnsSubProcess.isCompleted)
+
+        //act 2: start another job that depends on the first & wait for it to start
+        val jobThatDependsOnPreviousJobUsingProcess = launch {
+            jobThatSpawnsSubProcess.join()
+
+            actionSequence += "moved past sub-process parent job!"
+        }
+        delay(10)
+
+        //assert 2: still in the same state as assert 1, second job wont have published its message
+        assertEquals(listOf("started sub-process"), actionSequence)
+        assertFalse(jobThatSpawnsSubProcess.isCompleted)
+        assertFalse(jobThatDependsOnPreviousJobUsingProcess.isCompleted)
+
+        //act 3: add something to the sequence to note where here, then cancel the first job, and wait for it to finish
         actionSequence += "sub-process status check: isComplete=${jobThatSpawnsSubProcess.isCompleted}"
-
         jobThatSpawnsSubProcess.cancel()
+        delay(10)
 
+        //assert 3: assert that the statement we made happened before the job finished, and that all jobs are finished.
         assertEquals(listOf(
                 "started sub-process",
-                "sub-process status check: isComplete=false"
+                "sub-process status check: isComplete=false",
+                "moved past sub-process parent job!"
         ), actionSequence)
+        assertTrue(jobThatSpawnsSubProcess.isCompleted)
+        assertTrue(jobThatDependsOnPreviousJobUsingProcess.isCompleted)
     }
 
     @Test fun `when cancelling the parent job of a sub-process kill child process`() = runBlocking<Unit>{
@@ -280,7 +300,7 @@ class JoinAwaitAndKillTests {
         // it seems that kill -9 in this cercomstance is giving me the "end process tree" behaviour I wanted. 
     }
 
-    @Test fun `when calling kill forcefully should X`() = runBlocking<Unit>{
+    @Test fun `when calling kill forcefully should end process and synchronize on its finish`() = runBlocking<Unit>{
 
         //setup
         val process = execAsync {
@@ -291,10 +311,13 @@ class JoinAwaitAndKillTests {
         process.kill()
 
         //assert
-
+        assertNotListed(process.processID)
+        assertTrue(process.isCompleted)
+        assertTrue(process.isClosedForReceive)
+        assertTrue(process.isClosedForSend)
     }
 
-    @Test fun `when attempting to write to stdin after process sterminates should X`() = runBlocking<Unit> {
+    @Test fun `when attempting to write to stdin after process terminates should X`() = runBlocking<Unit> {
         //setup
         val process = execAsync {
             command = emptyScriptCommand()
@@ -306,6 +329,25 @@ class JoinAwaitAndKillTests {
             process.send("posthumously pestering")
         }
     }
+
+    @Test fun `when attempting to kill interruptable script should properly interrupt`() = runBlocking<Unit>{
+        //setup
+        val process = execAsync {
+            command = interruptableHangingCommand()
+            expectedOutputCodes = setOf(42)
+            gracefulTimeoutMillis = 300000
+        }
+        delay(10)
+        launch { process.kill() }
+
+        //act
+        val result = process.await()
+
+        //assert
+        assertEquals(result, 42)
+    }
+
+    @Test fun `when attempting to kill unstarted process should do XYZ`(): Unit = TODO()
 
     @Test fun `todo`(): Unit = TODO("""
         ook, so I implemented a kill -9 behaviour on cancellation and all of these tests pass,

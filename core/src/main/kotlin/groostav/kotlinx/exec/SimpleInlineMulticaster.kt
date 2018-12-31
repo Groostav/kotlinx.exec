@@ -96,8 +96,7 @@ class SimpleInlineMulticaster<T>(val name: String) {
 
                     State.Registration(it.subs + subscription)
                 }
-                is State.Running -> throw IllegalStateException("state = $it")
-                is State.Closed -> throw IllegalStateException("state = $it")
+                is State.Running, is State.Closed -> throw IllegalStateException("state = $it")
             }
         }
 

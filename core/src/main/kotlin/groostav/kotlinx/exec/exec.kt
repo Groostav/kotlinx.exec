@@ -18,8 +18,8 @@ internal fun CoroutineScope.execAsync(
             config, newContext, makePIDGenerator(), makeListenerProviderFactory(), CompositeProcessControlFactory
     )
     coroutine.prestart()
-    if(start != CoroutineStart.LAZY) { coroutine.kickoff() }
 
+    if(start != CoroutineStart.LAZY) { coroutine.kickoff() }
     coroutine.start(start, coroutine, ExecCoroutine::waitFor)
 
     return coroutine
@@ -27,7 +27,7 @@ internal fun CoroutineScope.execAsync(
 
 
 @InternalCoroutinesApi
-fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
+fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess {
 
     val configActual = processBuilder() {
         config()

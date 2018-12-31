@@ -32,6 +32,17 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         if(includeDescendants) command += "/T"
         command += listOf("/PID", "$pid")
 
+        fail; //aww christ:
+        // http://stanislavs.org/stopping-command-line-applications-programatically-with-ctrl-c-events-from-net/
+        // turns out that taskkill /PID 1234 sends WM_CLOSE, which isnt exactly a SIG_INT,
+        // and that many applications, including powershell, simply ignore it.
+        // it seems like what is suggested is attempting to enumerate windows and the threads running their procedures,
+        // and send each a WM_QUIT or WM_CLOSE message.
+
+        // soembody has done some lifting for java:
+        // https://stackoverflow.com/a/42839731/1307108
+
+
         GlobalScope.launch(Unconfined + CoroutineName("process(PID=$pid).killGracefully")) {
             execAsync { this.command = command }.consumeEach { trace { it.formattedMessage } }
         }

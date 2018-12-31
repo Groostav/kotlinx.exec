@@ -227,6 +227,7 @@ internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Cha
                 catch (ex: IOException) {
                     //writer was closed, process was terminated.
                     //TODO need a test to induce this, verify correctness.
+                    trace { "WARN: failed to write nextchar='$nextChar' to stdin" }
                     sawClosedException = true
                     return@actor
                 }

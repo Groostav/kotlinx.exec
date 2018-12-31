@@ -15,7 +15,6 @@ import java.lang.reflect.Method
 import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
-import javax.naming.ldap.ControlFactory
 import kotlin.ConcurrentModificationException
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -52,7 +51,7 @@ import kotlin.coroutines.suspendCoroutine
  *
  * [execVoid] and [execAsync] are the most concise process-builder factories.
  */
-interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Deferred<Int> {
+interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Deferred<Int>{
 
     val standardOutput: ReceiveChannel<Char>
     val standardError: ReceiveChannel<Char>
@@ -141,8 +140,6 @@ data class ExitCode(val code: Int): ProcessEvent() {
     override val formattedMessage: String get() = "Process finished with exit code $code"
 }
 
-typealias FlushCommand = Unit
-
 @InternalCoroutinesApi internal class ExecCoroutine private constructor(
         private val config: ProcessBuilder,
         parentContext: CoroutineContext,
@@ -174,6 +171,7 @@ typealias FlushCommand = Unit
                 val prestarted: Prestarted,
                 val process: Process,
                 val pid: Int,
+                val interrupt: Job? = null,
                 val reaper: Job? = null
         ): State(){
             override fun toString() = "Running(PID=$pid${if(reaper != null) ", hasReaper)" else ")"}"
@@ -183,29 +181,36 @@ typealias FlushCommand = Unit
         }
     }
 
-    private val shortName = config.command.first()
+    private val shortName = config.command.first().take(20)
 
     private @Volatile var state: State = State.Uninitialized
-        set(value) { field = value.also { trace { "process $shortName moved to state $it"} } }
+        set(value) { field = value.also { trace { "process '$shortName' moved to state $it"} } }
 
     private val exitCodeInflection = CompletableDeferred<Int>()
     private val stdinInflection: Channel<Char> = Channel(Channel.RENDEZVOUS)
-    private val stdoutInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$shortName-stdout")
-    private val stderrInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("$shortName-stderr")
+    private val stdoutInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("stdout[$shortName]")
+    private val stderrInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("stderr[$shortName]")
 
     override val standardInput: Channel<Char> = Channel(Channel.RENDEZVOUS)
     override val standardOutput = stdoutInflection.openSubscription("chars").tail(config.standardOutputBufferCharCount)
     override val standardError = stderrInflection.openSubscription("chars").tail(config.standardErrorBufferCharCount)
 
-    override val processID: Int by lazy {
-        when(val state = state){
-            State.Uninitialized, is State.Prestarted -> throw IllegalStateException("process not started")
-            is State.Running -> state.pid
-            is State.Completed -> state.pid
-        }
+    override val processID: Int get() = when(val state = state){
+        // only way to get this exception AFAIK is to create ExecCoroutine(Start.LAZY).processID,
+        // which seems unlikely.
+        State.Uninitialized, is State.Prestarted -> throw IllegalStateException("process not started")
+        is State.Running -> state.pid
+        is State.Completed -> state.pid
     }
 
     internal fun prestart(){
+        // I've had effectivley 3 attempts at getting this method right.
+        // 1. The first time I just used coroutine builders. Demultiplexing even the simple three channels
+        //    without some kind of structure for what data is available when is difficult and lead to very messy brittle code.
+        // 2. attempt to was a state machine with similar states to `State`,
+        //    but it involved just as many coroutine builders and didnt obviously solve the problem of
+        //    "how do I wait for a state?" (in retrospect, the answer is ConflatedChannel)
+        // 3. this is my third implementation. Eagerly create some datastructures which can be both read and written.
         val uninitialized = state
         require(uninitialized is State.Uninitialized)
 
@@ -223,8 +228,9 @@ typealias FlushCommand = Unit
 //            stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount).sinkTo(standardError)
 
             LinkedList<String>().apply {
-                launchChild {
-                    stderrInflection.openSubscription("err-cache").lines().consumeEach { errorMessageLine ->
+                val errorLines = stderrInflection.openSubscription("err-cache").lines()
+                launchChild("errorCacheJob") {
+                    errorLines.consumeEach { errorMessageLine ->
                         addLast(errorMessageLine)
                         if(size > config.linesForExceptionError){
                             removeFirst()
@@ -239,18 +245,20 @@ typealias FlushCommand = Unit
 
         run prestartAggregateChannel@ {
             if(config.aggregateOutputBufferLineCount > 0) {
-                stdoutAggregatorJob = launchChild(Dispatchers.Unconfined) {
-                    for (message in stdoutInflection.openSubscription("aggregator").lines()) {
+                val stdoutForAggregator = stdoutInflection.openSubscription("aggregator").lines()
+                stdoutAggregatorJob = launchChild("stdoutAggregatorJob") {
+                    for (message in stdoutForAggregator) {
                         aggregateChannel.send(StandardOutputMessage(message))
                     }
                 }
-                stderrAggregatorJob = launchChild(Dispatchers.Unconfined) {
-                    for (message in stderrInflection.openSubscription("aggregator").lines()) {
+                val stderrForAggregator = stderrInflection.openSubscription("aggregator").lines()
+                stderrAggregatorJob = launchChild("stderrAggregatorJob") {
+                    for (message in stderrForAggregator) {
                         aggregateChannel.send(StandardErrorMessage(message))
                     }
                 }
             }
-            exitCodeAggregatorJob = launchChild(Dispatchers.Unconfined){
+            exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
                 val result = exitCodeInflection.await()
                 // the concurrent nature here means we could get std-out messages after an exit code,
                 // which is just strange. So We'll sync on the output streams, making sure they come first.
@@ -298,8 +306,15 @@ typealias FlushCommand = Unit
 
         val pid = pidGen.findPID(process)
 
-        state = if(state == prestarted) State.Running(prestarted, process, pid)
-                else throw makeCME(expected = prestarted)
+        val running = State.Running(prestarted, process, pid)
+        state = if(state == prestarted) running else throw makeCME(expected = prestarted)
+
+        val listeners = listenerFactory.create(running.process, processID, config)
+
+        stdoutInflection.sinkFrom(listeners.standardOutputChannel.value)
+        stderrInflection.sinkFrom(listeners.standardErrorChannel.value)
+        exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value)
+        running.process.outputStream.toSendChannel(config).sinkFrom(stdinInflection)
     }
 
     internal suspend fun waitFor(): Int = try {
@@ -317,13 +332,6 @@ typealias FlushCommand = Unit
 
         val running = state
         require(running is State.Running)
-
-        val listeners = listenerFactory.create(running.process, processID, config)
-
-        stdoutInflection.sinkFrom(listeners.standardOutputChannel.value)
-        stderrInflection.sinkFrom(listeners.standardErrorChannel.value)
-        exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value)
-        running.process.outputStream.toSendChannel(config).sinkFrom(stdinInflection)
 
         prestarted.run {
             stderrAggregatorJob?.join()
@@ -352,10 +360,10 @@ typealias FlushCommand = Unit
             else -> throw makeExitCodeException(config, exitCode, prestarted.recentErrorOutput.toList())
         }
 
-        result.also { trace { "exec $shortName(PID=${running.pid}) returned with code $result" }}
+        result.also { trace { "exec '$shortName'(PID=${running.pid}) returned with code $result" }}
     }
     catch(ex: Exception){
-        trace { "exec $shortName(PID=${Try { processID }}) threw an exception of '${ex.message}'" }
+        trace { "exec '$shortName'(PID=${Try { processID }}) threw an exception of '${ex.message}'" }
         throw ex
     }
     finally {
@@ -366,27 +374,41 @@ typealias FlushCommand = Unit
         standardInput.close()
     }
 
-    private fun killAsync(): Job? {
-        fun makeUnstartedReaper(running: State.Running) = GlobalScope.launch(start = CoroutineStart.LAZY){
+
+    private fun tryKillAsync(gentle: Boolean = false): Job? {
+
+        fun makeUnstartedInterruptOrReaper(running: State.Running) = GlobalScope.launch(start = CoroutineStart.LAZY){
             val killer = processControlFacade.create(running.process, running.pid).value
-            killer.killForcefullyAsync(config.includeDescendantsInKill)
+            when(gentle){
+                true -> killer.tryKillGracefullyAsync(config.includeDescendantsInKill)
+                false -> killer.killForcefullyAsync(config.includeDescendantsInKill)
+            }
         }
 
-        //kill:
         // we atomically update a state to 'Doomed', that state is checked before return in the exec body
         val newState = atomicState.updateAndGet(this){ when(it) {
-            is State.Running -> it.copy(reaper = makeUnstartedReaper(it))
+            is State.Running -> when{
+                gentle -> it.copy(interrupt = makeUnstartedInterruptOrReaper(it))
+                else -> it.copy(reaper = makeUnstartedInterruptOrReaper(it))
+            }
             is State.Completed -> it
             State.Uninitialized -> TODO() //we can go directly to completed here, but `exec` needs to be updated.
             is State.Prestarted -> TODO() //nothing we can do, no way to know if process.start() has gone off or not.
         }}
 
-        val reaper = if (newState is State.Running) {
-            newState.reaper!!.also { it.start() }
+        val reaperOrInterrupt = when (newState) {
+            is State.Running -> when {
+                gentle -> newState.interrupt!!
+                else -> newState.reaper!!
+            }
+            is State.Completed -> {
+                trace { "attempted to reap/interrupt '$shortName' but its already completed." }
+                null
+            }
+            else -> TODO()
         }
-        else null
 
-        return reaper
+        return reaperOrInterrupt.also { it?.start() }
     }
 
     override suspend fun kill() {
@@ -395,7 +417,14 @@ typealias FlushCommand = Unit
         // how can i atomically move to a cancelled state?
 
         //how about this:
-        killAsync()?.join()
+        if(config.gracefulTimeoutMillis > 0){
+            val killedNormally = withTimeoutOrNull(config.gracefulTimeoutMillis){
+                tryKillAsync(gentle = true)?.join()
+                join()
+            } != null
+            trace { "interrupted '$shortName' gracefully: $killedNormally" }
+        }
+        tryKillAsync(gentle = false)?.join()
         join()
 
         // we call kill gracefully
@@ -418,12 +447,21 @@ typealias FlushCommand = Unit
     }
 
     override fun onCancellation(cause: Throwable?) {
-        when(cause){
-            null -> {} //completed normally
-            is CancellationException -> { killAsync() }
-            else -> { killAsync() } // failed --> kill -9
+        val description = when(cause){
+            null -> "completed normally"
+            is CancellationException -> {
+                tryKillAsync()
+                "cancelled"
+            }
+            is InvalidExitValueException -> {
+                "completed with bad exit code"
+            }
+            else -> {
+                cause.printStackTrace()
+                "unknown failure"
+            }
         }
-        trace { "completed/cancelled $this" }
+        trace { "finished as '$description' $this" }
     }
 
     override fun cancel0(): Boolean = cancel(null)
@@ -491,22 +529,25 @@ typealias FlushCommand = Unit
         catch(ex: InvocationTargetException){
             throw ex.cause ?: ex
         }
-        return if(result is T) result else throw ClassCastException("$result cannot be cast to ${T::class} as needed for the return type of $name")
+        return if(result is T) result
+        else throw ClassCastException("$result cannot be cast to ${T::class} as needed for the return type of $name")
     }
 
     private fun CoroutineScope.launchChild(
+            description: String? = null,
             context: CoroutineContext = EmptyCoroutineContext + Dispatchers.Unconfined,
             start: CoroutineStart = CoroutineStart.DEFAULT,
             block: suspend CoroutineScope.() -> Unit
     ) = launch(context, start) {
         val id = jobId.getAndIncrement()
-        trace { "started job-$id" }
+        val jobName = "job-$id${description?.let { "=$it" } ?: ""}"
+        trace { "started $jobName" }
         try {
             block()
-            trace { "completed job-$id normally" }
+            trace { "completed $jobName normally" }
         }
         catch(ex: Exception){
-            trace { "completed job-$id exceptionally" }
+            trace { "completed $jobName exceptionally: $ex" }
             throw ex
         }
     }
@@ -518,7 +559,9 @@ typealias FlushCommand = Unit
     companion object Factory {
         private val jobId = AtomicInteger(1)
 
-        fun makeName(config: ProcessBuilder) = CoroutineName("exec ${config.command.joinToString()}")
+        fun makeName(config: ProcessBuilder): CoroutineName {
+            return CoroutineName("exec ${config.command.joinToString(" ")}")
+        }
 
         operator fun invoke(
                 config: ProcessBuilder,
