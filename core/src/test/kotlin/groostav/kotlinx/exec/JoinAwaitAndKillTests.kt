@@ -35,9 +35,7 @@ class JoinAwaitAndKillTests {
 
         //act
         val completedAfter100ms = withTimeoutOrNull(1000) { runningProcess.join() } != null
-        if( ! runningProcess.isClosedForReceive){
-            runningProcess.kill()
-        }
+        runningProcess.kill()
 
         //assert
         assertFalse(completedAfter100ms)

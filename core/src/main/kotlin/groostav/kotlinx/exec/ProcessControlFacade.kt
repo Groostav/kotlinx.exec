@@ -46,13 +46,18 @@ internal class CompositeProcessControl(val facades: List<ProcessControlFacade>):
     override fun toString() = "CompositeProcessControl[${facades.joinToString()}]"
 }
 
-internal fun makeCompositeFacade(jvmRunningProcess: Process, pid: Int): ProcessControlFacade {
-    val factories = listOf(
+internal object CompositeProcessControlFactory: ProcessControlFacade.Factory {
+
+    private val factories = listOf(
             JEP102ProcessFacade,
             WindowsProcessControl,
             UnixProcessControl,
             ZeroTurnaroundProcessFacade
     )
-    val facades = factories.filterSupporting { it.create(jvmRunningProcess, pid) }
-    return CompositeProcessControl(facades)
+
+    override fun create(process: Process, pid: Int): Maybe<ProcessControlFacade> {
+        val facades = factories.filterSupporting { it.create(process, pid) }
+        return Supported(CompositeProcessControl(facades))
+
+    }
 }

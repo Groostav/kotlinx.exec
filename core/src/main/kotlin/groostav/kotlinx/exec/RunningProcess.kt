@@ -14,6 +14,8 @@ import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
+import javax.naming.ldap.ControlFactory
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.suspendCoroutine
@@ -145,6 +147,7 @@ typealias FlushCommand = Unit
         parentContext: CoroutineContext,
         private val pidGen: ProcessIDGenerator,
         private val listenerFactory: ProcessListenerProvider.Factory,
+        private val processControlFacade: ProcessControlFacade.Factory,
         private val aggregateChannel: Channel<ProcessEvent>,
         private val inputLines: Channel<String>
 ):
@@ -166,13 +169,17 @@ typealias FlushCommand = Unit
         ): State() {
             override fun toString() = "Prestarted"
         }
-        data class Running(val prestarted: Prestarted, val process: Process, val pid: Int): State()
+        data class Running(
+                val prestarted: Prestarted,
+                val process: Process,
+                val pid: Int,
+                val reaper: Job? = null
+        ): State()
         data class Completed(val pid: Int, val exitCode: Int): State()
     }
 
     private val shortName = config.command.first()
 
-    // **not** rigorous state change device.
     private @Volatile var state: State = State.Uninitialized
         set(value) { field = value.also { trace { "process $shortName moved to state $it"} } }
 
@@ -355,9 +362,26 @@ typealias FlushCommand = Unit
         // how can i atomically move to a cancelled state?
 
         //how about this:
+        fun makeUnstartedReaper(running: State.Running) = GlobalScope.launch(start = CoroutineStart.LAZY){
+            val killer = processControlFacade.create(running.process, running.pid).value
+            killer.killForcefullyAsync(config.includeDescendantsInKill)
+        }
 
         //kill:
         // we atomically update a state to 'Doomed', that state is checked before return in the exec body
+        val newState = atomicState.updateAndGet(this){ when(it) {
+            is State.Running -> it.copy(reaper = makeUnstartedReaper(it))
+            is State.Completed -> it
+            State.Uninitialized -> TODO() //we can go directly to completed here, but `exec` needs to be updated.
+            is State.Prestarted -> TODO() //nothing we can do, no way to know if process.start() has gone off or not.
+        }}
+
+        if (newState is State.Running) {
+            newState.reaper!!.let { reaper -> reaper.start(); reaper.join() }
+        }
+
+        join()
+
         // we call kill gracefully
         // val success = withTimeoutOrNull(gracefulTime) { join() }
         // if (success == null) cancel()
@@ -371,7 +395,6 @@ typealias FlushCommand = Unit
         // each of these feed it an input
         // at least that way we can reduce the concurrency to an actor managing its state.
 //        fail;
-        TODO()
     }
 
     override fun cancel(): Unit {
@@ -480,11 +503,14 @@ typealias FlushCommand = Unit
                 config: ProcessBuilder,
                 parentContext: CoroutineContext,
                 pidGen: ProcessIDGenerator,
-                listenerFactory: ProcessListenerProvider.Factory
+                listenerFactory: ProcessListenerProvider.Factory,
+                processControlFactory: ProcessControlFacade.Factory
         ) = ExecCoroutine(
-                config, parentContext, pidGen, listenerFactory,
+                config, parentContext, pidGen, listenerFactory, processControlFactory,
                 aggregateChannel = Channel(config.aggregateOutputBufferLineCount.asQueueChannelCapacity()),
                 inputLines = Channel(Channel.RENDEZVOUS)
         )
+
+        private val atomicState = AtomicReferenceFieldUpdater.newUpdater(ExecCoroutine::class.java, State::class.java, "state")
     }
 }

@@ -15,7 +15,7 @@ internal fun CoroutineScope.execAsync(
 
     val newContext = newCoroutineContext(EmptyCoroutineContext)
     val coroutine = ExecCoroutine(
-            config, newContext, makePIDGenerator(), makeListenerProviderFactory()
+            config, newContext, makePIDGenerator(), makeListenerProviderFactory(), CompositeProcessControlFactory
     )
     coroutine.prestart()
     if(start != CoroutineStart.LAZY) { coroutine.kickoff() }
