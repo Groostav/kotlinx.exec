@@ -28,8 +28,8 @@ fun getLocalResourcePath(localName: String): String {
 //TODO make this as platform agnostic as possible, at least support ubuntu/centOS
 private fun `powershell -ExecPolicy Bypass -File`(scriptFileName: String) = listOf(
         "powershell.exe",
-        "-File", getLocalResourcePath(scriptFileName),
-        "-ExecutionPolicy", "Bypass"
+        "-ExecutionPolicy", "Bypass",
+        "-File", getLocalResourcePath(scriptFileName)
 )
 private fun bash(scriptFileName: String) = listOf("bash", getLocalResourcePath(scriptFileName))
 private fun cmd(scriptFileName: String) = listOf("cmd.exe", "/C", getLocalResourcePath(scriptFileName))

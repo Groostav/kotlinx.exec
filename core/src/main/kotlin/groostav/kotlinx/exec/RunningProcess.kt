@@ -183,6 +183,9 @@ data class ExitCode(val code: Int): ProcessEvent() {
 
     private val shortName = config.command.first().take(20)
 
+    // this thing is used both in a CAS loop for Running(no-reaper) to Running(reaper),
+    // and from Running(*) to Completed, but is _not_ CAS'd from Uninitialized to Prestarted to Running,
+    // there it is only used as a best-effort CME detection device.
     private @Volatile var state: State = State.Uninitialized
         set(value) { field = value.also { trace { "process '$shortName' moved to state $it"} } }
 

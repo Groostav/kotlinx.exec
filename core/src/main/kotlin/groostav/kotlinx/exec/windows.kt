@@ -5,17 +5,14 @@ import com.sun.jna.Native
 import com.sun.jna.Platform
 import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.Kernel32
-import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinNT
-import com.sun.jna.platform.win32.WinUser
-import com.sun.jna.win32.StdCallLibrary
 import com.sun.jna.win32.W32APIOptions
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.channels.consumeEach
 import com.sun.jna.platform.win32.WinDef.BOOL
 import com.sun.jna.platform.win32.WinDef.HWND
-
+import kotlinx.coroutines.channels.map
 
 
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
@@ -53,11 +50,20 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         // use k32 to find out if the process has windows, find out which threads govern those windows, emit "WM_CLOSE" to those threads
         // then spawn a new process, attach a console and emit a "CTRL_C" message?
 
-//        val k32 = Kernel32.INSTANCE
-//
-//        k32.AttachConsole(pid)
-//        k32.GenerateConsoleCtrlEvent(Kernel32.CTRL_BREAK_EVENT, 0)
+        fail; //this doesnt seem to do the job. Damn.
+        
+        val separator = System.getProperty("file.separator")
+        val classpath = System.getProperty("java.class.path")
+        val path = (System.getProperty("java.home") + separator + "bin" + separator + "java")
 
+        GlobalScope.execAsync(
+                path,
+                "-cp", classpath,
+                PoliteLeechKiller::class.java.name,
+                "-pid", pid.toString()
+        ).map { println(it.formattedMessage) }
+
+//        PoliteLeechKiller.main(arrayOf("-pid", pid.toString()))
 
 //        try {
 //            fail; //blegh java-9;s no good.
@@ -82,6 +88,25 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
 //        }
 
         return Supported(Unit)
+    }
+
+    object PoliteLeechKiller {
+        @JvmStatic fun main(args: Array<String>){
+            require(args.size == 2) { "expected args: -pid <pid_int>"}
+            require(args[0] == "-pid") { "expected args: -pid <pid_int>, but args[0] was ${args[0]}"}
+            require(args[1].toIntOrNull() != null) { "expected -pid as integer value, but was ${args[1]}"}
+
+            //https://stackoverflow.com/questions/1229605/is-this-really-the-best-way-to-start-a-second-jvm-from-java-code
+            // attaching a breakpoint: https://www.youtube.com/watch?v=fBGWtVOKTkM
+            // this code is run in another vm/process!
+            val pid = args[1].toInt()
+
+            Kernel32.INSTANCE.AttachConsole(pid)
+//            Kernel32.INSTANCE.GenerateConsoleCtrlEvent(Kernel32.CTRL_C_EVENT, 0)
+            Kernel32.INSTANCE.GenerateConsoleCtrlEvent(Kernel32.CTRL_BREAK_EVENT, 0)
+
+            println("submitted CTRL_BREAK_EVENT to pid=$pid")
+        }
     }
 
     @InternalCoroutinesApi
@@ -143,6 +168,6 @@ interface TaskEnder: Library {
             fForce: BOOL
     ): BOOL
 
-    fail; //delete this code. 
+//    fail; //delete this code.
 
 }

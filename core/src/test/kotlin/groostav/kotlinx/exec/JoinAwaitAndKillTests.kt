@@ -337,7 +337,7 @@ class JoinAwaitAndKillTests {
             expectedOutputCodes = setOf(42)
             gracefulTimeoutMillis = 300000
         }
-        delay(10)
+        delay(1000)
         launch { process.kill() }
 
         //act
