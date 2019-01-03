@@ -181,7 +181,16 @@ data class ExitCode(val code: Int): ProcessEvent() {
         }
     }
 
-    private val shortName = config.command.first().take(20)
+    private val shortName = buildString {
+        val commandSeq = config.command.asSequence()
+        append(commandSeq.first().replace("\\", "/").substringAfterLast("/").take(20))
+
+        val iterator = commandSeq.drop(1).iterator()
+        while(length < 20-1 && iterator.hasNext()){
+            append(" ")
+            append(iterator.next().take(20 - length))
+        }
+    }
 
     // this thing is used both in a CAS loop for Running(no-reaper) to Running(reaper),
     // and from Running(*) to Completed, but is _not_ CAS'd from Uninitialized to Prestarted to Running,
