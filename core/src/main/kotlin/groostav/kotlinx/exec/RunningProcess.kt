@@ -181,16 +181,7 @@ data class ExitCode(val code: Int): ProcessEvent() {
         }
     }
 
-    private val shortName = buildString {
-        val commandSeq = config.command.asSequence()
-        append(commandSeq.first().replace("\\", "/").substringAfterLast("/").take(20))
-
-        val iterator = commandSeq.drop(1).iterator()
-        while(length < 20-1 && iterator.hasNext()){
-            append(" ")
-            append(iterator.next().take(20 - length))
-        }
-    }
+    private val shortName = makeNameString(config, targetLength = 20)
 
     // this thing is used both in a CAS loop for Running(no-reaper) to Running(reaper),
     // and from Running(*) to Completed, but is _not_ CAS'd from Uninitialized to Prestarted to Running,
@@ -571,8 +562,19 @@ data class ExitCode(val code: Int): ProcessEvent() {
     companion object Factory {
         private val jobId = AtomicInteger(1)
 
-        fun makeName(config: ProcessBuilder): CoroutineName {
-            return CoroutineName("exec ${config.command.joinToString(" ")}")
+        private fun makeName(config: ProcessBuilder): CoroutineName = CoroutineName("exec ${makeNameString(config, 50)}")
+
+        private fun makeNameString(config: ProcessBuilder, targetLength: Int){
+            buildString {
+                val commandSeq = config.command.asSequence()
+                append(commandSeq.first().replace("\\", "/").substringAfterLast("/").take(targetLength))
+
+                val iterator = commandSeq.drop(1).iterator()
+                while(length < targetLength -1 && iterator.hasNext()){
+                    append(" ")
+                    append(iterator.next().take(targetLength - length))
+                }
+            }
         }
 
         operator fun invoke(
