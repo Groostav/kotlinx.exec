@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Platform
 import com.sun.jna.Pointer
@@ -11,11 +10,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.channels.consumeEach
 import com.sun.jna.platform.win32.WinDef.BOOL
-import com.sun.jna.platform.win32.WinDef.HWND
 import kotlinx.coroutines.channels.map
 import kotlinx.coroutines.channels.toList
-import sun.misc.Signal
-import java.awt.image.Kernel
 
 
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
@@ -53,8 +49,6 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         // use k32 to find out if the process has windows, find out which threads govern those windows, emit "WM_CLOSE" to those threads
         // then spawn a new process, attach a console and emit a "CTRL_C" message?
 
-//        fail; //this doesnt seem to do the job. Damn.
-        
         val separator = System.getProperty("file.separator")
         val classpath = System.getProperty("java.class.path")
         val path = "${System.getProperty("java.home")}${separator}bin${separator}javaw"
@@ -71,30 +65,7 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
             }.map { System.err.println(it.formattedMessage) }.toList()
         }
 
-        val x = 4;
 //        PoliteLeechKiller.main(arrayOf("-pid", pid.toString()))
-
-//        try {
-//            fail; //blegh java-9;s no good.
-//            val field = Class.forName("java.lang.ProcessImpl")
-//                    .getDeclaredField("handle")
-//                    .apply { isAccessible = true }
-//
-//            val handlePeer = field.getLong(process)
-//            val handle = HWND(Pointer.createConstant(handlePeer))
-//
-//            val result = TaskEnder.INSTANCE.EndTask(handle, BOOL(true), BOOL(true))
-//            trace { "endtask returned $result" }
-//        }
-//        catch(ex: Exception){
-//            val x = 4;
-//            throw ex;
-//        }
-
-
-//        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$pid).killGracefully")) {
-//            execAsync { this.command = command }.consumeEach { trace { it.formattedMessage } }
-//        }
 
         return Supported(Unit)
     }
@@ -111,22 +82,21 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
             // this code is run in another vm/process!
             val pid = args[1].toInt()
 
-            fun tryPrintExecutePrint(description: String, nativeFunc: Kernel32.() -> Boolean): Unit? {
+            fun tryPrintExecutePrint(description: String, nativeFunc: KERNEL_32.() -> Boolean): Unit? {
 
                 println("calling $description...")
-                val success = Kernel32.INSTANCE.nativeFunc()
-                val errorCode = Kernel32.INSTANCE.GetLastError()
+                val success = KERNEL_32.nativeFunc()
+                val errorCode = KERNEL_32.GetLastError()
                 println("success=$success, code=$errorCode")
                 return if(success) Unit else null
             }
 
             try {
-                println("detaching interrupt handler...")
-                tryPrintExecutePrint("TODO"){
-                    SetConsoleControl
+                tryPrintExecutePrint("SetConsoleCtrlHandler(NULL, TRUE)"){
+                    SetConsoleCtrlHandler(Pointer.NULL, BOOL(true))
                 }
 
-                val (eventName, eventCode) = "CTRL_BREAK_EVENT" to Kernel32.CTRL_C_EVENT
+                val (eventName, eventCode) = "CTRL_C_EVENT" to Kernel32.CTRL_C_EVENT
                 println("submitting $eventName to pid=$pid")
 
                 tryPrintExecutePrint("Kernel32.AttachConsole($pid)"){
@@ -135,6 +105,8 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
                 tryPrintExecutePrint("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
                     GenerateConsoleCtrlEvent(eventCode, 0)
                 }
+
+                println("done.")
             }
             catch(ex: Throwable){
                 ex.printStackTrace()
@@ -187,29 +159,17 @@ internal class WindowsReflectiveNativePIDGen(): ProcessIDGenerator {
 
         val handlePeer = field.getLong(process)
         val handle = WinNT.HANDLE(Pointer.createConstant(handlePeer))
-        val pid = Kernel32.INSTANCE.GetProcessId(handle)
+        val pid = KERNEL_32.GetProcessId(handle)
 
         return pid
     }
 }
 
-interface TaskEnder: Library {
-    companion object {
-        val INSTANCE = Native.load("user32", TaskEnder::class.java, W32APIOptions.DEFAULT_OPTIONS)
-    }
+private typealias PHANDLER_ROUTINE = Pointer?
 
-    fun SetConsoleCtrlHandler(routine: PHANDLER_ROUTINE, add: BOOL): BOOL{
-        TODO()
-    }
+interface KERNEL_32: Kernel32 {
 
+    fun SetConsoleCtrlHandler(handler: PHANDLER_ROUTINE, add: BOOL): Boolean
 
-
-    fun EndTask(
-            hWnd: HWND,
-            fShutDown: BOOL,
-            fForce: BOOL
-    ): BOOL
-
-//    fail; //delete this code.
-
+    companion object: KERNEL_32 by Native.load("kernel32", KERNEL_32::class.java, W32APIOptions.DEFAULT_OPTIONS)
 }

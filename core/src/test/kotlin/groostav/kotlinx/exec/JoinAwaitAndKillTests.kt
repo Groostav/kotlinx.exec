@@ -335,7 +335,7 @@ class JoinAwaitAndKillTests {
         val process = execAsync {
             command = interruptableHangingCommand()
             expectedOutputCodes = setOf(42)
-            gracefulTimeoutMillis = 300000
+            gracefulTimeoutMillis = 3000
         }
         delay(1000)
         launch { process.kill() }
