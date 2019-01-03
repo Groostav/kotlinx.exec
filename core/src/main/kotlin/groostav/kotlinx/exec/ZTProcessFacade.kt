@@ -1,6 +1,6 @@
 package groostav.kotlinx.exec
 
-import org.zeroturnaround.process.PidProcess
+import groostav.kotlinx.exec.ZeroTurnaroundProcessFacade.Companion.ZT_EXEC_CANT_INCLUDE_CHILDREN
 import org.zeroturnaround.process.PidUtil
 import org.zeroturnaround.process.Processes
 import org.zeroturnaround.process.WindowsProcess
@@ -17,9 +17,9 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
 
     companion object: ProcessControlFacade.Factory  {
 
-        override fun create(process: Process, pid: Int) = supportedIf(UseZeroTurnaroundIfAvailable && ZTOnClassPath) {
-            ZeroTurnaroundProcessFacade(process, pid)
-        }
+        val ZT_EXEC_CANT_INCLUDE_CHILDREN = Unsupported("cant include children in kill with zt-exec")
+
+        override fun create(process: Process, pid: Int) = ifZTAvailable { ZeroTurnaroundProcessFacade(process, pid) }
     }
 
     private val pidProcess = Processes.newPidProcess(pid)
@@ -33,7 +33,7 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
             }
             else -> {
                 //can we simply issue a pgrep -P call here?
-                if(includeDescendants) { return Unsupported }
+                if(includeDescendants) { return ZT_EXEC_CANT_INCLUDE_CHILDREN }
             }
         }
 
@@ -49,7 +49,9 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
                 pidProcess.isIncludeChildren = includeDescendants
             }
             else -> {
-                if(includeDescendants) { return Unsupported }
+                if(includeDescendants) {
+                    return ZT_EXEC_CANT_INCLUDE_CHILDREN
+                }
             }
         }
 
@@ -64,7 +66,7 @@ internal class ZeroTurnaroundPIDGenerator(): ProcessIDGenerator {
     override fun findPID(process: Process): Int = PidUtil.getPid(process)
 
     companion object: ProcessIDGenerator.Factory {
-        override fun create() = supportedIf(ZTOnClassPath) {
+        override fun create() = ifZTAvailable {
             ZeroTurnaroundPIDGenerator()
         }
     }
@@ -72,3 +74,12 @@ internal class ZeroTurnaroundPIDGenerator(): ProcessIDGenerator {
 
 private val ZTOnClassPath: Boolean by lazy { Try { Class.forName("org.zeroturnaround.process.Processes") } != null }
 private val UseZeroTurnaroundIfAvailable = getBoolean("groostav.kotlinx.exec.UseZeroTurnaroundIfAvailable")
+
+private val ZT_NOT_CONFIGURED = Unsupported("system property groostav.kotlinx.exec.UseZeroTurnaroundIfAvailable not set")
+private val ZT_NOT_ON_CLASS_PATH = Unsupported("zt-process-killer & zt-exec not on classpath")
+
+private fun <T> ifZTAvailable(lazyBuilder: () -> T): Maybe<T> = when {
+    !UseZeroTurnaroundIfAvailable -> ZT_NOT_CONFIGURED
+    !ZTOnClassPath -> ZT_NOT_ON_CLASS_PATH
+    else -> Supported(lazyBuilder())
+}

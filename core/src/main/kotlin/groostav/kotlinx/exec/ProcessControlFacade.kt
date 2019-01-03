@@ -11,7 +11,7 @@ internal interface ProcessControlFacade {
      * - as per the nature of SIG_INT, it is not guaranteed that upon successful signally,
      *   the process will ever end
      */
-    fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> = Unsupported
+    fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit>
 
     /**
      * kills the process via SIG_KILL mechanisms.
@@ -20,7 +20,7 @@ internal interface ProcessControlFacade {
      * - method should return in a timely **no-blocking** fashion,
      * - by nature of `kill -9` and "end task", this process is expected to kill the child process eventually
      */
-    fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> = Unsupported
+    fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit>
 
 
     interface Factory {

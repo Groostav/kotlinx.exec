@@ -19,9 +19,10 @@ import kotlinx.coroutines.channels.toList
 internal class WindowsProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
 
     companion object: ProcessControlFacade.Factory {
-        override fun create(process: Process, pid: Int) = supportedIf(Platform.isWindows()) {
-            WindowsProcessControl(process, pid)
+        override fun create(process: Process, pid: Int) = if(Platform.isWindows()) {
+            Supported(WindowsProcessControl(process, pid))
         }
+        else OS_NOT_WINDOWS
     }
 
     @InternalCoroutinesApi
@@ -50,14 +51,13 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         // then spawn a new process, attach a console and emit a "CTRL_C" message?
 
         val separator = System.getProperty("file.separator")
-        val classpath = System.getProperty("java.class.path")
         val path = "${System.getProperty("java.home")}${separator}bin${separator}javaw"
 
         runBlocking {
             GlobalScope.execAsync {
                 command = listOf(
                         path,
-                        "-cp", classpath,
+                        "-cp", System.getProperty("java.class.path"),
                         PoliteLeechKiller::class.java.name,
                         "-pid", pid.toString()
                 )
@@ -146,8 +146,9 @@ internal class WindowsReflectiveNativePIDGen(): ProcessIDGenerator {
     }
 
     companion object: ProcessIDGenerator.Factory {
-        override fun create() = supportedIf(JavaProcessOS == ProcessOS.Windows){
-            WindowsReflectiveNativePIDGen()
+
+        override fun create() = if (JavaProcessOS != ProcessOS.Windows) OS_NOT_WINDOWS else {
+            Supported(WindowsReflectiveNativePIDGen())
         }
     }
 
@@ -173,3 +174,6 @@ interface KERNEL_32: Kernel32 {
 
     companion object: KERNEL_32 by Native.load("kernel32", KERNEL_32::class.java, W32APIOptions.DEFAULT_OPTIONS)
 }
+
+
+private val OS_NOT_WINDOWS = Unsupported("os is not windows")

@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import com.sun.jna.Platform
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.Reader
@@ -14,7 +15,10 @@ internal inline fun trace(message: () -> String){
     }
 }
 
-enum class ProcessOS { Windows, Unix }
+//TODO: this sorta ssumed we could decouple from JNA. Seems unlikely, so maybe just do Platform.isWindows() & Platform.isUnix()?
+enum class ProcessOS {
+    Windows, Unix;
+}
 
 internal val JavaProcessOS: ProcessOS = run {
     //this is the strategy from apache commons lang... I hate it, but they seem to think it works.
@@ -52,16 +56,11 @@ internal sealed class Maybe<out T> {
     abstract val value: T
 }
 internal data class Supported<out T>(override val value: T): Maybe<T>()
-internal object Unsupported : Maybe<Nothing>() {
+internal data class Unsupported(val reason: String): Maybe<Nothing>() {
     val platform = "${System.getProperty("os.name")}-jre${System.getProperty("java.version")}"
     override val value: Nothing get() = throw UnsupportedOperationException("unsupported platform $platform")
 }
-
-
-internal fun <T> supportedIf(condition: Boolean, resultIfTrue: () -> T): Maybe<T> = when(condition){
-    true -> Supported(resultIfTrue())
-    false -> Unsupported
-}
+internal val SupportedUnit = Supported(Unit) as Maybe<Unit>
 
 internal class NamedTracingProcessReader private constructor(
         src: InputStream,

@@ -14,8 +14,9 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
     }
 
     companion object: ProcessControlFacade.Factory {
-        override fun create(process: Process, pid: Int) = supportedIf(JavaProcessOS == ProcessOS.Unix) {
-            UnixProcessControl(process, pid)
+
+        override fun create(process: Process, pid: Int) = if (JavaProcessOS != ProcessOS.Unix) OS_NOT_UNIX else {
+            Supported(UnixProcessControl(process, pid))
         }
     }
 
@@ -59,9 +60,10 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
 internal class UnixReflectivePIDGen: ProcessIDGenerator {
 
     companion object: ProcessIDGenerator.Factory {
-        override fun create() = supportedIf(JavaProcessOS == ProcessOS.Unix){
-            UnixReflectivePIDGen()
+        override fun create() = if(JavaProcessOS == ProcessOS.Unix){
+            Supported(UnixReflectivePIDGen())
         }
+        else OS_NOT_UNIX
     }
 
     val field = Class.forName("java.lang.UNIXProcess")
@@ -70,3 +72,5 @@ internal class UnixReflectivePIDGen: ProcessIDGenerator {
 
     override fun findPID(process: Process): Int = field.getInt(process)
 }
+
+private val OS_NOT_UNIX = Unsupported("OS is not unix")

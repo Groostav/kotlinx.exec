@@ -3,7 +3,6 @@ package groostav.kotlinx.exec
 
 import groostav.kotlinx.exec.ProcessOS.Unix
 import groostav.kotlinx.exec.ProcessOS.Windows
-import groostav.kotlinx.exec.WindowsTests
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.InternalCoroutinesApi
 import java.nio.file.Paths
