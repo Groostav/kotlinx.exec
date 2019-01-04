@@ -92,12 +92,4 @@ class StandardIOTests {
         //assert
         assertEquals(42, result)
     }
-
-    @Test fun `when using output stream should properly dispose writer`(){
-        TODO("""saw this udner coverage:
-            |groostav/kotlinx/exec/more-channels.kt:29
-            |the writer.close() call isnt being made according to coverage. wat?
-        """.trimMargin())
-    }
-
 }

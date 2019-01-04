@@ -8,8 +8,7 @@ import java.util.*
 import java.util.regex.Pattern
 import kotlin.test.*
 
-@InternalCoroutinesApi
-class JoinAwaitAndKillTests {
+@InternalCoroutinesApi class JoinAwaitAndKillTests {
 
     @Test fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
 
@@ -294,6 +293,8 @@ class JoinAwaitAndKillTests {
         //assert
         pids.forEach { assertNotListed(it) }
 
+        TODO("I saw this one flap!")
+
 //        fail("this test passes on linux when I dont include the kill-child implementation, so my oracle's broken :sigh:")
         // blah, running forker-compose-up.sh from command line, then ctrl + Z, then ps, then kill -9 (parent), then ps
         // notice that all the child processes are dead. clearly I dont know enough about parent-child process relationships.
@@ -313,7 +314,7 @@ class JoinAwaitAndKillTests {
         //assert
         assertNotListed(process.processID)
         assertTrue(process.isCompleted)
-        assertTrue(process.isClosedForReceive)
+        assertFalse(process.isClosedForReceive) //still has data that can be read out.
         assertTrue(process.isClosedForSend)
     }
 
@@ -347,7 +348,25 @@ class JoinAwaitAndKillTests {
         assertEquals(result, 42)
     }
 
-    @Test fun `when attempting to kill unstarted process should do XYZ`(): Unit = TODO()
+    @Test fun `when attempting to kill unstarted process should quietly do nothing`(): Unit = runBlocking<Unit> {
+        //setup
+        val unstartedProcess = execAsync(CoroutineStart.LAZY) {
+            command = interruptableHangingCommand()
+        }
+
+        //act
+        unstartedProcess.kill()
+
+        //assert
+        unstartedProcess.apply {
+            assertEquals(Unit, unstartedProcess.join())
+            assertThrows<CancellationException> { unstartedProcess.await() }
+            assertTrue(isCompleted)
+            assertTrue(isCancelled)
+            assertTrue(isClosedForReceive) //still has data that can be read out.
+            assertTrue(isClosedForSend)
+        }
+    }
 
     @Test fun `todo`(): Unit = TODO("""
         ook, so I implemented a kill -9 behaviour on cancellation and all of these tests pass,

@@ -150,8 +150,8 @@ data class ProcessBuilder internal constructor(
         var linesForExceptionError: Int = 15,
 
         //used to point at caller of exec() through suspension context
-        internal var source: ExecEntryPoint? = null
-//        internal val scope: CoroutineScope
+        internal var source: ExecEntryPoint? = null,
+        internal var exitCodeInResultAggregateChannel: Boolean = true
 )
 
 object InheritedDefaultEnvironment: Map<String, String> by System.getenv()

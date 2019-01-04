@@ -269,20 +269,6 @@ class WindowsTests {
         )
     }
 
-    @Test fun `when running with non standard env should do things`() = runBlocking<Unit> {
-        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
-        val (lines, _) = exec {
-            command = listOf(
-                    "powershell.exe",
-                    "-File", simpleScript,
-                    "-ExecutionPolicy", "Bypass"
-            )
-            environment += "GROOSTAV_ENV_VALUE" to "Testing!"
-        }
-
-        assertEquals(listOf<String>("env:GROOSTAV_ENV_VALUE is 'Testing!'"), lines)
-    }
-
 
     @Test fun `using Read-Host with Prompt style powershell script should block script`() = runBlocking<Unit> {
 
@@ -348,12 +334,13 @@ class WindowsTests {
 
         //act
         var result = emptyList<String>()
-        while( ! runningProc.isClosedForReceive) {
-            val next = select<String> {
-                runningProc.onReceive { it.formattedMessage }
+        do {
+            val next = select<String?> {
                 runningProc.onAwait { "exited" }
+                if( ! runningProc.isClosedForReceive) runningProc.onReceiveOrNull { it?.formattedMessage }
             }
-            result += next
+
+            result += next ?: continue
 
             println("output=$next")
 
@@ -369,8 +356,7 @@ class WindowsTests {
                 is String -> runningProc.send(response)
                 null -> {}
             }
-            if(next == "exited" || next == "timed-out") break;
-        }
+        } while (next != "exited" && next != "timed-out")
 
         //assert
         assertEquals(
@@ -381,6 +367,7 @@ class WindowsTests {
                         "processing powershell!!",
                         "Go ahead and write things to input...", //send EOF signal
                         "done!",
+                        "Process finished with exit code 0",
                         "exited"
                 ),
         result)

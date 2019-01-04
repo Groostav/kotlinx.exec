@@ -40,5 +40,4 @@ class ConfigurationTests {
 
         assertEquals(1, code)
     }
-
 }

@@ -196,19 +196,21 @@ private fun Int.toByteSizeString(): String = when(this){
 
 internal fun Int.asQueueChannelCapacity(): Int = when (this) {
     0 -> Channel.UNLIMITED //TODO: a custom 'EmptyCloseableChannel' impl here would be neat
-    1 -> Channel.CONFLATED
-    in 2 until Int.MAX_VALUE -> this
+//    1 -> Channel.CONFLATED // when you close a conflated channel, it treats that as a token, throwing out the last element
+    in 1 until Int.MAX_VALUE -> this
     Int.MAX_VALUE -> Channel.UNLIMITED
     else -> TODO("cant allocate buffer for size=${this}")
 }
 
-private suspend inline fun <T> Channel<T>.pushForward(next: T){
+internal suspend inline fun <T> Channel<T>.pushForward(next: T): List<T> {
+    var dropped: List<T> = emptyList()
     while (!offer(next) && ! isClosedForSend) {
-        val bumpedElement = receiveOrNull()
-        if (bumpedElement != null){
-            trace { "WARN: back-pressure forced drop '$bumpedElement' from ${this@pushForward}" }
-        }
+        val bumpedElement = receiveOrNull() ?: continue
+        dropped += bumpedElement
     }
+    return dropped.also { if(dropped.any()) {
+        trace { "WARN: back-pressure from $this dropped:" + dropped.joinToString("\n\t", "\n\t") }
+    }}
 }
 
 internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Char> {

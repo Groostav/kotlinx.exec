@@ -9,8 +9,7 @@ import kotlin.test.assertEquals
 
 class DelayMachineTests{
 
-    // put everythong on one thread to proove that the system doesnt need
-    // 'accidental' parallelism.
+    //do tests in one other thread to reduce accidental parallism, which is likely to make these tests harder to pass.
     val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
 
     @Test fun `when using three subscribers should properly leverage things`() = runBlocking<Unit>(dispatcher) {

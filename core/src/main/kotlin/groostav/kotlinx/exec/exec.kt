@@ -8,66 +8,77 @@ import java.lang.ProcessBuilder as JProcBuilder
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
 
 @InternalCoroutinesApi
-internal fun CoroutineScope.execAsync(
-        config: ProcessBuilder,
-        start: CoroutineStart = CoroutineStart.DEFAULT
-): RunningProcess {
+internal fun CoroutineScope.execAsync(config: ProcessBuilder, start: CoroutineStart): RunningProcess {
 
     val newContext = newCoroutineContext(EmptyCoroutineContext)
     val coroutine = ExecCoroutine(
-            config, newContext, makePIDGenerator(), makeListenerProviderFactory(), CompositeProcessControlFactory
+            config,
+            newContext, start,
+            makePIDGenerator(), makeListenerProviderFactory(), CompositeProcessControlFactory
     )
-    coroutine.prestart()
 
-    if(start != CoroutineStart.LAZY) { coroutine.kickoff() }
+    if(start != CoroutineStart.LAZY) {
+        coroutine.prestart()
+        coroutine.kickoff()
+    }
     coroutine.start(start, coroutine, ExecCoroutine::waitFor)
 
     return coroutine
 }
 
-
 @InternalCoroutinesApi
-fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess {
+fun CoroutineScope.execAsync(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessBuilder.() -> Unit): RunningProcess {
 
     val configActual = processBuilder() {
         config()
         source = AsynchronousExecutionStart(command.toList())
     }
-    return execAsync(configActual)
+    return execAsync(configActual, start)
 }
 @InternalCoroutinesApi
-fun CoroutineScope.execAsync(commandFirst: String, vararg commandRest: String): RunningProcess = execAsync {
+@Throws(InvalidExitValueException::class)
+fun CoroutineScope.execAsync(
+        commandFirst: String,
+        vararg commandRest: String,
+        start: CoroutineStart = CoroutineStart.DEFAULT
+): RunningProcess = execAsync(start) {
     command = listOf(commandFirst) + commandRest.toList()
 }
 
 @InternalCoroutinesApi
-suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult = coroutineScope {
+@Throws(InvalidExitValueException::class)
+suspend fun exec(
+        start: CoroutineStart = CoroutineStart.DEFAULT,
+        config: ProcessBuilder.() -> Unit
+): ProcessResult = coroutineScope {
 
     val configActual = processBuilder {
         apply(config)
 
         source = SynchronousExecutionStart(command.toList())
+        exitCodeInResultAggregateChannel = false
     }
 
-    val runningProcess = execAsync(configActual)
-
-    withTimeoutOrNull(3_000) { runningProcess.join() }
+    val runningProcess = execAsync(configActual, start)
+    runningProcess.join()
 
     val output = runningProcess
-            .filter { it !is ExitCode }
             .map { it.formattedMessage }
+            .toList()
 
-    ProcessResult(output.toList(), runningProcess.getCompleted())
+    ProcessResult(output, runningProcess.getCompleted())
 }
 
 @InternalCoroutinesApi
-suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResult
-        = exec { command = listOf(commandFirst) + commandRest }
+@Throws(InvalidExitValueException::class)
+suspend fun exec(commandFirst: String, vararg commandRest: String, start: CoroutineStart = CoroutineStart.DEFAULT): ProcessResult
+        = exec(start) { command = listOf(commandFirst) + commandRest }
 
 @InternalCoroutinesApi
-suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int = coroutineScope {
+@Throws(InvalidExitValueException::class)
+suspend fun execVoid(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessBuilder.() -> Unit): Int = coroutineScope {
 
-    val configActual = processBuilder() {
+    val configActual = processBuilder {
         aggregateOutputBufferLineCount = 0
         standardErrorBufferCharCount = 0
         standardErrorBufferCharCount = 0
@@ -76,12 +87,15 @@ suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int = coroutineScope {
 
         source = SynchronousExecutionStart(command.toList())
     }
-    val runningProcess = execAsync(configActual)
-
-        runningProcess.await()
+    val runningProcess = execAsync(configActual, start)
+    runningProcess.await()
 }
 @InternalCoroutinesApi
-suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = execVoid {
+@Throws(InvalidExitValueException::class)
+suspend fun execVoid(
+        commandFirst: String, vararg commandRest: String,
+        start: CoroutineStart = CoroutineStart.DEFAULT
+): Int = execVoid(start) {
     command = listOf(commandFirst) + commandRest.toList()
 }
 
@@ -104,7 +118,7 @@ class InvalidExitValueException(
     }
 }
 
-internal inline fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): Throwable {
+internal inline fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): InvalidExitValueException {
     val expectedCodes = config.expectedOutputCodes
     val builder = buildString {
 
@@ -124,9 +138,8 @@ internal inline fun makeExitCodeException(config: ProcessBuilder, exitCode: Int,
         }
     }
 
-    val result = InvalidExitValueException(config.command, exitCode, expectedCodes, recentErrorOutput, builder.toString()){
-        val source = config.source
-        when(source){
+    val result = InvalidExitValueException(config.command, exitCode, expectedCodes, recentErrorOutput, builder){
+        when(val source = config.source){
             is AsynchronousExecutionStart -> {
                 initCause(source)
             }
