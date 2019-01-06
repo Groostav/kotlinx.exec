@@ -195,7 +195,7 @@ private fun Int.toByteSizeString(): String = when(this){
 }
 
 internal fun Int.asQueueChannelCapacity(): Int = when (this) {
-    0 -> Channel.UNLIMITED //TODO: a custom 'EmptyCloseableChannel' impl here would be neat
+    0 -> Channel.CONFLATED //TODO: a custom 'EmptyCloseableChannel' impl here would be neat
 //    1 -> Channel.CONFLATED // when you close a conflated channel, it treats that as a token, throwing out the last element
     in 1 until Int.MAX_VALUE -> this
     Int.MAX_VALUE -> Channel.UNLIMITED

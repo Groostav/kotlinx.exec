@@ -91,7 +91,7 @@ class UnhappyConfigurationTests {
             val poll = runningProcess.poll()
         }
 
-        //act
+        //assert
         assertEquals(false, beforeClose.isClosedForReceive)
         assertEquals(true, beforeClose.isEmpty)
         assertEquals(null, beforeClose.poll)

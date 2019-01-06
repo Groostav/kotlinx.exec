@@ -4,6 +4,8 @@ import com.sun.jna.Native
 import com.sun.jna.Platform
 import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.Kernel32
+import com.sun.jna.platform.win32.Tlhelp32
+import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.platform.win32.WinNT
 import com.sun.jna.win32.W32APIOptions
 import kotlinx.coroutines.*
@@ -12,6 +14,7 @@ import kotlinx.coroutines.channels.consumeEach
 import com.sun.jna.platform.win32.WinDef.BOOL
 import kotlinx.coroutines.channels.map
 import kotlinx.coroutines.channels.toList
+import java.util.*
 
 
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
@@ -23,6 +26,63 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
             Supported(WindowsProcessControl(process, pid))
         }
         else OS_NOT_WINDOWS
+
+        fun buildPIDIndex(): TreeMap<Long, ArrayList<Long>> {
+            val process_entry: Tlhelp32.PROCESSENTRY32 = Tlhelp32.PROCESSENTRY32.ByReference() //dwsize set by jna.platform!
+            var parent_pid = 0;
+            var snapshot_handle: WinNT.HANDLE = KERNEL_32.CreateToolhelp32Snapshot(Tlhelp32.TH32CS_SNAPPROCESS, WinDef.DWORD(0))
+
+            val childIDsByParent1 = TreeMap<Long, ArrayList<Long>>()
+            if (KERNEL_32.Process32First(snapshot_handle, process_entry)) {
+                do {
+                    val pid = process_entry.th32ProcessID.toLong()
+                    val ppid = process_entry.th32ParentProcessID.toLong()
+
+                    //to get a handle I think we need OpenProcess
+
+                    if (pid != 0L) {
+                        if (ppid in childIDsByParent1) {
+                            childIDsByParent1.getValue(ppid).add(pid)
+                        } else {
+                            childIDsByParent1[ppid] = arrayListOf(pid)
+                        }
+                    }
+                } while (KERNEL_32.Process32Next(snapshot_handle, process_entry))
+            }
+            val childIDsByParent = childIDsByParent1
+
+            fail; //blargwargl,
+            // ok so by pulling the process HANDLE you can effectively lock the PID.
+            // https://stackoverflow.com/questions/26301382/does-windows-7-recycle-process-id-pid-numbers
+            // https://docs.microsoft.com/en-ca/windows/desktop/ProcThread/process-handles-and-identifiers
+            // then it seems to me I'm writing a garbage collector...
+            // i dont know how to write a garbage collector...
+
+            //hows this:
+            // val children
+            // let queue: Queue<Pair<Pid, HANDLE>> = snapshotChildren(pid)
+            // while(current = queue.remove() != null && isAlive) {
+            //   queue.addAll(snapshotChildren(current.pid)
+            //   current.interrupt()
+            //   current.handle.join() -- this should block until that objects interruption logic has finished, presumably itself joining on children.
+            // }
+            //
+            // some problems: you might get a half-baked tree.
+            // what if some children respond to interrupt but others dont?
+            // what if the root does but the children dont? then taskkill /T wont work, you've effectively got yourself stuck.
+            //    well, MS might outsmart me here: https://blogs.msdn.microsoft.com/oldnewthing/20110107-00/?p=11803/
+            //    taskkill might well simply acquire handles to zombie processes and traverse them like any other.
+            // but the racyness seems definate:
+            //    https://blogs.msdn.microsoft.com/oldnewthing/20150403-00/?p=44313
+
+
+            // but, TDDing this will be a good chunk of work.
+            // perhalps rather than use powershell I could the jvm forking strategy here for testing:
+            // create some jvm instnaces that each print out when they're interrupted.
+
+            return childIDsByParent
+        }
+
     }
 
     @InternalCoroutinesApi
@@ -49,6 +109,13 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         // ok, so maybe we can employ both solutions?
         // use k32 to find out if the process has windows, find out which threads govern those windows, emit "WM_CLOSE" to those threads
         // then spawn a new process, attach a console and emit a "CTRL_C" message?
+
+        // regarding sub-process tree: https://github.com/Microsoft/vscode-windows-process-tree/blob/d0cd703b508dd6f9c5ca9bb8ef928fdc7293282f/src/process.cc
+
+        val childIDsByParent = buildPIDIndex()
+
+        println("built PPID table: $childIDsByParent")
+        println("this process has children: ${childIDsByParent[pid.toLong()]}")
 
         val separator = System.getProperty("file.separator")
         val path = "${System.getProperty("java.home")}${separator}bin${separator}javaw"
@@ -82,27 +149,27 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
             // this code is run in another vm/process!
             val pid = args[1].toInt()
 
-            fun tryPrintExecutePrint(description: String, nativeFunc: KERNEL_32.() -> Boolean): Unit? {
+            fun printExecutePrintAndExitIfFailed(description: String, nativeFunc: KERNEL_32.() -> Boolean): Unit? {
 
                 println("calling $description...")
                 val success = KERNEL_32.nativeFunc()
                 val errorCode = KERNEL_32.GetLastError()
                 println("success=$success, code=$errorCode")
-                return if(success) Unit else null
+                return if(success) Unit else System.exit(errorCode)
             }
 
             try {
-                tryPrintExecutePrint("SetConsoleCtrlHandler(NULL, TRUE)"){
+                printExecutePrintAndExitIfFailed("SetConsoleCtrlHandler(NULL, TRUE)"){
                     SetConsoleCtrlHandler(Pointer.NULL, BOOL(true))
                 }
 
                 val (eventName, eventCode) = "CTRL_C_EVENT" to Kernel32.CTRL_C_EVENT
                 println("submitting $eventName to pid=$pid")
 
-                tryPrintExecutePrint("Kernel32.AttachConsole($pid)"){
+                printExecutePrintAndExitIfFailed("Kernel32.AttachConsole($pid)"){
                     AttachConsole(pid)
                 }
-                tryPrintExecutePrint("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
+                printExecutePrintAndExitIfFailed("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
                     GenerateConsoleCtrlEvent(eventCode, 0)
                 }
 

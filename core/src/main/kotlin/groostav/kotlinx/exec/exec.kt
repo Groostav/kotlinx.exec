@@ -2,6 +2,7 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
+import java.lang.Boolean.getBoolean
 import kotlin.coroutines.EmptyCoroutineContext
 import java.lang.ProcessBuilder as JProcBuilder
 
@@ -109,12 +110,21 @@ class InvalidExitValueException(
 ): RuntimeException(message) {
 
     init {
-        stackTraceApplier()
+        if( ! UseUnmangledStackTrace) { stackTraceApplier() }
         if(stackTrace == null || stackTrace.isEmpty()) super.fillInStackTrace()
     }
 
     override fun fillInStackTrace(): Throwable = this.also {
         //noop, this is handled by init
+    }
+
+    companion object {
+        val UseUnmangledStackTrace = run {
+            val exceptionName = InvalidExitValueException::class.simpleName
+            getBoolean("kotlinx.exec.$exceptionName.UseUnmangledStackTrace").also {
+                trace { "UseUnmangledStackTrace=$it" }
+            }
+        }
     }
 }
 

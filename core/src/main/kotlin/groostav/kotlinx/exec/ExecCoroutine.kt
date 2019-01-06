@@ -388,6 +388,9 @@ internal class ExecCoroutine private constructor(
         return super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
     }
 
+    override fun close() {
+        close(null)
+    }
 
     //regarding cancellation:
     // problem: our cancellation is long-running.

@@ -1,8 +1,10 @@
 package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
@@ -26,7 +28,6 @@ class StandardIOTests {
                 ExitCode(0)
         )
     }
-
 
     @Test fun `when running standard error chatty script with bad exit code should get the tail of that error output`() = runBlocking<Unit> {
 
@@ -92,4 +93,20 @@ class StandardIOTests {
         //assert
         assertEquals(42, result)
     }
+
+
+    @Test fun `when attempting to write to stdin after process terminates should throw CancellationException`() = runBlocking<Unit> {
+        //setup
+        val process = execAsync {
+            command = emptyScriptCommand()
+        }
+        //act
+        process.await()
+
+        //assert
+        assertThrows<ClosedSendChannelException> {
+            process.send("posthumously pestering")
+        } // looks like a regular closed Send channel.
+    }
+
 }

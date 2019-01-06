@@ -50,13 +50,6 @@ class KotlinTests {
         //does not reach here.
     }
 
-    @Ignore("https://youtrack.jetbrains.net/issue/KT-25716")
-    @Test fun `one two`(){
-//        class Message(val outputQuestionLine: String, val response: CompletableDeferred<String> = CompletableDeferred())
-//
-//        val localDecoder = listOf<Message>()
-    }
-
     @Test fun `when opening subscription after member already published should suspend`() = runBlocking {
 
         val channel = ConflatedBroadcastChannel<Unit>()

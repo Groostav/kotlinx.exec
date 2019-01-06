@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.SelectClause2
+import java.io.Closeable
 import java.lang.IllegalStateException
 
 @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE") //renames a couple of the param names for SendChannel & ReceiveChannel
@@ -38,7 +39,7 @@ import java.lang.IllegalStateException
  *
  * [execVoid] and [execAsync] are the most concise process-builder factories.
  */
-interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Deferred<Int>{
+interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Deferred<Int>, Closeable {
 
     val standardOutput: ReceiveChannel<Char>
     val standardError: ReceiveChannel<Char>
@@ -113,6 +114,7 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Def
      * The character based input channel will also be closed.
      */
     override fun close(cause: Throwable?): Boolean
+    override fun close() 
 }
 
 sealed class ProcessEvent {
@@ -124,6 +126,7 @@ data class StandardOutputMessage(val line: String): ProcessEvent() {
 data class StandardErrorMessage(val line: String): ProcessEvent() {
     override val formattedMessage get() = "ERROR: $line"
 }
+//TODO: make `code` nullable for case where process is killed?
 data class ExitCode(val code: Int): ProcessEvent() {
     override val formattedMessage: String get() = "Process finished with exit code $code"
 }

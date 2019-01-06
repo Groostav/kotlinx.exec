@@ -1,13 +1,22 @@
 package groostav.kotlinx.exec
 
-import com.sun.jna.Platform
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.plus
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.Reader
 import java.nio.CharBuffer
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
+import kotlin.concurrent.thread
 
 //internal val TRACE = java.lang.Boolean.getBoolean("kotlinx.exec.trace")
 internal val TRACE = true
+
+private val ThreadCreator = ThreadFactory { job -> thread(start = false, isDaemon = false, name = "", block = job::run) }
+internal val ExecDispatcher = Executors.newSingleThreadScheduledExecutor(ThreadCreator).asCoroutineDispatcher()
+internal val ProcessScope = GlobalScope + ExecDispatcher
 
 internal inline fun trace(message: () -> String){
     if(TRACE){
