@@ -12,9 +12,11 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.channels.consumeEach
 import com.sun.jna.platform.win32.WinDef.BOOL
+import com.sun.jna.ptr.IntByReference
 import kotlinx.coroutines.channels.map
 import kotlinx.coroutines.channels.toList
 import java.util.*
+import kotlin.collections.HashSet
 
 
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
@@ -26,64 +28,9 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
             Supported(WindowsProcessControl(process, pid))
         }
         else OS_NOT_WINDOWS
-
-        fun buildPIDIndex(): TreeMap<Long, ArrayList<Long>> {
-            val process_entry: Tlhelp32.PROCESSENTRY32 = Tlhelp32.PROCESSENTRY32.ByReference() //dwsize set by jna.platform!
-            var parent_pid = 0;
-            var snapshot_handle: WinNT.HANDLE = KERNEL_32.CreateToolhelp32Snapshot(Tlhelp32.TH32CS_SNAPPROCESS, WinDef.DWORD(0))
-
-            val childIDsByParent1 = TreeMap<Long, ArrayList<Long>>()
-            if (KERNEL_32.Process32First(snapshot_handle, process_entry)) {
-                do {
-                    val pid = process_entry.th32ProcessID.toLong()
-                    val ppid = process_entry.th32ParentProcessID.toLong()
-
-                    //to get a handle I think we need OpenProcess
-
-                    if (pid != 0L) {
-                        if (ppid in childIDsByParent1) {
-                            childIDsByParent1.getValue(ppid).add(pid)
-                        } else {
-                            childIDsByParent1[ppid] = arrayListOf(pid)
-                        }
-                    }
-                } while (KERNEL_32.Process32Next(snapshot_handle, process_entry))
-            }
-            val childIDsByParent = childIDsByParent1
-
-            fail; //blargwargl,
-            // ok so by pulling the process HANDLE you can effectively lock the PID.
-            // https://stackoverflow.com/questions/26301382/does-windows-7-recycle-process-id-pid-numbers
-            // https://docs.microsoft.com/en-ca/windows/desktop/ProcThread/process-handles-and-identifiers
-            // then it seems to me I'm writing a garbage collector...
-            // i dont know how to write a garbage collector...
-
-            //hows this:
-            // val children
-            // let queue: Queue<Pair<Pid, HANDLE>> = snapshotChildren(pid)
-            // while(current = queue.remove() != null && isAlive) {
-            //   queue.addAll(snapshotChildren(current.pid)
-            //   current.interrupt()
-            //   current.handle.join() -- this should block until that objects interruption logic has finished, presumably itself joining on children.
-            // }
-            //
-            // some problems: you might get a half-baked tree.
-            // what if some children respond to interrupt but others dont?
-            // what if the root does but the children dont? then taskkill /T wont work, you've effectively got yourself stuck.
-            //    well, MS might outsmart me here: https://blogs.msdn.microsoft.com/oldnewthing/20110107-00/?p=11803/
-            //    taskkill might well simply acquire handles to zombie processes and traverse them like any other.
-            // but the racyness seems definate:
-            //    https://blogs.msdn.microsoft.com/oldnewthing/20150403-00/?p=44313
-
-
-            // but, TDDing this will be a good chunk of work.
-            // perhalps rather than use powershell I could the jvm forking strategy here for testing:
-            // create some jvm instnaces that each print out when they're interrupted.
-
-            return childIDsByParent
-        }
-
     }
+
+    private val procHandle: WinNT.HANDLE = fail
 
     @InternalCoroutinesApi
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Supported<Unit> {
@@ -137,53 +84,6 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
         return Supported(Unit)
     }
 
-    object PoliteLeechKiller {
-        @JvmStatic fun main(args: Array<String>){
-            println("running! args=[${args.joinToString()}]")
-            require(args.size == 2) { "expected args: -pid <pid_int>"}
-            require(args[0] == "-pid") { "expected args: -pid <pid_int>, but args[0] was ${args[0]}"}
-            require(args[1].toIntOrNull() != null) { "expected -pid as integer value, but was ${args[1]}"}
-
-            //https://stackoverflow.com/questions/1229605/is-this-really-the-best-way-to-start-a-second-jvm-from-java-code
-            // attaching a breakpoint: https://www.youtube.com/watch?v=fBGWtVOKTkM
-            // this code is run in another vm/process!
-            val pid = args[1].toInt()
-
-            fun printExecutePrintAndExitIfFailed(description: String, nativeFunc: KERNEL_32.() -> Boolean): Unit? {
-
-                println("calling $description...")
-                val success = KERNEL_32.nativeFunc()
-                val errorCode = KERNEL_32.GetLastError()
-                println("success=$success, code=$errorCode")
-                return if(success) Unit else System.exit(errorCode)
-            }
-
-            try {
-                printExecutePrintAndExitIfFailed("SetConsoleCtrlHandler(NULL, TRUE)"){
-                    SetConsoleCtrlHandler(Pointer.NULL, BOOL(true))
-                }
-
-                val (eventName, eventCode) = "CTRL_C_EVENT" to Kernel32.CTRL_C_EVENT
-                println("submitting $eventName to pid=$pid")
-
-                printExecutePrintAndExitIfFailed("Kernel32.AttachConsole($pid)"){
-                    AttachConsole(pid)
-                }
-                printExecutePrintAndExitIfFailed("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
-                    GenerateConsoleCtrlEvent(eventCode, 0)
-                }
-
-                println("done.")
-            }
-            catch(ex: Throwable){
-                ex.printStackTrace()
-                System.exit(42)
-            }
-
-            System.exit(0)
-        }
-    }
-
     @InternalCoroutinesApi
     override fun killForcefullyAsync(includeDescendants: Boolean): Supported<Unit> {
 
@@ -204,6 +104,46 @@ internal class WindowsProcessControl(val process: Process, val pid: Int): Proces
     // but it looks like that just punts the problem from the jvm into kernel 32, which still uses the same
     // (blocking thread) strategy.
     // => dont bother, no matter the API we're still polling the bastard.
+}
+
+internal class Win32ProcessProxy(val handle: WinNT.HANDLE) {
+
+    fun pollIsAlive(): Boolean {
+        val exitCode = IntByReference()
+        val hasExitCode = KERNEL_32.GetExitCodeProcess(handle, exitCode)
+        return ! hasExitCode
+    }
+
+    fun buildChildrenSnapshot(): List<Win32ProcessProxy> {
+
+        var changed: Boolean
+        val children: HashSet<WinNT.HANDLE> = HashSet()
+        val ppid = KERNEL_32.GetProcessId(handle).toLong()
+
+        // ok so, this is a fixed point, we simply use the racy API,
+        // then acquire locks on the objects implied by the racy API,
+        // and if the objects have changed since we last checked,
+        // we dispose those objects and try again.
+        do {
+            val index = buildPIDIndex()
+            val childrenIds = index[ppid] ?: emptyList<Long>()
+            val newChildren = childrenIds.map { childPID ->
+                KERNEL_32.OpenProcess(WinNT.SYNCHRONIZE, false, childPID.toInt())
+            }
+
+            val incorrect = children - newChildren
+
+            val foundStaleChildren = children.retainAll(newChildren)
+            val foundNewChildren = children.addAll(newChildren)
+
+            changed = foundNewChildren || foundStaleChildren
+
+            incorrect.forEach { KERNEL_32.CloseHandle(it) }
+        }
+        while(changed)
+
+        return children.map { Win32ProcessProxy(it) }
+    }
 }
 
 internal class WindowsReflectiveNativePIDGen(): ProcessIDGenerator {
@@ -244,3 +184,104 @@ interface KERNEL_32: Kernel32 {
 
 
 private val OS_NOT_WINDOWS = Unsupported("os is not windows")
+
+private object PoliteLeechKiller {
+    @JvmStatic fun main(args: Array<String>){
+        println("running! args=[${args.joinToString()}]")
+        require(args.size == 2) { "expected args: -pid <pid_int>"}
+        require(args[0] == "-pid") { "expected args: -pid <pid_int>, but args[0] was ${args[0]}"}
+        require(args[1].toIntOrNull() != null) { "expected -pid as integer value, but was ${args[1]}"}
+
+        //https://stackoverflow.com/questions/1229605/is-this-really-the-best-way-to-start-a-second-jvm-from-java-code
+        // attaching a breakpoint: https://www.youtube.com/watch?v=fBGWtVOKTkM
+        // this code is run in another vm/process!
+        val pid = args[1].toInt()
+
+        fun printExecutePrintAndExitIfFailed(description: String, nativeFunc: KERNEL_32.() -> Boolean): Unit? {
+
+            println("calling $description...")
+            val success = KERNEL_32.nativeFunc()
+            val errorCode = KERNEL_32.GetLastError()
+            println("success=$success, code=$errorCode")
+            return if(success) Unit else System.exit(errorCode)
+        }
+
+        try {
+            printExecutePrintAndExitIfFailed("SetConsoleCtrlHandler(NULL, TRUE)"){
+                SetConsoleCtrlHandler(Pointer.NULL, BOOL(true))
+            }
+
+            val (eventName, eventCode) = "CTRL_C_EVENT" to Kernel32.CTRL_C_EVENT
+            println("submitting $eventName to pid=$pid")
+
+            printExecutePrintAndExitIfFailed("Kernel32.AttachConsole($pid)"){
+                AttachConsole(pid)
+            }
+            printExecutePrintAndExitIfFailed("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
+                GenerateConsoleCtrlEvent(eventCode, 0)
+            }
+
+            println("done.")
+        }
+        catch(ex: Throwable){
+            ex.printStackTrace()
+            System.exit(42)
+        }
+
+        System.exit(0)
+    }
+}
+
+private fun buildPIDIndex(): TreeMap<Long, ArrayList<Long>> {
+    val processEntry: Tlhelp32.PROCESSENTRY32 = Tlhelp32.PROCESSENTRY32.ByReference() //dwsize set by jna.platform!
+    val snapshotHandle: WinNT.HANDLE = KERNEL_32.CreateToolhelp32Snapshot(Tlhelp32.TH32CS_SNAPPROCESS, WinDef.DWORD(0))
+
+    val childIDsByParent = TreeMap<Long, ArrayList<Long>>()
+    if (KERNEL_32.Process32First(snapshotHandle, processEntry)) {
+        do {
+            val pid = processEntry.th32ProcessID.toLong()
+            val ppid = processEntry.th32ParentProcessID.toLong()
+
+            //to get a handle I think we need OpenProcess
+
+            if (pid != 0L) {
+                if (ppid in childIDsByParent) {
+                    childIDsByParent.getValue(ppid).add(pid)
+                }
+                else {
+                    childIDsByParent[ppid] = arrayListOf(pid)
+                }
+            }
+        } while (KERNEL_32.Process32Next(snapshotHandle, processEntry))
+    }
+
+    // ok so by pulling the process HANDLE you can effectively lock the PID.
+    // https://stackoverflow.com/questions/26301382/does-windows-7-recycle-process-id-pid-numbers
+    // https://docs.microsoft.com/en-ca/windows/desktop/ProcThread/process-handles-and-identifiers
+    // then it seems to me I'm writing a garbage collector...
+    // i dont know how to write a garbage collector...
+
+    //hows this:
+    // val children
+    // let queue: Queue<Pair<Pid, HANDLE>> = snapshotChildren(pid)
+    // while(current = queue.remove() != null && isAlive) {
+    //   queue.addAll(snapshotChildren(current.pid)
+    //   current.interrupt()
+    //   current.handle.join() -- this should block until that objects interruption logic has finished, presumably itself joining on children.
+    // }
+    //
+    // some problems: you might get a half-baked tree.
+    // what if some children respond to interrupt but others dont?
+    // what if the root does but the children dont? then taskkill /T wont work, you've effectively got yourself stuck.
+    //    well, MS might outsmart me here: https://blogs.msdn.microsoft.com/oldnewthing/20110107-00/?p=11803/
+    //    taskkill might well simply acquire handles to zombie processes and traverse them like any other.
+    // but the racyness seems definate:
+    //    https://blogs.msdn.microsoft.com/oldnewthing/20150403-00/?p=44313
+
+
+    // but, TDDing this will be a good chunk of work.
+    // perhalps rather than use powershell I could the jvm forking strategy here for testing:
+    // create some jvm instnaces that each print out when they're interrupted.
+
+    return childIDsByParent
+}
