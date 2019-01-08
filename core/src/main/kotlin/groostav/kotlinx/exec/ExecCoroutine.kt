@@ -275,7 +275,7 @@ internal class ExecCoroutine private constructor(
     private fun tryKillAsync(gentle: Boolean = false): Job? {
 
         fun makeUnstartedInterruptOrReaper(running: State.Running) = GlobalScope.launch(start = CoroutineStart.LAZY){
-            val killer = processControlFacade.create(running.process, running.pid).value
+            val killer = processControlFacade.create(config, running.process, running.pid).value
             when(gentle){
                 true -> killer.tryKillGracefullyAsync(config.includeDescendantsInKill)
                 false -> killer.killForcefullyAsync(config.includeDescendantsInKill)

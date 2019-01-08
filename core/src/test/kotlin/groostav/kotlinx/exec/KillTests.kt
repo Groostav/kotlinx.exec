@@ -77,7 +77,7 @@ class KillTests {
         assertNotListed(runningProcess.processID)
     }
 
-    @Test fun `when killing process tree should properly end all descendants`() = runBlocking<Unit> {
+    @Test fun `when killing shell process tree gently should properly end all descendants`() = runBlocking<Unit> {
 
         //setup
         val pidRegex = Pattern.compile("PID=(?<pid>\\d+)")
@@ -85,6 +85,7 @@ class KillTests {
         val runningProcess = execAsync {
             command = forkerCommand()
             includeDescendantsInKill = true
+            gracefulTimeoutMillis = 99999999999
         }
 
         val pidsFuture = CompletableDeferred<List<Int>>()

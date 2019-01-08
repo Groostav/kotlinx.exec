@@ -69,7 +69,7 @@ internal data class Unsupported(val reason: String): Maybe<Nothing>() {
     val platform = "${System.getProperty("os.name")}-jre${System.getProperty("java.version")}"
     override val value: Nothing get() = throw UnsupportedOperationException("unsupported platform $platform")
 }
-internal val SupportedUnit = Supported(Unit) as Maybe<Unit>
+internal val SupportedUnit = Supported(Unit)
 
 internal class NamedTracingProcessReader private constructor(
         src: InputStream,

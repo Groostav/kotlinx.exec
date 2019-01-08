@@ -6,7 +6,6 @@ import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.launch
 
-
 internal class UnixProcessControl(val process: Process, val pid: Int): ProcessControlFacade {
 
     init {
@@ -15,7 +14,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
 
     companion object: ProcessControlFacade.Factory {
 
-        override fun create(process: Process, pid: Int) = if (JavaProcessOS != ProcessOS.Unix) OS_NOT_UNIX else {
+        override fun create(config: ProcessBuilder, process: Process, pid: Int) = if (JavaProcessOS != ProcessOS.Unix) OS_NOT_UNIX else {
             Supported(UnixProcessControl(process, pid))
         }
     }

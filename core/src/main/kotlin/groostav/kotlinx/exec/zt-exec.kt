@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import groostav.kotlinx.exec.ZeroTurnaroundProcessFacade.Companion.ZT_EXEC_CANT_INCLUDE_CHILDREN
 import org.zeroturnaround.process.PidUtil
 import org.zeroturnaround.process.Processes
 import org.zeroturnaround.process.WindowsProcess
@@ -19,7 +18,7 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
 
         val ZT_EXEC_CANT_INCLUDE_CHILDREN = Unsupported("cant include children in kill with zt-exec")
 
-        override fun create(process: Process, pid: Int) = ifZTAvailable { ZeroTurnaroundProcessFacade(process, pid) }
+        override fun create(config: ProcessBuilder, process: Process, pid: Int) = ifZTAvailable { ZeroTurnaroundProcessFacade(process, pid) }
     }
 
     private val pidProcess = Processes.newPidProcess(pid)
