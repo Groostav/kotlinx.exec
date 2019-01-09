@@ -88,6 +88,8 @@ class KillTests {
             gracefulTimeoutMillis = 99999999999
         }
 
+        delay(30)
+
         val pidsFuture = CompletableDeferred<List<Int>>()
 
         GlobalScope.launch {
@@ -108,13 +110,11 @@ class KillTests {
 
         //act
         val pids = pidsFuture.await()
-        val pid = runningProcess.processID
-        val pid2 = runningProcess.processID
         runningProcess.kill()
 
         //assert
         assertEquals(3, pids.size)
-        pids.forEach { assertNotListed(it) }
+        assertNotListed(*pids.toIntArray())
 
 //        TODO("I saw this one flap!")
 

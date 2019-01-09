@@ -40,14 +40,14 @@ internal class ExecCoroutine private constructor(
 
     sealed class State {
         object Uninitialized: State()
-        data class WarmingUp( //job is in STARTED state ==> because this dispatches child jobs.
+        class WarmingUp( //job is in STARTED state ==> because this dispatches child jobs.
                 val jvmProcessBuilder: java.lang.ProcessBuilder,
                 val recentErrorOutput: LinkedList<String>,
                 val stdoutAggregatorJob: Job?,
                 val stderrAggregatorJob: Job?,
                 val exitCodeAggregatorJob: Job
         ): State(){
-            override fun toString() = "Initialized"
+            override fun toString() = "WarmingUp"
         }
         data class Running(
                 val prev: WarmingUp,
@@ -57,6 +57,8 @@ internal class ExecCoroutine private constructor(
                 val reaper: Job? = null
         ): State(){
             override fun toString() = "Running(PID=$pid${if(reaper != null) ", hasReaper)" else ")"}"
+            override fun equals(other: Any?) = super.equals(other)
+            override fun hashCode(): Int = super.hashCode()
         }
         class Completed(val pid: Int, val exitCode: Int): State(){
             override fun toString() = "Completed(PID=$pid, exitCode=$exitCode)"
@@ -64,7 +66,7 @@ internal class ExecCoroutine private constructor(
         data class Euthanized(val first: Boolean): State()
     }
 
-    private val shortName = makeNameString(config, targetLength = 20)
+    private val shortName = config.debugName ?: makeNameString(config, targetLength = 20)
 
     // this thing is used both in a CAS loop for Running(no-reaper) to Running(reaper),
     // and from Running(*) to Completed, but is _not_ CAS'd from Initialized to Prestarted to Running,
@@ -272,7 +274,9 @@ internal class ExecCoroutine private constructor(
         standardInput.close()
     }
 
-    private fun tryKillAsync(gentle: Boolean = false): Job? {
+    private fun tryKillAsync(gentle: Boolean = false): Unit {
+
+        if(config.notKillable) return
 
         fun makeUnstartedInterruptOrReaper(running: State.Running) = GlobalScope.launch(start = CoroutineStart.LAZY){
             val killer = processControlFacade.create(config, running.process, running.pid).value
@@ -314,7 +318,9 @@ internal class ExecCoroutine private constructor(
             }
         }
 
-        return reaperOrInterrupt.also { it?.start() }
+        if(reaperOrInterrupt != null) reaperOrInterrupt.start()
+
+        return
     }
 
     override fun onStart() {
@@ -331,7 +337,7 @@ internal class ExecCoroutine private constructor(
         //how about this:
         val killedNormally = if(config.gracefulTimeoutMillis > 0){
             val killed = withTimeoutOrNull(config.gracefulTimeoutMillis) {
-                tryKillAsync(gentle = true)?.join()
+                tryKillAsync(gentle = true)
                 join()
             } != null
 
@@ -340,7 +346,7 @@ internal class ExecCoroutine private constructor(
         else false
 
         if ( ! killedNormally) {
-            tryKillAsync(gentle = false)?.join()
+            tryKillAsync(gentle = false)
             join()
         }
 
@@ -483,7 +489,7 @@ internal class ExecCoroutine private constructor(
     companion object Factory {
         private val jobId = AtomicInteger(1)
 
-        private fun makeName(config: ProcessBuilder): CoroutineName = CoroutineName("exec ${makeNameString(config, 50)}")
+        private fun makeName(config: ProcessBuilder): CoroutineName = CoroutineName(config.debugName ?: "exec ${makeNameString(config, 50)}")
 
         private fun makeNameString(config: ProcessBuilder, targetLength: Int) = buildString {
             val commandSeq = config.command.asSequence()

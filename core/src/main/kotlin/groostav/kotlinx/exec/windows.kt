@@ -12,13 +12,16 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.channels.consumeEach
 import com.sun.jna.platform.win32.WinDef.BOOL
+import com.sun.jna.platform.win32.WinError.ERROR_INVALID_HANDLE
 import com.sun.jna.ptr.IntByReference
-import kotlinx.coroutines.channels.map
-import kotlinx.coroutines.channels.toList
 import java.io.Closeable
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.*
+import kotlin.jvm.internal.FunctionReference
+import kotlin.reflect.KClass
+import kotlin.reflect.KFunction
+import kotlin.reflect.jvm.jvmName
 
 
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
@@ -94,13 +97,11 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
             runBlocking {
 
                 currentTree.use {
-                    val separator = System.getProperty("file.separator")
-                    val path = "${System.getProperty("java.home")}${separator}bin${separator}javaw"
+                    val path = "${System.getProperty("java.home")}/bin/javaw"
 
-                    val toSequence = currentTree.toSequence()
-                    val jobs = toSequence.map {
+                    val jobs = currentTree.toSequence().toList().map {
 
-                        fail; //whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
+//                        fail; //whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
                         // also: can you re-use the same process to kill all of them?
                         // also: what if it spawns a new process while its being interrupted??
                         // --that process should probably not be cancelled right?
@@ -109,11 +110,12 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
                             command = listOf(
                                     path,
                                     "-cp", System.getProperty("java.class.path"),
-                                    PoliteLeechKiller::class.java.name,
+                                    PoliteLeechKiller::main.instanceTypeName,
                                     "-pid", pid.toString()
                             )
-                            gracefulTimeoutMillis = 0
+                            notKillable = true
                             expectedOutputCodes = null
+                            debugName = "leech-kill -pid $pid"
                         }
 
                     }
@@ -155,6 +157,10 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
     // but it looks like that just punts the problem from the jvm into kernel 32, which still uses the same
     // (blocking thread) strategy.
     // => dont bother, no matter the API we're still polling the bastard.
+}
+
+private val KFunction<*>.instanceTypeName: String get() {
+    return ((this as FunctionReference).boundReceiver::class as KClass<*>).jvmName
 }
 
 internal class Win32ProcessProxy(
@@ -246,7 +252,19 @@ interface KERNEL_32: Kernel32 {
 
 private val OS_NOT_WINDOWS = Unsupported("os is not windows")
 
-private object PoliteLeechKiller {
+private const val SUCCESS = 0
+private const val UNKNOWN_ERROR = 1
+private const val NO_CONSOLE_TO_ATTACH_TO = 2
+
+/**
+ * A Strange program that attaches itself to a PID's console input and sends it a CTRL + C signal.
+ *
+ * I've tested this strategy with JVM, powershell and cmd processes,
+ * verifying that it both kills them and that finally blocks go off.
+ *
+ * This program emulates a user sending a CTRL-C signal to the console attached to any sub-process.
+ */
+internal object PoliteLeechKiller {
     @JvmStatic fun main(args: Array<String>){
         println("running! args=[${args.joinToString()}]")
         require(args.size == 2) { "expected args: -pid <pid_int>"}
@@ -258,38 +276,56 @@ private object PoliteLeechKiller {
         // this code is run in another vm/process!
         val pid = args[1].toInt()
 
-        fun printExecutePrintAndExitIfFailed(description: String, nativeFunc: KERNEL_32.() -> Boolean): Unit? {
+        val result = run(pid)
+        System.exit(result)
+    }
 
-            println("calling $description...")
-            val success = KERNEL_32.nativeFunc()
-            val errorCode = KERNEL_32.GetLastError()
-            println("success=$success, code=$errorCode")
-            return if(success) Unit else System.exit(errorCode)
-        }
+    private fun run(pid: Int): Int {
 
         try {
-            printExecutePrintAndExitIfFailed("SetConsoleCtrlHandler(NULL, TRUE)"){
+            printExecutePrintAndThrowIfFailed("SetConsoleCtrlHandler(NULL, TRUE)") {
                 SetConsoleCtrlHandler(Pointer.NULL, BOOL(true))
             }
 
             val (eventName, eventCode) = "CTRL_C_EVENT" to Kernel32.CTRL_C_EVENT
             println("submitting $eventName to pid=$pid")
 
-            printExecutePrintAndExitIfFailed("Kernel32.AttachConsole($pid)"){
+            val attachResult = printExecutePrintAndThrowIfFailed(
+                    "Kernel32.AttachConsole($pid)",
+                    otherAllowedCodes = arrayOf(ERROR_INVALID_HANDLE)
+            ) {
                 AttachConsole(pid)
             }
-            printExecutePrintAndExitIfFailed("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
+            if (attachResult == ERROR_INVALID_HANDLE) {
+                //as per https://docs.microsoft.com/en-us/windows/console/attachconsole#remarks
+                return NO_CONSOLE_TO_ATTACH_TO
+            }
+            printExecutePrintAndThrowIfFailed("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
                 GenerateConsoleCtrlEvent(eventCode, 0)
             }
 
             println("done.")
         }
-        catch(ex: Throwable){
+        catch (ex: Throwable) {
             ex.printStackTrace()
-            System.exit(42)
+            return UNKNOWN_ERROR
         }
 
-        System.exit(0)
+        return SUCCESS
+    }
+
+    private fun printExecutePrintAndThrowIfFailed(
+            description: String,
+            otherAllowedCodes: Array<out Int> = emptyArray(),
+            nativeFunc: KERNEL_32.() -> Boolean
+    ): Int {
+
+        println("calling $description...")
+        val success = KERNEL_32.nativeFunc()
+        val errorCode = KERNEL_32.GetLastError()
+        println("success=$success, code=$errorCode")
+        return if (success || errorCode in otherAllowedCodes) errorCode
+                else throw RuntimeException("$description failed with code=$errorCode")
     }
 }
 

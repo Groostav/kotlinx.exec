@@ -9,6 +9,11 @@ import org.junit.Ignore
 import org.junit.Test
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.jvm.internal.FunctionReference
+import kotlin.reflect.KClass
+import kotlin.reflect.KFunction1
+import kotlin.reflect.KSuspendFunction1
+import kotlin.reflect.jvm.jvmName
 import kotlin.test.*
 
 
@@ -481,6 +486,19 @@ class KotlinTests {
 
     //endregion
 
-    //copied from
+    @ExperimentalCoroutinesApi
+    @Test fun `when using kotlin method reference should get parent class of method trivially`(){
+        val x: KFunction1<*, *> = (MaindThingy::main)
+
+        //I think this is as good as it gets...
+        val instanceName= ((x as FunctionReference).boundReceiver::class as KClass<*>).jvmName
+
+        assertEquals("groostav.kotlinx.exec.KotlinTests\$MaindThingy", instanceName)
+    }
+    object MaindThingy{
+        @JvmStatic fun main(args: Array<String>){
+            TODO()
+        }
+    }
 
 }

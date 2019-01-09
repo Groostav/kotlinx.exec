@@ -151,7 +151,9 @@ data class ProcessBuilder internal constructor(
 
         //used to point at caller of exec() through suspension context
         internal var source: ExecEntryPoint? = null,
-        internal var exitCodeInResultAggregateChannel: Boolean = true
+        internal var exitCodeInResultAggregateChannel: Boolean = true,
+        internal var notKillable: Boolean = false,
+        internal var debugName: String? = null
 )
 
 object InheritedDefaultEnvironment: Map<String, String> by System.getenv()

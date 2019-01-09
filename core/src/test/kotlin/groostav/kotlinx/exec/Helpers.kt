@@ -3,7 +3,6 @@ package groostav.kotlinx.exec
 
 import groostav.kotlinx.exec.ProcessOS.Unix
 import groostav.kotlinx.exec.ProcessOS.Windows
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.InternalCoroutinesApi
 import java.nio.file.Paths
 import java.util.*
@@ -101,7 +100,7 @@ internal inline fun <reified X: Exception> Catch(action: () -> Any?): X? =
         try { action(); null } catch(ex: Exception){ if(ex is X) ex else throw ex }
 
 @InternalCoroutinesApi
-internal suspend fun CoroutineScope.assertNotListed(deadProcessID: Int){
+internal suspend fun assertNotListed(vararg deadProcessIDs: Int){
 
     // both powershell and ps have output formatting options,
     // but I'd rather demo working line-by-line with a regex.
@@ -134,8 +133,11 @@ internal suspend fun CoroutineScope.assertNotListed(deadProcessID: Int){
                     "(?<somethingImportant>\\d+)\\s+" +
                     "(?<processName>.*)"
             )
-            exec("powershell.exe", "-Command", "Get-Process")
-                    .outputAndErrorLines
+            val getProcess = exec {
+                command = listOf("powershell.exe", "-Command", "Get-Process")
+                debugName = "Get-Process.ps1"
+            }
+            getProcess.outputAndErrorLines
                     .drop(3) //powershell preamble is a blank line, a header line, and an ascii horizontal separator line
                     .map { it.trim() }
                     .dropLastWhile { it.isBlank() }
@@ -147,5 +149,7 @@ internal suspend fun CoroutineScope.assertNotListed(deadProcessID: Int){
 
     }
 
-    assertFalse("$deadProcessID is a running pid as listed in $runningPIDs") { deadProcessID in runningPIDs }
+    for(deadProcessID in deadProcessIDs){
+        assertFalse("$deadProcessID is a running") { deadProcessID in runningPIDs }
+    }
 }
