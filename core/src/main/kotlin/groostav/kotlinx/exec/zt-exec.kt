@@ -62,7 +62,7 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
 
 internal class ZeroTurnaroundPIDGenerator(): ProcessIDGenerator {
 
-    override fun findPID(process: Process): Int = PidUtil.getPid(process)
+    override fun findPID(process: Process): PID = PidUtil.getPid(process)
 
     companion object: ProcessIDGenerator.Factory {
         override fun create() = ifZTAvailable {

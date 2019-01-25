@@ -74,7 +74,7 @@ internal class JEP102ProcessIDGenerator(): ProcessIDGenerator {
         override fun create() = if(JavaVersion >= 9) { Supported(JEP102ProcessIDGenerator()) } else NOT_JAVA_9
     }
 
-    override fun findPID(process: Process): Int = process.pid().toInt()
+    override fun findPID(process: Process): PID = process.pid().toInt()
 
 }
 

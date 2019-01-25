@@ -10,7 +10,7 @@ import org.junit.Test
 class TortureTests {
 
     @Suppress("UNREACHABLE_CODE")
-    @Test fun `when process emits exit code before emitting and closing standard out should hold process open`() = runBlocking(TODO("need single threaded dispatcher")){
+    @Test fun `when process emits exit code before emitting and closing standard out should hold process open`() = runBlocking<Unit>(TODO("need single threaded dispatcher")){
 
         // setup
         // make fake PID generator, process listeners, etc
@@ -34,6 +34,8 @@ class TortureTests {
         // assertNull(exitCode)
         // assertFalse(exec.isCompleted)
         // assert(exec.State == Running)
+
+        TODO()
     }
 
 }

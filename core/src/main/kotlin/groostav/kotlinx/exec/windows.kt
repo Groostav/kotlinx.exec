@@ -23,10 +23,9 @@ import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.jvm.jvmName
 
-
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
 // isnt supported on windows' implementation of ProcessHandle.
-internal class WindowsProcessControl(val config: ProcessBuilder, val process: Process, val pid: Int): ProcessControlFacade {
+internal class WindowsProcessControl(val config: ProcessBuilder, val process: Process, val selfPID: Int): ProcessControlFacade {
 
     companion object: ProcessControlFacade.Factory {
         override fun create(config: ProcessBuilder, process: Process, pid: Int) = if(Platform.isWindows()) {
@@ -35,7 +34,7 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
         else OS_NOT_WINDOWS
     }
 
-    private val procHandle: WinNT.HANDLE = KERNEL_32.OpenProcess(WinNT.READ_CONTROL, false, pid)
+    private val procHandle: WinNT.HANDLE = KERNEL_32.OpenProcess(WinNT.READ_CONTROL, false, selfPID)
 
     @InternalCoroutinesApi
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
@@ -65,70 +64,85 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
         // regarding sub-process tree: https://github.com/Microsoft/vscode-windows-process-tree/blob/d0cd703b508dd6f9c5ca9bb8ef928fdc7293282f/src/process.cc
 
         fun exitedWhileBeingKilled() = Supported(Unit).also {
-            trace { "pid $pid exited while being killed" }
+            trace { "pid $selfPID exited while being killed" }
         }
         fun timedOut() = Supported(Unit).also {
-            trace { "graceful termination of $pid timed-out" }
+            trace { "graceful termination of $selfPID timed-out" }
         }
 
         val deadline = Instant.now().plusMillis(config.gracefulTimeoutMillis)
 
-        if(includeDescendants) {
-
-            var currentIndex = buildPIDIndex()
-            // by the time `buildPIDIndex()` returns, it might be stale
-            var currentTree: Win32ProcessProxy = toProcessTree(currentIndex, pid) ?: return exitedWhileBeingKilled()
-            // once we have the tree, this locks the PIDs to HANDLE's
-
-            do {
-                currentIndex = buildPIDIndex()
-                val newTree = toProcessTree(currentIndex, pid) ?: return exitedWhileBeingKilled()
-
-                val matched = newTree == currentTree
-
-                //todo: could write a merge strategy here but honestly it might be slower
-                currentTree.close()
-                currentTree = newTree
-
-                if(Instant.now() > deadline) return timedOut()
+        // by the time `buildPIDIndex()` returns, it might be stale
+        var previousTree: Win32ProcessProxy = when {
+            includeDescendants -> {
+                val index: Map<PID, List<PID>> = buildPIDIndex()
+                toProcessTree(index, selfPID) ?: return exitedWhileBeingKilled()
             }
-            while ( ! matched)
+            else -> Win32ProcessProxy(selfPID, procHandle, emptyList())
+        }
 
-            runBlocking {
+        // once we have the tree, this locks the PIDs to HANDLE's
+        // meaning that if we generate the tree a second time, and the entry is still there,
+        // its has to be one of our children.
 
-                currentTree.use {
-                    val path = "${System.getProperty("java.home")}/bin/javaw"
 
-                    val jobs = currentTree.toSequence().toList().map {
+        //todo: is handle allocation to be avoided (maybe because its expensive)?
+        // If yes: write a merge here so we dont excessively create/dispose handles
+        // if no: this strategy is probably fine.
+
+        var actualTree: Win32ProcessProxy
+
+        while(true) try {
+            if(Instant.now() > deadline) return timedOut()
+
+            val currentIndex = buildPIDIndex()
+
+            val newTree = toProcessTree(currentIndex, selfPID) ?: return exitedWhileBeingKilled()
+
+            // if the two trees are structurally equal => we've acquired a correct snap-shot of our process tree.
+            // new successor processes may have spawned. That is not covered here.
+            if(newTree == previousTree){
+                actualTree = newTree
+                break;
+            }
+
+        }
+        finally {
+            previousTree.close()
+            previousTree = newTree //blargwargl whose nested in who!!
+        }
+
+        runBlocking {
+
+            actualTree.use {
+                val path = "${System.getProperty("java.home")}/bin/javaw"
+
+                val jobs = actualTree.toSequence().toList().map {
 
 //                        fail; //whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
-                        // also: can you re-use the same process to kill all of them?
-                        // also: what if it spawns a new process while its being interrupted??
-                        // --that process should probably not be cancelled right?
+                    // also: can you re-use the same process to kill all of them?
+                    // also: what if it spawns a new process while its being interrupted??
+                    // --that process should probably not be cancelled right?
 
-                        GlobalScope.execAsync {
-                            command = listOf(
-                                    path,
-                                    "-cp", System.getProperty("java.class.path"),
-                                    PoliteLeechKiller::main.instanceTypeName,
-                                    "-pid", pid.toString()
-                            )
-                            notKillable = true
-                            expectedOutputCodes = null
-                            debugName = "leech-kill -pid $pid"
-                        }
-
+                    GlobalScope.execAsync {
+                        command = listOf(
+                                path,
+                                "-cp", System.getProperty("java.class.path"),
+                                PoliteLeechKiller::main.instanceTypeName,
+                                "-pid", selfPID.toString()
+                        )
+                        notKillable = true
+                        expectedOutputCodes = null
+                        debugName = "leech-kill -pid $selfPID"
                     }
 
-                    withTimeoutOrNull(Instant.now().until(deadline, ChronoUnit.MILLIS)) {
-                        jobs.forEach { it.join() }
-                    }
                 }
 
+                withTimeoutOrNull(Instant.now().until(deadline, ChronoUnit.MILLIS)) {
+                    jobs.forEach { it.join() }
+                }
             }
-        }
-        else {
-            TODO()
+
         }
 
 
@@ -143,9 +157,9 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
         var command = listOf("taskkill")
         if(includeDescendants) command += "/T"
         command += "/F"
-        command += listOf("/PID", "$pid")
+        command += listOf("/PID", "$selfPID")
 
-        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$pid).killForcefully")) {
+        GlobalScope.launch(Unconfined + CoroutineName("process(PID=$selfPID).killForcefully")) {
             execAsync { this.command = command }.consumeEach { trace { it.formattedMessage } }
         }
 
@@ -164,7 +178,7 @@ private val KFunction<*>.instanceTypeName: String get() {
 }
 
 internal class Win32ProcessProxy(
-        val pid: Int,
+        val pid: PID,
         handle: WinNT.HANDLE,
         val children: List<Win32ProcessProxy>
 ): Closeable {
@@ -196,10 +210,16 @@ internal class Win32ProcessProxy(
 
 }
 
-private fun toProcessTree(pidAdjacencyList: Map<Int, List<Int>>, rootPid: kotlin.Int): Win32ProcessProxy? {
+private fun toProcessTree(pidAdjacencyList: Map<PID, List<PID>>, rootPid: PID): Win32ProcessProxy? {
+
+    // note: we must build the tree from the root down
+    // else we may leak child references
 
     val handle = KERNEL_32.OpenProcess(WinNT.SYNCHRONIZE, false, rootPid)
-    if(handle == KERNEL_32.NULL_HANDLE) return null
+    if(handle == KERNEL_32.NULL_HANDLE) {
+        // implies child exited after we got its PID but before we got its handle
+        return null
+    }
 
     val children = pidAdjacencyList[rootPid]
             ?.map { toProcessTree(pidAdjacencyList, it) }
@@ -329,11 +349,11 @@ internal object PoliteLeechKiller {
     }
 }
 
-private fun buildPIDIndex(): Map<Int, List<Int>> {
+private fun buildPIDIndex(): Map<PID, List<PID>> {
     val processEntry: Tlhelp32.PROCESSENTRY32 = Tlhelp32.PROCESSENTRY32.ByReference() //dwsize set by jna.platform!
     val snapshotHandle: WinNT.HANDLE = KERNEL_32.CreateToolhelp32Snapshot(Tlhelp32.TH32CS_SNAPPROCESS, WinDef.DWORD(0))
 
-    val childIDsByParent = TreeMap<Int, ArrayList<Int>>()
+    val childIDsByParent = TreeMap<PID, ArrayList<PID>>()
     if (KERNEL_32.Process32First(snapshotHandle, processEntry)) {
         do {
             val pid = processEntry.th32ProcessID.toInt()

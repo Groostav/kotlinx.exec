@@ -69,7 +69,7 @@ internal class UnixReflectivePIDGen: ProcessIDGenerator {
             .getDeclaredField("pid")
             .apply { isAccessible = true }
 
-    override fun findPID(process: Process): Int = field.getInt(process)
+    override fun findPID(process: Process): PID = field.getInt(process)
 }
 
 private val OS_NOT_UNIX = Unsupported("OS is not unix")
