@@ -1,12 +1,16 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
+import kotlin.coroutines.EmptyCoroutineContext
 
 /**
  * Use fake process objects to project odd but legal behaviour from process API,
  * ensure that kotlinx.exec handles it properly
  */
+@InternalCoroutinesApi
 class TortureTests {
 
     @Suppress("UNREACHABLE_CODE")
@@ -21,7 +25,7 @@ class TortureTests {
         //     stdin.close()
         //     //do not close stdout
         // }
-        // val exec = ExecCoroutine()
+//        val exec = ExecCoroutine(ProcessBuilder(), EmptyCoroutineContext, CoroutineStart.DEFAULT, fakePIDGen, TODO("listenerJob"), fakeControlFactory)
 
         // act
         // listenerJob.join()

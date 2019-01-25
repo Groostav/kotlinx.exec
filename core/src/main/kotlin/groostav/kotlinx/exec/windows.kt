@@ -36,32 +36,35 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
 
     private val procHandle: WinNT.HANDLE = KERNEL_32.OpenProcess(WinNT.READ_CONTROL, false, selfPID)
 
+    /**
+     * Attempts to send a CTRL_C signal to the parent console of this process, interrupting it.
+     *
+     * This library imploys a fairly going to employ a novel solution to graceful process termination,
+     * avoiding `taskkill /PID` in favor of attempting to send a CTRL_C to the parent console window.
+     *
+     * Using `taskkill` (without /F) assumes a windows UI application
+     * in that it sends it a WM_CLOSE signal to the target process.
+     * This approach does not solicit any behaviour from cmd or powershell processes
+     * --which are, I believe, the lions share of use cases for this library.
+     * `WM_CLOSE` signals typically cause GUI applications to launch a
+     * "do you want to save or close?" dialog,
+     * which, fundamentally, means the process wont close programmatically
+     * (they will wait for user input to such a dialog!)
+     * **thus, we're going to skip the WM_CLOSE strategy used by tasskill in its entirety.**
+     *
+     * Instead the solution here is to create a new process that attaches itself to the console
+     * used by the target process, and emit a "CTRL_C" signal to that process.
+     * This has the desired effect of stopping cmd and powershell scripts,
+     * in addition to causing any appropriate powershell `Finally {}` blocks to fire.
+     *
+     * It has no impact on GUI applications.
+     */
     @InternalCoroutinesApi
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
 
-//        var command = listOf("taskkill")
-//        if(includeDescendants) command += "/T"
-//        command += listOf("/PID", "$pid")
+        // so after a good deal of reading,
 
-//        fail; //aww christ:
-        // http://stanislavs.org/stopping-command-line-applications-programatically-with-ctrl-c-events-from-net/
-        // turns out that taskkill /PID 1234 sends WM_CLOSE, which isnt exactly a SIG_INT,
-        // and that many applications, including powershell, simply ignore it.
-        // it seems like what is suggested is attempting to enumerate windows and the threads running their procedures,
-        // and send each a WM_QUIT or WM_CLOSE message.
-
-        // soembody has done some lifting for java:
-        // https://stackoverflow.com/a/42839731/1307108
-
-        // note also, you can call EndTask on Win32: https://docs.microsoft.com/en-us/windows/desktop/api/winuser/nf-winuser-endtask
-
-        // then theres this guy: http://web.archive.org/web/20170909040729/http://www.latenighthacking.com/projects/2003/sendSignal/
-
-        // ok, so maybe we can employ both solutions?
-        // use k32 to find out if the process has windows, find out which threads govern those windows, emit "WM_CLOSE" to those threads
-        // then spawn a new process, attach a console and emit a "CTRL_C" message?
-
-        // regarding sub-process tree: https://github.com/Microsoft/vscode-windows-process-tree/blob/d0cd703b508dd6f9c5ca9bb8ef928fdc7293282f/src/process.cc
+        //
 
         fun exitedWhileBeingKilled() = Supported(Unit).also {
             trace { "pid $selfPID exited while being killed" }
@@ -92,24 +95,27 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
 
         var actualTree: Win32ProcessProxy
 
-        while(true) try {
-            if(Instant.now() > deadline) return timedOut()
+        while(true) {
+            var newTree: Win32ProcessProxy? = null
+            try {
+                if(Instant.now() > deadline) return timedOut()
 
-            val currentIndex = buildPIDIndex()
+                val currentIndex = buildPIDIndex()
 
-            val newTree = toProcessTree(currentIndex, selfPID) ?: return exitedWhileBeingKilled()
+                val newTree = toProcessTree(currentIndex, selfPID) ?: return exitedWhileBeingKilled()
 
-            // if the two trees are structurally equal => we've acquired a correct snap-shot of our process tree.
-            // new successor processes may have spawned. That is not covered here.
-            if(newTree == previousTree){
-                actualTree = newTree
-                break;
+                // if the two trees are structurally equal => we've acquired a correct snap-shot of our process tree.
+                // new successor processes may have spawned. That is not covered here.
+                if(newTree == previousTree){
+                    actualTree = newTree
+                    break;
+                }
+
             }
-
-        }
-        finally {
-            previousTree.close()
-            previousTree = newTree //blargwargl whose nested in who!!
+            finally {
+                previousTree.close()
+                if(newTree != null) previousTree = newTree
+            }
         }
 
         runBlocking {
@@ -145,8 +151,6 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
 
         }
 
-
-//        PoliteLeechKiller.main(arrayOf("-pid", pid.toString()))
 
         return Supported(Unit)
     }
@@ -307,9 +311,6 @@ internal object PoliteLeechKiller {
                 SetConsoleCtrlHandler(Pointer.NULL, BOOL(true))
             }
 
-            val (eventName, eventCode) = "CTRL_C_EVENT" to Kernel32.CTRL_C_EVENT
-            println("submitting $eventName to pid=$pid")
-
             val attachResult = printExecutePrintAndThrowIfFailed(
                     "Kernel32.AttachConsole($pid)",
                     otherAllowedCodes = arrayOf(ERROR_INVALID_HANDLE)
@@ -318,10 +319,20 @@ internal object PoliteLeechKiller {
             }
             if (attachResult == ERROR_INVALID_HANDLE) {
                 //as per https://docs.microsoft.com/en-us/windows/console/attachconsole#remarks
-                return NO_CONSOLE_TO_ATTACH_TO
+                println("starting taskkill /PID $pid")
+                java.lang.ProcessBuilder()
+                        .command("taskkill", "/PID", "$pid")
+                        .redirectError(java.lang.ProcessBuilder.Redirect.INHERIT)
+                        .redirectOutput(java.lang.ProcessBuilder.Redirect.INHERIT)
+                        .start()
             }
-            printExecutePrintAndThrowIfFailed("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
-                GenerateConsoleCtrlEvent(eventCode, 0)
+            else {
+                val (eventName, eventCode) = "CTRL_C_EVENT" to Kernel32.CTRL_C_EVENT
+                println("submitting $eventName to pid=$pid")
+
+                printExecutePrintAndThrowIfFailed("Kernel32.GenerateConsoleCtrlEvent($eventName, 0)") {
+                    GenerateConsoleCtrlEvent(eventCode, 0)
+                }
             }
 
             println("done.")

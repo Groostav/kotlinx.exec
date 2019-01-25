@@ -152,15 +152,17 @@ data class ProcessBuilder internal constructor(
         //used to point at caller of exec() through suspension context
         internal var source: ExecEntryPoint? = null,
         internal var exitCodeInResultAggregateChannel: Boolean = true,
+
+        //TODO: this things NFG. Killable should map to cancellable/ATOMIC.
+        // ... errr...
+        // Cancellability of coroutine at suspension points depends on the particular implementation details of
+        //     * suspending functions as in [DEFAULT].
+        // hmm. I dont know what that means. It clearly does not mean what I thought it meant. Hmm.
         internal var notKillable: Boolean = false,
         internal var debugName: String? = null
 )
 
 object InheritedDefaultEnvironment: Map<String, String> by System.getenv()
-
-private fun String.encodeLineChars() = this
-        .replace("\r", "\\r")
-        .replace("\n", "\\n")
 
 internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
 
