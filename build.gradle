@@ -49,6 +49,7 @@ project('core'){
 
         testCompile group: 'junit', name: 'junit', version: '4.12'
         testCompile 'org.amshove.kluent:kluent:1.39'
+        testImplementation "io.mockk:mockk:1.9"
     }
     
     compileKotlin {

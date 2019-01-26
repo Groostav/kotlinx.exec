@@ -21,13 +21,14 @@ import kotlin.coroutines.intrinsics.createCoroutineUnintercepted
 import kotlin.coroutines.intrinsics.intercepted
 
 @InternalCoroutinesApi
-internal class ExecCoroutine private constructor(
+internal class ExecCoroutine(
         private val config: ProcessBuilder,
         parentContext: CoroutineContext,
         isActive: Boolean,
         private val pidGen: ProcessIDGenerator,
         private val listenerFactory: ProcessListenerProvider.Factory,
         private val processControlFacade: ProcessControlFacade.Factory,
+        private val makeProcessBuilder: (List<String>) -> java.lang.ProcessBuilder,
         private val aggregateChannel: Channel<ProcessEvent>,
         private val inputLines: Channel<String>
 ):
@@ -40,7 +41,7 @@ internal class ExecCoroutine private constructor(
 
     sealed class State {
         object Uninitialized: State()
-        class WarmingUp( //job is in STARTED state ==> because this dispatches child jobs.
+        class WarmingUp(
                 val jvmProcessBuilder: java.lang.ProcessBuilder,
                 val recentErrorOutput: LinkedList<String>,
                 val stdoutAggregatorJob: Job?,
@@ -160,7 +161,8 @@ internal class ExecCoroutine private constructor(
             }
         }
         val procBuilder = run prestartJvmProc@ {
-            java.lang.ProcessBuilder(config.command).apply {
+            val makeProcessBuilder1: Any = makeProcessBuilder(config.command)
+            (makeProcessBuilder1 as java.lang.ProcessBuilder).apply {
 
                 if (environment() !== config.environment) environment().apply {
                     clear()
@@ -487,23 +489,6 @@ internal class ExecCoroutine private constructor(
     )
 
     companion object Factory {
-        private val jobId = AtomicInteger(1)
-
-        private fun makeName(config: ProcessBuilder): CoroutineName = CoroutineName(config.debugName ?: "exec ${makeNameString(config, 50)}")
-
-        private fun makeNameString(config: ProcessBuilder, targetLength: Int) = buildString {
-            val commandSeq = config.command.asSequence()
-            append(commandSeq.first().replace("\\", "/").substringAfterLast("/").take(targetLength))
-
-            val iterator = commandSeq.drop(1).iterator()
-            if(length < targetLength){
-                while(length < targetLength -1 && iterator.hasNext()){
-                    append(" ")
-                    append(iterator.next().take(targetLength - length))
-                }
-                append("...")
-            }
-        }
 
         operator fun invoke(
                 config: ProcessBuilder,
@@ -515,11 +500,35 @@ internal class ExecCoroutine private constructor(
         ) = ExecCoroutine(
                 config,
                 parentContext, start != CoroutineStart.LAZY,
-                pidGen, listenerFactory, processControlFactory,
+                pidGen, listenerFactory, processControlFactory, ::ProcessBuilder,
                 aggregateChannel = Channel(config.aggregateOutputBufferLineCount.asQueueChannelCapacity()),
                 inputLines = Channel(Channel.RENDEZVOUS)
         )
 
-        private val atomicState = AtomicReferenceFieldUpdater.newUpdater(ExecCoroutine::class.java, State::class.java, "state")
+        @JvmStatic
+        private val atomicState = AtomicReferenceFieldUpdater.newUpdater(
+                ExecCoroutine::class.java,
+                State::class.java,
+                "state"
+        )
     }
 }
+
+private val jobId = AtomicInteger(1)
+
+private fun makeName(config: ProcessBuilder): CoroutineName = CoroutineName(config.debugName ?: "exec ${makeNameString(config, 50)}")
+
+private fun makeNameString(config: ProcessBuilder, targetLength: Int) = buildString {
+    val commandSeq = config.command.asSequence()
+    append(commandSeq.first().replace("\\", "/").substringAfterLast("/").take(targetLength))
+
+    val iterator = commandSeq.drop(1).iterator()
+    if(length < targetLength){
+        while(length < targetLength -1 && iterator.hasNext()){
+            append(" ")
+            append(iterator.next().take(targetLength - length))
+        }
+        append("...")
+    }
+}
+
