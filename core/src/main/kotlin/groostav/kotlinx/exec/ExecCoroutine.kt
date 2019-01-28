@@ -29,6 +29,7 @@ internal class ExecCoroutine(
         private val listenerFactory: ProcessListenerProvider.Factory,
         private val processControlFacade: ProcessControlFacade.Factory,
         private val makeProcessBuilder: (List<String>) -> java.lang.ProcessBuilder,
+        private val makeInputStreamActor: (Process) -> SendChannel<Char>,
         private val aggregateChannel: Channel<ProcessEvent>,
         private val inputLines: Channel<String>
 ):
@@ -38,6 +39,10 @@ internal class ExecCoroutine(
         ReceiveChannel<ProcessEvent> by aggregateChannel,
         SendChannel<String> by inputLines
 {
+
+    init {
+        require( ! aggregateChannel.isFull) { "aggregate channel is full at start, looks like a rendezvous channel?" }
+    }
 
     sealed class State {
         object Uninitialized: State()
@@ -72,7 +77,7 @@ internal class ExecCoroutine(
     // this thing is used both in a CAS loop for Running(no-reaper) to Running(reaper),
     // and from Running(*) to Completed, but is _not_ CAS'd from Initialized to Prestarted to Running,
     // there it is only used as a best-effort CME detection device.
-    private @Volatile var state: State = State.Uninitialized
+    internal @Volatile var state: State = State.Uninitialized
         set(value) { field = value.also { trace { "process '$shortName' moved to state $it" } } }
 
     private val exitCodeInflection = CompletableDeferred<Int>()
@@ -208,7 +213,7 @@ internal class ExecCoroutine(
         stdoutInflection.sinkFrom(listeners.standardOutputChannel.value)
         stderrInflection.sinkFrom(listeners.standardErrorChannel.value)
         exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value)
-        running.process.outputStream.toSendChannel(config).sinkFrom(stdinInflection)
+        makeInputStreamActor(process).sinkFrom(stdinInflection)
     }
 
     internal suspend fun waitFor(): Int = try {
@@ -500,7 +505,7 @@ internal class ExecCoroutine(
         ) = ExecCoroutine(
                 config,
                 parentContext, start != CoroutineStart.LAZY,
-                pidGen, listenerFactory, processControlFactory, ::ProcessBuilder,
+                pidGen, listenerFactory, processControlFactory, ::ProcessBuilder, { it.outputStream.toSendChannel(config) },
                 aggregateChannel = Channel(config.aggregateOutputBufferLineCount.asQueueChannelCapacity()),
                 inputLines = Channel(Channel.RENDEZVOUS)
         )

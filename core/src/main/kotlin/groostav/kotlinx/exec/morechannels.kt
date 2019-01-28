@@ -29,14 +29,14 @@ internal fun ReceiveChannel<Char>.lines(
             val newState = stateMachine.translate(nextChar)
 
             when (newState) {
-                State.NoMatch -> {
+                MatchState.NoMatch -> {
                     buffer.append(nextChar)
                 }
-                State.NewMatch -> {
+                MatchState.NewMatch -> {
                     val line = buffer.takeAndClear()
                     send(line)
                 }
-                State.ContinuedMatch -> {
+                MatchState.ContinuedMatch -> {
                     //noop, drop the character.
                 }
             }
@@ -61,9 +61,9 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
     var currentMatchColumn: Int = -1
     val activeRows: BitSet = BitSet().apply { set(0, delimiters.size) }
 
-    var previousState: State = State.NoMatch
+    var previousState: MatchState = MatchState.NoMatch
 
-    fun translate(next: Char): State {
+    fun translate(next: Char): MatchState {
 
         // strategy:
         // array delimieters into a jaggad matrix,
@@ -112,15 +112,15 @@ private class LineSeparatingStateMachine(delimiters: List<String>) {
 
         //generate new state
         val nextState = when {
-            activeRows.isEmpty() -> State.NoMatch
-            currentMatchColumn == 0 -> State.NewMatch
-            previousState == State.NoMatch -> State.NewMatch
-            previousState == State.NewMatch -> State.ContinuedMatch
-            previousState == State.ContinuedMatch -> State.ContinuedMatch
+            activeRows.isEmpty() -> MatchState.NoMatch
+            currentMatchColumn == 0 -> MatchState.NewMatch
+            previousState == MatchState.NoMatch -> MatchState.NewMatch
+            previousState == MatchState.NewMatch -> MatchState.ContinuedMatch
+            previousState == MatchState.ContinuedMatch -> MatchState.ContinuedMatch
             else -> TODO()
         }
 
-        if(nextState == State.NoMatch){ reset() }
+        if(nextState == MatchState.NoMatch){ reset() }
 
         previousState = nextState
 
@@ -155,7 +155,8 @@ private inline fun BitSet.removeIf(predicate: (Int) -> Boolean){
     }
 }
 
-enum class State { NoMatch, NewMatch, ContinuedMatch }
+enum class MatchState { NoMatch, NewMatch, ContinuedMatch }
+
 
 internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int, context: CoroutineContext = Unconfined): ReceiveChannel<T> {
 
@@ -205,7 +206,7 @@ internal fun Int.asQueueChannelCapacity(): Int = when (this) {
 internal suspend inline fun <T> Channel<T>.pushForward(next: T): List<T> {
     var dropped: List<T> = emptyList()
     while (!offer(next) && ! isClosedForSend) {
-        val bumpedElement = receiveOrNull() ?: continue
+        val bumpedElement = poll() ?: continue
         dropped += bumpedElement
     }
     return dropped.also { if(dropped.any()) {

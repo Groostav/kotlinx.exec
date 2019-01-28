@@ -2,6 +2,7 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.SendChannel
 import java.lang.Process
 import java.lang.Boolean.getBoolean
 

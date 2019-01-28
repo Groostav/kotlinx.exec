@@ -4,14 +4,15 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
 import kotlinx.coroutines.selects.select
 import org.junit.Test
-import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.reflect.full.cast
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Use fake process objects to project odd but legal behaviour from process API,
@@ -35,8 +36,14 @@ class TortureTests {
         val exitCode = CompletableDeferred<Int>()
 
         suspend fun emit(event: ProcessEvent): Unit = when(event){
-            is StandardOutputMessage -> event.line.forEach { standardOutput.send(it) }
-            is StandardErrorMessage -> event.line.forEach { standardError.send(it) }
+            is StandardOutputMessage -> {
+                event.line.forEach { standardOutput.send(it) }
+                standardOutput.send('\n')
+            }
+            is StandardErrorMessage -> {
+                event.line.forEach { standardError.send(it) }
+                standardError.send('\n')
+            }
             is ExitCode -> { exitCode.complete(event.code); Unit }
         }
 
@@ -65,55 +72,50 @@ class TortureTests {
 
         // setup
         val interceptors = Interceptors()
-        val exec = ExecCoroutine(
-                ProcessBuilder().apply {
-                    command = listOf("asdf.exe")
-                },
-                EmptyCoroutineContext,
-                true,
-                FakePIDGenerator,
-                interceptors.listenerFacade,
-                interceptors.controlFacade,
-                mockk<(List<String>) -> java.lang.ProcessBuilder>(relaxed = true){
-
-                    fail; //oh man, inline this, and it gives me a polluted heap, change it to try to push the error up and i get this.
-                    // mocking frameworks are aweful aweful things.
-                    // why dont they just use reflection and kotlins nice member-reference syntax to mock? Why all the lambdas?
-
-                    val result = mockk<java.lang.ProcessBuilder> {
-                        every { environment() } returns HashMap()
-                        every { directory() } returns File("MOCK/FILE/PATH")
-                    }
-                    every { this@mockk.invoke(any()) } returns (java.lang.ProcessBuilder::class.cast(result))
-                },
-                Channel(),
-                Channel()
-        ).also {
-            it.prestart()
-            it.kickoff()
-            it.start(CoroutineStart.DEFAULT, it, ExecCoroutine::waitFor)
-        }
+        val exec = makeExecCoroutine(interceptors)
 
         // act
         interceptors.apply {
-            emit(ExitCode(0))
+            emit(ExitCode(99))
             emit(StandardOutputMessage("ahah"))
             standardError.close()
             standardInput.close()
         }
-        val exit = select<Int?> {
-            onTimeout(30) { null }
-            interceptors.exitCode.onAwait { it }
+        val firstMessage = select<String?> {
+            onTimeout(1500) { null }
+            exec.onAwait { "exit code $it" }
+            exec.onReceive { it.formattedMessage }
         }
+        delay(500)
 
-
-        assertEquals(true, false)
         // assert
-        // assertNull(exitCode)
-        // assertFalse(exec.isCompleted)
-        // assert(exec.State == Running)
-
-        TODO()
+        assertEquals("ahah", firstMessage)
+        assertFalse(exec.isCompleted)
+        assertTrue(exec.state is ExecCoroutine.State.Running, "expected state=RUNNING, but was state=${exec.state}")
     }
 
+    private fun makeExecCoroutine(interceptors: Interceptors) = ExecCoroutine(
+            ProcessBuilder().apply {
+                command = listOf("asdf.exe")
+            },
+            EmptyCoroutineContext,
+            true,
+            FakePIDGenerator,
+            interceptors.listenerFacade,
+            interceptors.controlFacade,
+            makeProcessBuilder@{ args ->
+                mockk {
+                    every { environment() } returns HashMap()
+                    every { directory(any()) } returns this
+                    every { start() } returns mockk()
+                }
+            },
+            makeInputStreamActor@{ args -> Channel(UNLIMITED) },
+            Channel(UNLIMITED),
+            Channel(UNLIMITED)
+    ).also {
+        it.prestart()
+        it.kickoff()
+        it.start(CoroutineStart.DEFAULT, it, ExecCoroutine::waitFor)
+    }
 }
