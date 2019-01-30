@@ -21,6 +21,33 @@ import kotlin.test.assertTrue
 @InternalCoroutinesApi
 class TortureTests {
 
+    @Test fun `when process emits exit code before emitting and closing standard out should hold process open`() = runBlocking<Unit> {
+
+        // setup
+        val interceptors = Interceptors()
+        val exec = makeExecCoroutine(interceptors)
+
+        // act
+        interceptors.apply {
+            emit(ExitCode(99))
+            emit(StandardOutputMessage("ahah"))
+            standardError.close()
+            standardInput.close()
+        }
+        val firstMessage = select<String?> {
+            onTimeout(1500) { null }
+            exec.onAwait { "exit code $it" }
+            exec.onReceive { it.formattedMessage }
+        }
+        delay(500)
+
+        // assert
+        assertEquals("ahah", firstMessage)
+        assertFalse(exec.isCompleted)
+        assertTrue(exec.state is ExecCoroutine.State.Running, "expected state=RUNNING, but was state=${exec.state}")
+    }
+
+
     internal object FakePIDGenerator: ProcessIDGenerator {
 
         private val lastPID = AtomicInteger(0)
@@ -65,33 +92,6 @@ class TortureTests {
                 }
             })
         }
-    }
-
-    @Suppress("UNREACHABLE_CODE")
-    @Test fun `when process emits exit code before emitting and closing standard out should hold process open`() = runBlocking<Unit> {
-
-        // setup
-        val interceptors = Interceptors()
-        val exec = makeExecCoroutine(interceptors)
-
-        // act
-        interceptors.apply {
-            emit(ExitCode(99))
-            emit(StandardOutputMessage("ahah"))
-            standardError.close()
-            standardInput.close()
-        }
-        val firstMessage = select<String?> {
-            onTimeout(1500) { null }
-            exec.onAwait { "exit code $it" }
-            exec.onReceive { it.formattedMessage }
-        }
-        delay(500)
-
-        // assert
-        assertEquals("ahah", firstMessage)
-        assertFalse(exec.isCompleted)
-        assertTrue(exec.state is ExecCoroutine.State.Running, "expected state=RUNNING, but was state=${exec.state}")
     }
 
     private fun makeExecCoroutine(interceptors: Interceptors) = ExecCoroutine(

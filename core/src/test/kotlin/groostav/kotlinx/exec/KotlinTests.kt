@@ -501,4 +501,20 @@ class KotlinTests {
         }
     }
 
+
+    // so the defined behaviour from `launch` is to hold the "run-blocking" dispatch loop open. Interesting.
+    @Ignore("expected behaviour is to hang")
+    @Test fun `a launch block that never completes holds its parent open`() = runBlocking<Unit> {
+        launch { while(true) { Thread.sleep(200) } }
+    }
+
+    @Ignore("expected behaviour is to hang")
+    @Test fun `a launch block that checks its cancellation still holds its parent open`() =  runBlocking<Unit> {
+        launch {
+            while(isActive) {
+                delay(200)
+            }
+        }
+    }
+
 }
