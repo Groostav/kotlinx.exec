@@ -10,6 +10,7 @@ Try
 }
 Finally
 {
+    Write-Output "interrupted"
     exit 42
 }
 

@@ -147,16 +147,19 @@ class KillTests {
         val process = execAsync {
             command = interruptableHangingCommand()
             expectedOutputCodes = setOf(42)
-            gracefulTimeoutMillis = 3000
+            gracefulTimeoutMillis = 9999999999
         }
-        delay(1000)
+        delay(3000)
         launch { process.kill() }
 
         //act
-        val result = process.await()
+        val result = process.toList()
+
+        val x = 4;
+        doStuff()
 
         //assert
-        assertEquals(result, 42)
+        assertEquals(listOf(StandardOutputMessage("interrupted!")), result)
     }
 
     @Test fun `when attempting to kill unstarted process should quietly do nothing`(): Unit = runBlocking<Unit> {
@@ -178,4 +181,9 @@ class KillTests {
             assertTrue(isClosedForSend)
         }
     }
+}
+fun doStuff(){
+    val x = 4;
+    println("what the actual fuck")
+    val y = 4;
 }

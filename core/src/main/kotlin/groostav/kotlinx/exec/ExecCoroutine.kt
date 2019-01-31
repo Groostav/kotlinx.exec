@@ -59,8 +59,8 @@ internal class ExecCoroutine(
                 val prev: WarmingUp,
                 val process: Process,
                 val pid: Int,
-                val interrupt: Job? = null,
-                val reaper: Job? = null
+                val interrupt: Pair<Exception, Job>? = null,
+                val reaper: Pair<Exception, Job>? = null
         ): State(){
             override fun toString() = "Running(PID=$pid${if(reaper != null) ", hasReaper)" else ")"}"
             override fun equals(other: Any?) = super.equals(other)
@@ -257,7 +257,8 @@ internal class ExecCoroutine(
         val expectedExitCodes = config.expectedOutputCodes
 
         val result = when {
-            stateBeforeCompletion.reaper != null -> throw CancellationException()
+            stateBeforeCompletion.interrupt != null -> throw CancellationException().apply { initCause(stateBeforeCompletion.interrupt.first) }
+            stateBeforeCompletion.reaper != null -> throw CancellationException().apply { initCause(stateBeforeCompletion.reaper.first) }
             expectedExitCodes == null -> exitCode
             exitCode in expectedExitCodes -> exitCode
             else -> throw makeExitCodeException(config, exitCode, initialized.recentErrorOutput.toList())
@@ -266,7 +267,7 @@ internal class ExecCoroutine(
         result.also { trace { "exec '$shortName'(PID=${running.pid}) returned with code $result" } }
     }
     catch(ex: Exception){
-        trace { "exec '$shortName'(PID=${Try { processID }}) threw an exception of '${ex.message}'" }
+        trace { "exec '$shortName'(PID=${Try { processID }}) threw an exception of '$ex'" }
         throw ex
     }
     finally {
@@ -281,7 +282,7 @@ internal class ExecCoroutine(
         standardInput.close()
     }
 
-    private fun tryKillAsync(gentle: Boolean = false): Unit {
+    private fun tryKillAsync(source: Exception, gentle: Boolean = false): Unit {
 
         if(config.notKillable) return
 
@@ -297,8 +298,8 @@ internal class ExecCoroutine(
         val newState = atomicState.updateAndGet(this){ when(it) {
             State.Uninitialized -> State.Euthanized(first = true)
             is State.Running -> when {
-                gentle -> it.copy(interrupt = makeUnstartedInterruptOrReaper(it))
-                else -> it.copy(reaper = makeUnstartedInterruptOrReaper(it))
+                gentle -> it.copy(interrupt = source to makeUnstartedInterruptOrReaper(it))
+                else -> it.copy(reaper = source to makeUnstartedInterruptOrReaper(it))
             }
             is State.Completed -> it
             is State.Euthanized -> it.copy(first = false)
@@ -325,7 +326,7 @@ internal class ExecCoroutine(
             }
         }
 
-        if(reaperOrInterrupt != null) reaperOrInterrupt.start()
+        if(reaperOrInterrupt != null) reaperOrInterrupt.second.start()
 
         return
     }
@@ -337,39 +338,26 @@ internal class ExecCoroutine(
     }
 
     override suspend fun kill() {
-        // whats my strategy?
-        // who am i suspending?
-        // how can i atomically move to a cancelled state?
 
-        //how about this:
+        val killSource = CancellationException()
+
         val killedNormally = if(config.gracefulTimeoutMillis > 0){
             val killed = withTimeoutOrNull(config.gracefulTimeoutMillis) {
-                tryKillAsync(gentle = true)
+                tryKillAsync(gentle = true, source = killSource)
                 join()
             } != null
+
+            val x = 4;
 
             killed.also { trace { "interrupted '$shortName' gracefully: $killed" } }
         }
         else false
 
         if ( ! killedNormally) {
-            tryKillAsync(gentle = false)
+            tryKillAsync(gentle = false, source = killSource)
             join()
         }
 
-        // we call kill gracefully
-        // val success = withTimeoutOrNull(gracefulTime) { join() }
-        // if (success == null) cancel()
-        // listener.await()
-
-        //cancel:
-        // kill forcefully
-
-        //so...
-        // I think the block should probably start an actor in global scope
-        // each of these feed it an input
-        // at least that way we can reduce the concurrency to an actor managing its state.
-//        fail;
     }
 
     override fun cancel(): Unit {
@@ -381,7 +369,7 @@ internal class ExecCoroutine(
         val description = when(cause){
             null -> "completed normally"
             is CancellationException -> {
-                tryKillAsync()
+                tryKillAsync(cause)
                 "cancelled"
             }
             is InvalidExitValueException -> {

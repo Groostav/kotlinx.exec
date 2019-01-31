@@ -102,7 +102,12 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
 
                 val currentIndex = buildPIDIndex()
 
-                val newTree = toProcessTree(currentIndex, selfPID) ?: return exitedWhileBeingKilled()
+                val newTree = if(includeDescendants) {
+                    toProcessTree(currentIndex, selfPID) ?: return exitedWhileBeingKilled()
+                }
+                else {
+                    Win32ProcessProxy(selfPID, procHandle, emptyList())
+                }
 
                 // if the two trees are structurally equal => we've acquired a correct snap-shot of our process tree.
                 // new successor processes may have spawned. That is not covered here.
@@ -120,37 +125,46 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
 
         runBlocking {
 
-            actualTree.use {
-                val path = "${System.getProperty("java.home")}/bin/javaw"
+            try {
+                actualTree.use {
+                    val path = "${System.getProperty("java.home")}/bin/javaw"
 
-                val jobs = actualTree.toSequence().toList().map {
+                    val jobs = actualTree.toSequence().toList().map {
 
-//                        fail; //whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
-                    // also: can you re-use the same process to kill all of them?
-                    // also: what if it spawns a new process while its being interrupted??
-                    // --that process should probably not be cancelled right?
+                        //                        fail; //whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
+                        // also: can you re-use the same process to kill all of them?
+                        // also: what if it spawns a new process while its being interrupted??
+                        // --that process should probably not be cancelled right?
 
-                    GlobalScope.execAsync {
-                        command = listOf(
-                                path,
-                                "-cp", System.getProperty("java.class.path"),
-                                PoliteLeechKiller::main.instanceTypeName,
-                                "-pid", selfPID.toString()
-                        )
-                        notKillable = true
-                        expectedOutputCodes = null
-                        debugName = "leech-kill -pid $selfPID"
+                        GlobalScope.execAsync {
+                            command = listOf(
+                                    path,
+                                    "-cp", System.getProperty("java.class.path"),
+                                    PoliteLeechKiller::main.instanceTypeName,
+                                    "-pid", selfPID.toString()
+                            )
+                            notKillable = true
+                            expectedOutputCodes = null
+                            debugName = "leech-kill -pid $selfPID"
+                        }
+
                     }
 
-                }
+                    withTimeoutOrNull(Instant.now().until(deadline, ChronoUnit.MILLIS)) {
+                        jobs.forEach { it.join() }
+                    }
 
-                withTimeoutOrNull(Instant.now().until(deadline, ChronoUnit.MILLIS)) {
-                    jobs.forEach { it.join() }
+                    val x = 4;
                 }
             }
+            catch(ex: Exception){
+                ex.printStackTrace()
+            }
 
+            val x = 4;
         }
 
+        val x = 4;
 
         return Supported(Unit)
     }
