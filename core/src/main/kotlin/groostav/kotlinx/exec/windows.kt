@@ -62,10 +62,6 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
     @InternalCoroutinesApi
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
 
-        // so after a good deal of reading,
-
-        //
-
         fun exitedWhileBeingKilled() = Supported(Unit).also {
             trace { "pid $selfPID exited while being killed" }
         }
@@ -125,46 +121,35 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
 
         runBlocking {
 
-            try {
-                actualTree.use {
-                    val path = "${System.getProperty("java.home")}/bin/javaw"
+            actualTree.use {
+                val path = "${System.getProperty("java.home")}/bin/javaw"
 
-                    val jobs = actualTree.toSequence().toList().map {
+                for (win32Proc in actualTree.toSequence()) {
+                    //                        fail; //whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
+                    // also: can you re-use the same process to kill all of them?
+                    // also: what if it spawns a new process while its being interrupted??
+                    // --that process should probably not be cancelled right?
 
-                        //                        fail; //whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
-                        // also: can you re-use the same process to kill all of them?
-                        // also: what if it spawns a new process while its being interrupted??
-                        // --that process should probably not be cancelled right?
-
-                        GlobalScope.execAsync {
-                            command = listOf(
-                                    path,
-                                    "-cp", System.getProperty("java.class.path"),
-                                    PoliteLeechKiller::main.instanceTypeName,
-                                    "-pid", selfPID.toString()
-                            )
-                            notKillable = true
-                            expectedOutputCodes = null
-                            debugName = "leech-kill -pid $selfPID"
-                        }
-
+                    trace { "killing selfPID." }
+                    val killpb = java.lang.ProcessBuilder().apply {
+                        command(
+                                path,
+                                "-cp", System.getProperty("java.class.path"),
+                                PoliteLeechKiller::main.instanceTypeName,
+                                "-pid", win32Proc.pid.toString()
+                        )
+                        redirectError(java.lang.ProcessBuilder.Redirect.INHERIT)
+                        redirectOutput(java.lang.ProcessBuilder.Redirect.INHERIT)
                     }
 
-                    withTimeoutOrNull(Instant.now().until(deadline, ChronoUnit.MILLIS)) {
-                        jobs.forEach { it.join() }
-                    }
-
-                    val x = 4;
+                    killpb.start()
                 }
-            }
-            catch(ex: Exception){
-                ex.printStackTrace()
-            }
 
-            val x = 4;
+//                    withTimeoutOrNull(Instant.now().until(deadline, ChronoUnit.MILLIS)) {
+//                        jobs.forEach { it.join() }
+//                    }
+            }
         }
-
-        val x = 4;
 
         return Supported(Unit)
     }

@@ -59,12 +59,14 @@ internal class ExecCoroutine(
                 val prev: WarmingUp,
                 val process: Process,
                 val pid: Int,
-                val interrupt: Pair<Exception, Job>? = null,
-                val reaper: Pair<Exception, Job>? = null
+                val interrupt: SourcedTermination? = null,
+                val reaper: SourcedTermination? = null
         ): State(){
             override fun toString() = "Running(PID=$pid${if(reaper != null) ", hasReaper)" else ")"}"
             override fun equals(other: Any?) = super.equals(other)
             override fun hashCode(): Int = super.hashCode()
+
+            internal data class SourcedTermination(val source: CancellationException, val job: Job)
         }
         class Completed(val pid: Int, val exitCode: Int): State(){
             override fun toString() = "Completed(PID=$pid, exitCode=$exitCode)"
@@ -201,7 +203,7 @@ internal class ExecCoroutine(
         require(warmingUp is State.WarmingUp)
 
         val process = try { warmingUp.jvmProcessBuilder.start() }
-        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message ?: "", config, ex) }
+        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message ?: "", ex) }
 
         val pid = pidGen.findPID(process)
 
@@ -257,8 +259,15 @@ internal class ExecCoroutine(
         val expectedExitCodes = config.expectedOutputCodes
 
         val result = when {
-            stateBeforeCompletion.interrupt != null -> throw CancellationException().apply { initCause(stateBeforeCompletion.interrupt.first) }
-            stateBeforeCompletion.reaper != null -> throw CancellationException().apply { initCause(stateBeforeCompletion.reaper.first) }
+//            stateBeforeCompletion.interrupt != null -> throw CancellationException().apply { initCause(stateBeforeCompletion.interrupt.first) }
+            stateBeforeCompletion.interrupt != null -> {
+                fail; //ok so the stack trace on this exception is pure garbage,
+                // we really dont need it for anything except maybe debugging this library.
+                throw ProcessInterruptedException(exitCode, config.source, stateBeforeCompletion.interrupt.source)
+            }
+            stateBeforeCompletion.reaper != null -> {
+                throw ProcessKilledException(exitCode, config.source, stateBeforeCompletion.reaper.source)
+            }
             expectedExitCodes == null -> exitCode
             exitCode in expectedExitCodes -> exitCode
             else -> throw makeExitCodeException(config, exitCode, initialized.recentErrorOutput.toList())
@@ -282,7 +291,7 @@ internal class ExecCoroutine(
         standardInput.close()
     }
 
-    private fun tryKillAsync(source: Exception, gentle: Boolean = false): Unit {
+    private fun tryKillAsync(source: CancellationException, gentle: Boolean = false): Unit {
 
         if(config.notKillable) return
 
@@ -298,8 +307,8 @@ internal class ExecCoroutine(
         val newState = atomicState.updateAndGet(this){ when(it) {
             State.Uninitialized -> State.Euthanized(first = true)
             is State.Running -> when {
-                gentle -> it.copy(interrupt = source to makeUnstartedInterruptOrReaper(it))
-                else -> it.copy(reaper = source to makeUnstartedInterruptOrReaper(it))
+                gentle -> it.copy(interrupt = State.Running.SourcedTermination(source, makeUnstartedInterruptOrReaper(it)))
+                else -> it.copy(reaper = State.Running.SourcedTermination(source, makeUnstartedInterruptOrReaper(it)))
             }
             is State.Completed -> it
             is State.Euthanized -> it.copy(first = false)
@@ -326,7 +335,7 @@ internal class ExecCoroutine(
             }
         }
 
-        if(reaperOrInterrupt != null) reaperOrInterrupt.second.start()
+        if(reaperOrInterrupt != null) reaperOrInterrupt.job.start()
 
         return
     }
@@ -346,8 +355,6 @@ internal class ExecCoroutine(
                 tryKillAsync(gentle = true, source = killSource)
                 join()
             } != null
-
-            val x = 4;
 
             killed.also { trace { "interrupted '$shortName' gracefully: $killed" } }
         }

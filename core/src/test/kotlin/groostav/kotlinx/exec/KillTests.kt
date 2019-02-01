@@ -153,13 +153,13 @@ class KillTests {
         launch { process.kill() }
 
         //act
-        val result = process.toList()
-
-        val x = 4;
-        doStuff()
+//        val result = process.toList()
+//        process.join()
+        val result = process.await()
 
         //assert
-        assertEquals(listOf(StandardOutputMessage("interrupted!")), result)
+//        assertEquals(listOf(ExitCode(42)), result)
+        assertEquals(42, result)
     }
 
     @Test fun `when attempting to kill unstarted process should quietly do nothing`(): Unit = runBlocking<Unit> {
@@ -181,9 +181,4 @@ class KillTests {
             assertTrue(isClosedForSend)
         }
     }
-}
-fun doStuff(){
-    val x = 4;
-    println("what the actual fuck")
-    val y = 4;
 }

@@ -10,7 +10,9 @@ Try
 }
 Finally
 {
-    Write-Output "interrupted"
+    # on CTRL-C events powershell shuts down the output pipe,
+    # so WriteOutput doesnt seem to go anywhere.
+    Write-Host "interrupted"
     exit 42
 }
 

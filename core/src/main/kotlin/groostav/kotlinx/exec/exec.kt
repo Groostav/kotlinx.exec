@@ -106,29 +106,47 @@ class InvalidExitValueException(
         val expectedExitCodes: Set<Int>?,
         val recentStandardErrorLines: List<String>,
         message: String,
-        stackTraceApplier: InvalidExitValueException.() -> Unit
+        entryPoint: ExecEntryPoint?
 ): RuntimeException(message) {
 
     init {
-        if( ! UseUnmangledStackTrace) { stackTraceApplier() }
-        if(stackTrace == null || stackTrace.isEmpty()) super.fillInStackTrace()
+        mangleTraceOrCauseFor(null, entryPoint) { super.fillInStackTrace() }
     }
 
     override fun fillInStackTrace(): Throwable = this.also {
         //noop, this is handled by init
     }
+}
 
-    companion object {
-        val UseUnmangledStackTrace = run {
-            val exceptionName = InvalidExitValueException::class.simpleName
-            getBoolean("kotlinx.exec.$exceptionName.UseUnmangledStackTrace").also {
-                trace { "UseUnmangledStackTrace=$it" }
-            }
+private fun Throwable.mangleTraceOrCauseFor(cause: Throwable?, entryPoint: ExecEntryPoint?, superFillInStackTrace: () -> Throwable) {
+
+    val useUnmangledStackTrace = getBoolean("kotlinx.exec.${this::class.simpleName}.UseUnmangledStackTrace")
+
+    if(cause != null){
+        superFillInStackTrace()
+        cause.mangleTraceOrCauseFor(cause.cause, entryPoint, cause::fillInStackTrace)
+        initCause(cause)
+    }
+    else if(useUnmangledStackTrace){
+        initCause(cause ?: entryPoint as? Throwable)
+    }
+    else when (entryPoint) {
+        is AsynchronousExecutionStart -> {
+            superFillInStackTrace()
+            initCause(entryPoint)
         }
+        is SynchronousExecutionStart -> {
+            stackTrace = entryPoint.stackTrace
+        }
+        null -> {
+            superFillInStackTrace()
+        }
+        else -> TODO("unknown entryPoint type $entryPoint")
     }
 }
 
-internal inline fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): InvalidExitValueException {
+
+internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): InvalidExitValueException {
     val expectedCodes = config.expectedOutputCodes
     val builder = buildString {
 
@@ -148,21 +166,34 @@ internal inline fun makeExitCodeException(config: ProcessBuilder, exitCode: Int,
         }
     }
 
-    val result = InvalidExitValueException(config.command, exitCode, expectedCodes, recentErrorOutput, builder){
-        when(val source = config.source){
-            is AsynchronousExecutionStart -> {
-                initCause(source)
-            }
-            is SynchronousExecutionStart -> {
-                stackTrace = source.stackTrace
-            }
-        }
-    }
+    val result = InvalidExitValueException(config.command, exitCode, expectedCodes, recentErrorOutput, builder, config.source)
 
     require(result.stackTrace != null)
 
     return result
 }
 
-class InvalidExecConfigurationException(message: String, val configuration: ProcessBuilder, cause: Exception? = null)
+class InvalidExecConfigurationException(message: String, cause: Exception? = null)
     : RuntimeException(message, cause)
+
+class ProcessInterruptedException(val exitCode: Int, entryPoint: ExecEntryPoint?, killSource: CancellationException)
+    : CancellationException("process interrupted, finished with exit code $exitCode"){
+    init {
+         mangleTraceOrCauseFor(killSource, entryPoint) { super.fillInStackTrace() }
+    }
+
+    override fun fillInStackTrace(): Throwable = this.also {
+        //noop, this is handled by init
+    }
+}
+
+class ProcessKilledException(val exitCode: Int, entryPoint: ExecEntryPoint?, killSource: CancellationException)
+    : CancellationException("process killed, finished with exit code $exitCode"){
+    init {
+        mangleTraceOrCauseFor(killSource, entryPoint) { super.fillInStackTrace() }
+    }
+
+    override fun fillInStackTrace(): Throwable = this.also {
+        //noop, this is handled by init
+    }
+}

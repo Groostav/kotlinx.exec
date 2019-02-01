@@ -199,6 +199,6 @@ class SynchronousExecutionStart(command: List<String>): RuntimeException(command
 
 private inline fun ProcessBuilder.require(requirement: Boolean, message: () -> String) {
     if( ! requirement){
-        throw InvalidExecConfigurationException(message(), this)
+        throw InvalidExecConfigurationException(message())
     }
 }
