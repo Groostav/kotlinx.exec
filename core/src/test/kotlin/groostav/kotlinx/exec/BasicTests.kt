@@ -1,9 +1,12 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 @InternalCoroutinesApi
 class BasicTests {
@@ -19,6 +22,29 @@ class BasicTests {
         }
 
         assertEquals(1, code)
+    }
+
+    @Test
+    fun `when using lazy start should not actualy start until joined`() = runBlocking<Unit>{
+
+        //setup
+        val proc = execAsync(CoroutineStart.LAZY) {
+            command = emptyScriptCommand()
+        }
+
+        val procWasActive = proc.isActive
+        val procWasComplete = proc.isCompleted
+
+        //act
+        proc.start()
+        val code = proc.await()
+
+        //assert 2
+        assertEquals(0, code)
+        assertFalse(procWasActive)
+        assertFalse(procWasComplete)
+        assertFalse(proc.isActive)
+        assertTrue(proc.isCompleted)
     }
 
     @Test fun `todo`(): Unit = TODO("write some cross-platform usage examples")

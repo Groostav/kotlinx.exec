@@ -44,16 +44,17 @@ internal class ExecCoroutine(
 
     sealed class State {
         object Uninitialized: State()
-        object WarmingUp: State()
-        data class Ready( //ok to be data class because its not CAS'd!
-                val jvmProcessBuilder: java.lang.ProcessBuilder,
-                val recentErrorOutput: LinkedList<String>,
-                val stdoutAggregatorJob: Job,
-                val stderrAggregatorJob: Job,
-                val exitCodeAggregatorJob: Job
+        class WarmingUp: State()
+        data class Ready(
+                val jvmProcessBuilder: java.lang.ProcessBuilder = NullProcBuilder,
+                val recentErrorOutput: LinkedList<String> = LinkedList(),
+                val stdoutAggregatorJob: Job = DONE_JOB,
+                val stderrAggregatorJob: Job = DONE_JOB,
+                val exitCodeAggregatorJob: Job = DONE_JOB
         ): State(){
             override fun toString() = "Ready"
         }
+        data class Starting(val jobs: List<() -> Unit> = emptyList()): State()
         data class Running(
                 val prev: Ready,
                 val process: Process,
@@ -98,18 +99,28 @@ internal class ExecCoroutine(
     override val processID: Int get() = when(val state = state){
         // only way to get this exception AFAIK is to create ExecCoroutine(Start.LAZY).processID,
         // which seems unlikely.
-        State.Uninitialized, is State.Ready, is State.WarmingUp -> throw IllegalStateException("process not started")
+        State.Uninitialized, is State.Ready, is State.WarmingUp, is State.Starting -> throw IllegalStateException("process not started")
         is State.Running -> state.pid
         is State.Completed -> state.pid
         is State.Euthanized -> throw IllegalStateException("process not started")
     }
 
-    internal fun prestart(){
+    internal fun prestart(): Boolean {
 
-        atomicState.updateAndGet(this) { when(it){
-            State.Uninitialized -> State.WarmingUp
-            else -> throw makeCME(State.Uninitialized)
+        val myChange = State.WarmingUp()
+        val warmingUp = atomicState.updateAndGet(this) { when(it){
+            State.Uninitialized -> myChange
+            else -> it
         }}
+
+        if(warmingUp !is State.WarmingUp) {
+            trace { "state=$warmingUp before prestart: $this" }
+            return false
+        }
+        if(warmingUp != myChange) {
+            trace { "WARN: contention in prestart!?"}
+            return false
+        }
 
         run prestartStdin@{
             val stdinMutex = Mutex()
@@ -127,6 +138,7 @@ internal class ExecCoroutine(
             stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount).sinkTo(standardError)
 
             val errorLines = stderrInflection.openSubscription("err-cache").lines()
+
             launchChild("errorCacheJob") {
                 nextState.recentErrorOutput.apply {
                     errorLines.consumeEach { errorMessageLine ->
@@ -184,13 +196,36 @@ internal class ExecCoroutine(
             directory(config.workingDirectory.toFile())
         })
 
-        state = if(state == State.WarmingUp) nextState else throw makeCME(expected = State.WarmingUp)
+        val result = atomicState.updateAndGet(this){ when(it){
+            warmingUp -> nextState
+            else -> it
+        }}
+
+        if(result != nextState){
+            trace { "state set to $result while warming-up."}
+            return false
+        }
+
+        return true
     }
 
-    internal fun kickoff() {
-        // remember:`jvmProcess.start()` is NOT safe in a cas loop!
+    internal fun kickoff(): Boolean {
 
-        val readyState = state
+        val myChange = State.Starting()
+
+        val (readyState, starting) = atomicState.getAndUpdateAndGet(this) { prev -> when(prev){
+            is State.Ready -> myChange
+            else -> prev
+        }}
+
+        if(starting !is State.Starting) {
+            trace { "state=$starting before kickoff: $this" }
+            return false
+        }
+        if(starting != myChange) {
+            trace { "WARN: contention in kickoff!?"}
+            return false
+        }
         require(readyState is State.Ready)
 
         val process = try { readyState.jvmProcessBuilder.start() }
@@ -198,78 +233,84 @@ internal class ExecCoroutine(
 
         val pid = pidGen.findPID(process)
 
-        val running = State.Running(readyState, process, pid)
-        state = if(state == readyState) running else throw makeCME(expected = readyState)
-
-        val listeners = listenerFactory.create(running.process, processID, config)
+        val listeners = listenerFactory.create(process, pid, config)
 
         stdoutInflection.sinkFrom(listeners.standardOutputChannel.value)
         stderrInflection.sinkFrom(listeners.standardErrorChannel.value)
         exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value)
         makeInputStreamActor(process).sinkFrom(stdinInflection)
+
+        val suiters = atomicState.getAndUpdate(this){ when(it){
+            is State.Starting -> State.Running(readyState, process, pid)
+            else -> throw makeCME(starting)
+        }}
+
+        if(suiters is State.Starting){
+            if(suiters.jobs.any()){
+                trace { "kickoff found ${suiters.jobs.size} deferred jobs on $suiters" }
+            }
+            suiters.jobs.forEach { it.invoke() }
+        }
+
+        return true
     }
 
-    internal suspend fun waitFor(): Int = try {
+    internal suspend fun waitFor(): Int {
+
         val initialState = state
         val initialized = when(initialState){
-            is State.Uninitialized -> TODO()
-            is State.WarmingUp -> TODO()
-            is State.Ready -> {
-                kickoff()
-                initialState
-            }
-            is State.Running -> {
-                initialState.prev
-            }
-            is State.Completed -> throw IllegalStateException("state=$initialState")
+            is State.Uninitialized, is State.WarmingUp, is State.Ready, is State.Starting -> TODO("state=$initialState")
+            is State.Running -> initialState.prev
+            is State.Completed -> return initialState.exitCode
             is State.Euthanized -> null
         }
 
-        val running = state
-        require(running is State.Running)
-        require(initialized != null)
+        return try {
+            val running = state
+            require(running is State.Running)
+            require(initialized != null)
 
-        initialized.run {
-            stderrAggregatorJob?.join()
-            stdoutAggregatorJob?.join()
-            exitCodeAggregatorJob.join()
-        }
-
-        stderrInflection.asJob().join()
-        stdoutInflection.asJob().join()
-        val exitCode = exitCodeInflection.await()
-
-        val stateBeforeCompletion = atomicState.getAndUpdate(this){ when(it){
-            running -> State.Completed(running.pid, exitCode)
-            // somebody concurrently updated us to running, adding a reaper
-            // either way we're done.
-            is State.Running -> State.Completed(running.pid, exitCode)
-            else -> throw makeCME(expected = running)
-        }} as State.Running
-
-        val expectedExitCodes = config.expectedOutputCodes
-
-        val result = when {
-//            stateBeforeCompletion.interrupt != null -> throw CancellationException().apply { initCause(stateBeforeCompletion.interrupt.first) }
-            stateBeforeCompletion.interrupt != null -> {
-                throw ProcessInterruptedException(exitCode, config.source, stateBeforeCompletion.interrupt.source)
+            initialized.run {
+                stderrAggregatorJob?.join()
+                stdoutAggregatorJob?.join()
+                exitCodeAggregatorJob.join()
             }
-            stateBeforeCompletion.reaper != null -> {
-                throw ProcessKilledException(exitCode, config.source, stateBeforeCompletion.reaper.source)
-            }
-            expectedExitCodes == null -> exitCode
-            exitCode in expectedExitCodes -> exitCode
-            else -> throw makeExitCodeException(config, exitCode, initialized.recentErrorOutput.toList())
-        }
 
-        result.also { trace { "exec '$shortName'(PID=${running.pid}) returned with code $result" } }
-    }
-    catch(ex: Exception){
-        trace { "exec '$shortName'(PID=${Try { processID }}) threw an exception of '$ex'" }
-        throw ex
-    }
-    finally {
-        teardown()
+            stderrInflection.asJob().join()
+            stdoutInflection.asJob().join()
+            val exitCode = exitCodeInflection.await()
+
+            val stateBeforeCompletion = atomicState.getAndUpdate(this){ when(it){
+                running -> State.Completed(running.pid, exitCode)
+                // somebody concurrently updated us to running, adding a reaper
+                // either way we're done.
+                is State.Running -> State.Completed(running.pid, exitCode)
+                else -> throw makeCME(expected = running)
+            }} as State.Running
+
+            val expectedExitCodes = config.expectedOutputCodes
+
+            val result = when {
+                stateBeforeCompletion.interrupt != null -> {
+                    stateBeforeCompletion.interrupt.job.join()
+                    throw ProcessInterruptedException(exitCode, config.source, stateBeforeCompletion.interrupt.source)
+                }
+                stateBeforeCompletion.reaper != null -> {
+                    stateBeforeCompletion.reaper.job.join()
+                    throw ProcessKilledException(exitCode, config.source, stateBeforeCompletion.reaper.source)
+                }
+                expectedExitCodes == null -> exitCode
+                exitCode in expectedExitCodes -> exitCode
+                else -> throw makeExitCodeException(config, exitCode, initialized.recentErrorOutput.toList())
+            }
+
+            result.also { trace { "exec '$shortName'(PID=${running.pid}) returned with code $result" } }
+        } catch(ex: Exception){
+            trace { "exec '$shortName'(PID=${Try { processID }}) threw an exception of '$ex'" }
+            throw ex
+        } finally {
+            teardown()
+        }
     }
 
     private fun teardown() {
@@ -280,37 +321,54 @@ internal class ExecCoroutine(
         standardInput.close()
     }
 
-    private fun tryKillAsync(source: CancellationException, gentle: Boolean = false): Unit {
-
-        fun makeUnstartedInterruptOrReaper(running: State.Running) = GlobalScope.launch(start = CoroutineStart.LAZY){
-            val killer = processControlFacade.create(config, running.process, running.pid).value
-            when(gentle){
-                true -> killer.tryKillGracefullyAsync(config.includeDescendantsInKill)
-                false -> killer.killForcefullyAsync(config.includeDescendantsInKill)
-            }
+    fun makeUnstartedInterruptOrReaper(running: State.Running, gentle: Boolean) = GlobalScope.launch(start = CoroutineStart.LAZY){
+        val killer = processControlFacade.create(config, running.process, running.pid).value
+        when(gentle){
+            true -> killer.tryKillGracefullyAsync(config.includeDescendantsInKill)
+            false -> killer.killForcefullyAsync(config.includeDescendantsInKill)
         }
+        //TODO: from what i can tell theres nothing meaningful to synchronize on here.
+        // - waiting until the interrupt/kill is dispatched doesnt provide anything useful
+        // - waiting until the process is dead is redundant --you can just use exitCode.await() for that.
+        // so why return a job at all? why not just return unit? _it gives me the willies_
+    }
+
+    private fun tryKillAsync(source: CancellationException, gentle: Boolean = false): Unit {
 
         // we atomically update a state to 'Doomed', that state is checked before return in the exec body
         val newState = atomicState.updateAndGet(this){ when(it) {
             State.Uninitialized -> State.Euthanized(first = true)
-            is State.Running -> when {
-                gentle -> it.copy(interrupt = State.Running.SourcedTermination(source, makeUnstartedInterruptOrReaper(it)))
-                else -> it.copy(reaper = State.Running.SourcedTermination(source, makeUnstartedInterruptOrReaper(it)))
+            is State.WarmingUp -> State.Euthanized(first = true)
+            is State.Ready -> State.Euthanized(first = true)
+            is State.Starting -> {
+                it.copy(jobs = it.jobs + { tryKillAsync(source, gentle) })
+            }
+            is State.Running -> {
+                val interruptOrReaper = makeUnstartedInterruptOrReaper(it, gentle)
+                val sourcedInterruptOrReaper = State.Running.SourcedTermination(source, interruptOrReaper)
+
+                if (gentle) it.copy(interrupt = sourcedInterruptOrReaper)
+                        else it.copy(reaper = sourcedInterruptOrReaper)
             }
             is State.Completed -> it
             is State.Euthanized -> it.copy(first = false)
-            is State.Ready -> TODO()
-            is State.WarmingUp -> TODO()
         }}
 
         val reaperOrInterrupt = when(newState) {
-            is State.Uninitialized, is State.Ready, is State.WarmingUp -> TODO()
+            is State.Uninitialized, is State.Ready, is State.WarmingUp -> TODO("state=$newState")
+            is State.Starting -> {
+                trace {
+                    "attempted to kill/interrupt $shortName, " +
+                            "but it hasn't started yet, so the job was deferred to kickoff()"
+                }
+                null
+            }
             is State.Running -> when {
                 gentle -> newState.interrupt!!
                 else -> newState.reaper!!
             }
             is State.Completed -> {
-                trace { "attempted to reap/interrupt '$shortName' but its already completed." }
+                trace { "attempted to kill/interrupt '$shortName' but its already completed." }
                 null
             }
             is State.Euthanized -> {
@@ -318,6 +376,9 @@ internal class ExecCoroutine(
                     cancel()
                     teardown()
                     trace { "killed unstarted process" }
+                }
+                else {
+                    trace { "attempted to kill/interrupt '$shortName' but its euthanized" }
                 }
                 null
             }
@@ -329,8 +390,8 @@ internal class ExecCoroutine(
     }
 
     override fun onStart() {
-        prestart()
-        kickoff()
+        if( ! prestart()) return
+        if( ! kickoff()) return
         ::waitFor.createCoroutine(this).resume(Unit)
     }
 
@@ -500,6 +561,12 @@ internal class ExecCoroutine(
                 "state"
         )
     }
+
+    private fun loopOnState(block: (State) -> Unit){
+        while(true){
+            block(state)
+        }
+    }
 }
 
 private val jobId = AtomicInteger(1)
@@ -521,3 +588,14 @@ private fun makeNameString(config: ProcessBuilder, targetLength: Int) = buildStr
 }
 
 private val NullProcBuilder = java.lang.ProcessBuilder()
+
+private inline fun <T, V> AtomicReferenceFieldUpdater<T, V>.getAndUpdateAndGet(obj: T, updater: (V) -> V): Pair<V, V>{
+    var prev: V
+    var next: V
+    do {
+        prev = get(obj)
+        next = updater(prev)
+    } while (!compareAndSet(obj, prev, next))
+
+    return prev to next
+}

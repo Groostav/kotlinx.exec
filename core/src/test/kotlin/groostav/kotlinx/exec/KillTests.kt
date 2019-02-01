@@ -130,6 +130,7 @@ class KillTests {
         //setup
         val process = execAsync {
             command = hangingCommand()
+            gracefulTimeoutMillis = 0L
         }
 
         //act

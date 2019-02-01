@@ -130,7 +130,7 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
                     // also: what if it spawns a new process while its being interrupted??
                     // --that process should probably not be cancelled right?
 
-                    trace { "killing selfPID." }
+                    trace { "killing ${win32Proc.pid}" }
                     val killpb = java.lang.ProcessBuilder().apply {
                         command(
                                 path,
@@ -154,8 +154,14 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
         return Supported(Unit)
     }
 
+    fun doStuff(){
+        val x =4;
+    }
+
     @InternalCoroutinesApi
     override fun killForcefullyAsync(includeDescendants: Boolean): Supported<Unit> {
+
+        doStuff()
 
         var command = listOf("taskkill")
         if(includeDescendants) command += "/T"

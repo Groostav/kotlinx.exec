@@ -136,8 +136,3 @@ internal fun getIntRange(key: String): IntRange? = System.getProperty(key)?.let 
     val (start, end) = match.groupValues.apply { require(size == 3) }.takeLast(2).map { it.toInt() }
     start .. end
 }
-
-object EmptyChannelIterator: ChannelIterator<Nothing> {
-    override suspend fun hasNext() = false
-    override suspend fun next() = throw NoSuchElementException()
-}

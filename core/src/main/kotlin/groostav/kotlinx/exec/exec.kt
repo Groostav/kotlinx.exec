@@ -18,8 +18,8 @@ internal fun CoroutineScope.execAsync(config: ProcessBuilder, start: CoroutineSt
     )
 
     if(start != CoroutineStart.LAZY) {
-        coroutine.prestart()
-        coroutine.kickoff()
+        require(coroutine.prestart())
+        require(coroutine.kickoff())
     }
     coroutine.start(start, coroutine, ExecCoroutine::waitFor)
 
