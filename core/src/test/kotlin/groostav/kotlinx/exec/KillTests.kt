@@ -153,13 +153,13 @@ class KillTests {
         launch { process.kill() }
 
         //act
-//        val result = process.toList()
-//        process.join()
-        val result = process.await()
+        val result = process.toList()
+        process.join()
+//        val result = process.await()
 
         //assert
-//        assertEquals(listOf(ExitCode(42)), result)
-        assertEquals(42, result)
+        assertEquals(listOf(StandardOutputMessage("interrupted"), ExitCode(42)), result)
+//        assertEquals(42, result)
     }
 
     @Test fun `when attempting to kill unstarted process should quietly do nothing`(): Unit = runBlocking<Unit> {

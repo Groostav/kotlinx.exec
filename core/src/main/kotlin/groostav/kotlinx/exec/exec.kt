@@ -2,7 +2,6 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
-import java.lang.Boolean.getBoolean
 import kotlin.coroutines.EmptyCoroutineContext
 import java.lang.ProcessBuilder as JProcBuilder
 
@@ -110,36 +109,26 @@ class InvalidExitValueException(
 ): RuntimeException(message) {
 
     init {
-        mangleTraceOrCauseFor(null, entryPoint) { super.fillInStackTrace() }
-    }
-
-    override fun fillInStackTrace(): Throwable = this.also {
-        //noop, this is handled by init
+        mergeCauses(null, entryPoint)
     }
 }
 
-private fun Throwable.mangleTraceOrCauseFor(cause: Throwable?, entryPoint: ExecEntryPoint?, superFillInStackTrace: () -> Throwable) {
-
-    val useUnmangledStackTrace = getBoolean("kotlinx.exec.${this::class.simpleName}.UseUnmangledStackTrace")
+private fun Throwable.mergeCauses(cause: Throwable?, entryPoint: ExecEntryPoint?) {
 
     if(cause != null){
-        superFillInStackTrace()
-        cause.mangleTraceOrCauseFor(cause.cause, entryPoint, cause::fillInStackTrace)
+        cause.mergeCauses(cause.cause, entryPoint)
         initCause(cause)
-    }
-    else if(useUnmangledStackTrace){
-        initCause(cause ?: entryPoint as? Throwable)
     }
     else when (entryPoint) {
         is AsynchronousExecutionStart -> {
-            superFillInStackTrace()
             initCause(entryPoint)
         }
         is SynchronousExecutionStart -> {
-            stackTrace = entryPoint.stackTrace
+//            stackTrace = entryPoint.stackTrace
+            initCause(entryPoint)
         }
         null -> {
-            superFillInStackTrace()
+            //nothing to do
         }
         else -> TODO("unknown entryPoint type $entryPoint")
     }
@@ -179,21 +168,13 @@ class InvalidExecConfigurationException(message: String, cause: Exception? = nul
 class ProcessInterruptedException(val exitCode: Int, entryPoint: ExecEntryPoint?, killSource: CancellationException)
     : CancellationException("process interrupted, finished with exit code $exitCode"){
     init {
-         mangleTraceOrCauseFor(killSource, entryPoint) { super.fillInStackTrace() }
-    }
-
-    override fun fillInStackTrace(): Throwable = this.also {
-        //noop, this is handled by init
+         mergeCauses(killSource, entryPoint)
     }
 }
 
 class ProcessKilledException(val exitCode: Int, entryPoint: ExecEntryPoint?, killSource: CancellationException)
     : CancellationException("process killed, finished with exit code $exitCode"){
     init {
-        mangleTraceOrCauseFor(killSource, entryPoint) { super.fillInStackTrace() }
-    }
-
-    override fun fillInStackTrace(): Throwable = this.also {
-        //noop, this is handled by init
+        mergeCauses(killSource, entryPoint)
     }
 }

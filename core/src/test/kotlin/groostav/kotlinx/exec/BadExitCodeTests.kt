@@ -3,6 +3,7 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
+import org.amshove.kluent.internal.platformJoinStackTrace
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -54,8 +55,9 @@ class BadExitCodeTests {
     }
 
     @Test
-    fun `when synchronously running process with unexpected exit code should exit appropriately`() = runBlocking {
+    fun `when synchronously running process with unexpected exit code should exit appropriately`() = runBlocking<Unit> {
         //setup & act
+        val expectedEx = Exception().stackTrace.drop(1)
         val invalidExitValue = Catch<InvalidExitValueException> {
             execVoid {
                 command = errorAndExitCodeOneCommand()
@@ -64,13 +66,40 @@ class BadExitCodeTests {
 
         //assert
         assertNotNull(invalidExitValue)
-        assertEquals(errorAndExitCodeOneCommand(), invalidExitValue!!.command)
+        assertEquals(errorAndExitCodeOneCommand(), invalidExitValue.command)
         assertEquals(1, invalidExitValue.exitValue)
         assertEquals(
-                //assert that the stack-trace points to exec.exec() at its top --not into the belly of some coroutine
-                "groostav.kotlinx.exec.ExecKt\$execVoid\$2.invokeSuspend(exec.kt:LINE_NUM)",
-                invalidExitValue?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
-        )
+                expectedEx,
+                (invalidExitValue.cause as? SynchronousExecutionStart)?.stackTrace?.takeLast(expectedEx.size) ?: emptyList(),
+                """Expected the exception
+                   |${invalidExitValue.stackTrace.joinToString("\n\tat ")}
+                   |to end with
+                   |${expectedEx.joinToString("\n\tat ")}
+                """.trimMargin())
+    }
+
+    @Test
+    fun `when asynchronously running process with unexpected exit code should exit appropriately`() = runBlocking<Unit> {
+        //setup & act
+        val expectedEx = Exception().stackTrace.drop(1)
+        val invalidExitValue = Catch<InvalidExitValueException> {
+            execAsync {
+                command = errorAndExitCodeOneCommand()
+            }.await()
+        }
+
+        //assert
+        assertNotNull(invalidExitValue)
+        assertEquals(errorAndExitCodeOneCommand(), invalidExitValue.command)
+        assertEquals(1, invalidExitValue.exitValue)
+        assertEquals(
+                expectedEx,
+                (invalidExitValue.cause as? AsynchronousExecutionStart)?.stackTrace?.takeLast(expectedEx.size) ?: emptyList(),
+                """Expected the exception
+                   |${invalidExitValue.stackTrace.joinToString("\n\tat ")}
+                   |to end with
+                   |${expectedEx.joinToString("\n\tat ")}
+                """.trimMargin())
     }
 
     @Test

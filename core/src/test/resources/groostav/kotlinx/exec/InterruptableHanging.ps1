@@ -6,14 +6,14 @@ Try
         Start-Sleep -Milliseconds 500
         Write-Verbose "looping..."
     }
-    exit 2
+    Exit 2
 }
 Finally
 {
     # on CTRL-C events powershell shuts down the output pipe,
-    # so WriteOutput doesnt seem to go anywhere.
+    # so WriteOutput actuall seems to fail and raise its own exception.
     Write-Host "interrupted"
-    exit 42
+    Exit 42
 }
 
-exit 3
+Exit 3

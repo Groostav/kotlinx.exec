@@ -17,8 +17,6 @@ import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 import kotlin.coroutines.*
-import kotlin.coroutines.intrinsics.createCoroutineUnintercepted
-import kotlin.coroutines.intrinsics.intercepted
 
 @InternalCoroutinesApi
 internal class ExecCoroutine(
@@ -46,22 +44,25 @@ internal class ExecCoroutine(
 
     sealed class State {
         object Uninitialized: State()
-        class WarmingUp(
+        object WarmingUp: State()
+        data class Ready( //ok to be data class because its not CAS'd!
                 val jvmProcessBuilder: java.lang.ProcessBuilder,
                 val recentErrorOutput: LinkedList<String>,
-                val stdoutAggregatorJob: Job?,
-                val stderrAggregatorJob: Job?,
+                val stdoutAggregatorJob: Job,
+                val stderrAggregatorJob: Job,
                 val exitCodeAggregatorJob: Job
         ): State(){
-            override fun toString() = "WarmingUp"
+            override fun toString() = "Ready"
         }
         data class Running(
-                val prev: WarmingUp,
+                val prev: Ready,
                 val process: Process,
                 val pid: Int,
                 val interrupt: SourcedTermination? = null,
                 val reaper: SourcedTermination? = null
         ): State(){
+            // unfortunately I just want the data-class for the copy.
+            // equals and hashcode are overidden so CAS semantics stay ref-safe.
             override fun toString() = "Running(PID=$pid${if(reaper != null) ", hasReaper)" else ")"}"
             override fun equals(other: Any?) = super.equals(other)
             override fun hashCode(): Int = super.hashCode()
@@ -76,9 +77,12 @@ internal class ExecCoroutine(
 
     private val shortName = config.debugName ?: makeNameString(config, targetLength = 20)
 
-    // this thing is used both in a CAS loop for Running(no-reaper) to Running(reaper),
-    // and from Running(*) to Completed, but is _not_ CAS'd from Initialized to Prestarted to Running,
-    // there it is only used as a best-effort CME detection device.
+    // we CAS for the states:
+    // - Uninitialized to WarmingUp,
+    // - Running(*) to Running(reaper)
+    // - Running to Completed
+    // the other states (WarmingUp, Ready, Running) are not CAS'd but instead use a best-effort CME.
+
     internal @Volatile var state: State = State.Uninitialized
         set(value) { field = value.also { trace { "process '$shortName' moved to state $it" } } }
 
@@ -94,121 +98,108 @@ internal class ExecCoroutine(
     override val processID: Int get() = when(val state = state){
         // only way to get this exception AFAIK is to create ExecCoroutine(Start.LAZY).processID,
         // which seems unlikely.
-        State.Uninitialized, is State.WarmingUp -> throw IllegalStateException("process not started")
+        State.Uninitialized, is State.Ready, is State.WarmingUp -> throw IllegalStateException("process not started")
         is State.Running -> state.pid
         is State.Completed -> state.pid
         is State.Euthanized -> throw IllegalStateException("process not started")
     }
 
     internal fun prestart(){
-        // I've had effectivley 3 attempts at getting this method right.
-        // 1. The first time I just used coroutine builders. Demultiplexing even the simple three channels
-        //    without some kind of structure for what data is available when is difficult and lead to very messy brittle code.
-        // 2. attempt to was a state machine with similar states to `State`,
-        //    but it involved just as many coroutine builders and didnt obviously solve the problem of
-        //    "how do I wait for a state?" (in retrospect, the answer is ConflatedChannel)
-        // 3. this is my third implementation. Eagerly create some datastructures which can be both read and written.
-        val uninitialized = state
-        require(uninitialized is State.Uninitialized)
+
+        atomicState.updateAndGet(this) { when(it){
+            State.Uninitialized -> State.WarmingUp
+            else -> throw makeCME(State.Uninitialized)
+        }}
 
         run prestartStdin@{
             val stdinMutex = Mutex()
 
             inputLines.sinkTo(stdinInflection.flatMap<Char, String> { (it + config.inputFlushMarker).asIterable() }.lockedBy(stdinMutex))
             standardInput.sinkTo(stdinInflection.lockedBy(stdinMutex))
-
         }
         run prestartStdout@ {
             stdoutInflection.openSubscription().tail(config.standardOutputBufferCharCount).sinkTo(standardOutput)
         }
-        val recentErrorOutput = run prestartStderr@ {
+
+        var nextState = State.Ready(NullProcBuilder, LinkedList(), DONE_JOB, DONE_JOB, DONE_JOB)
+
+        run prestartStderr@ {
             stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount).sinkTo(standardError)
 
-            LinkedList<String>().apply {
-                val errorLines = stderrInflection.openSubscription("err-cache").lines()
-                launchChild("errorCacheJob") {
+            val errorLines = stderrInflection.openSubscription("err-cache").lines()
+            launchChild("errorCacheJob") {
+                nextState.recentErrorOutput.apply {
                     errorLines.consumeEach { errorMessageLine ->
                         addLast(errorMessageLine)
-                        if(size > config.linesForExceptionError){
+                        if (size > config.linesForExceptionError) {
                             removeFirst()
                         }
                     }
                 }
             }
         }
-        var stdoutAggregatorJob: Job? = null
-        var stderrAggregatorJob: Job? = null
-        val exitCodeAggregatorJob: Job
 
-        run prestartAggregateChannel@ {
-            if(config.aggregateOutputBufferLineCount > 0) {
-                val stdoutForAggregator = stdoutInflection.openSubscription("aggregator").lines()
-                stdoutAggregatorJob = launchChild("stdoutAggregatorJob") {
-                    for (message in stdoutForAggregator) {
-                        aggregateChannel.pushForward(StandardOutputMessage(message))
-                    }
+        if(config.aggregateOutputBufferLineCount > 0) {
+            val stdoutForAggregator = stdoutInflection.openSubscription("aggregator").lines()
+            nextState = nextState.copy(stdoutAggregatorJob = launchChild("stdoutAggregatorJob") {
+                for (message in stdoutForAggregator) {
+                    aggregateChannel.pushForward(StandardOutputMessage(message))
                 }
-                val stderrForAggregator = stderrInflection.openSubscription("aggregator").lines()
-                stderrAggregatorJob = launchChild("stderrAggregatorJob") {
-                    for (message in stderrForAggregator) {
-                        aggregateChannel.pushForward(StandardErrorMessage(message))
-                    }
+            })
+            val stderrForAggregator = stderrInflection.openSubscription("aggregator").lines()
+            nextState = nextState.copy(stderrAggregatorJob = launchChild("stderrAggregatorJob") {
+                for (message in stderrForAggregator) {
+                    aggregateChannel.pushForward(StandardErrorMessage(message))
                 }
-            }
-            exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
-                val result = exitCodeInflection.await()
-                // the concurrent nature here means we could get std-out messages after an exit code,
-                // which is just strange. So We'll sync on the output streams, making sure they come first.
-                stdoutAggregatorJob?.join()
-                stderrAggregatorJob?.join()
-                if (config.exitCodeInResultAggregateChannel) {
-                    aggregateChannel.pushForward(ExitCode(result))
-                }
-                else {} //even if we dont aggregate the output, we sill need this job as a sync point.
-            }
-        }
-        val procBuilder = run prestartJvmProc@ {
-            val makeProcessBuilder1: Any = makeProcessBuilder(config.command)
-            (makeProcessBuilder1 as java.lang.ProcessBuilder).apply {
-
-                if (environment() !== config.environment) environment().apply {
-                    clear()
-                    putAll(config.environment)
-                }
-
-                if(config.run { standardErrorBufferCharCount == 0 && aggregateOutputBufferLineCount == 0 }){
-                    redirectError(java.lang.ProcessBuilder.Redirect.DISCARD)
-                }
-                if(config.run { standardOutputBufferCharCount == 0 && aggregateOutputBufferLineCount == 0}){
-                    redirectOutput(java.lang.ProcessBuilder.Redirect.DISCARD)
-                }
-
-                directory(config.workingDirectory.toFile())
-            }
+            })
         }
 
-        state = if(state == uninitialized) State.WarmingUp(
-                procBuilder,
-                recentErrorOutput,
-                stdoutAggregatorJob = stdoutAggregatorJob,
-                stderrAggregatorJob = stderrAggregatorJob,
-                exitCodeAggregatorJob = exitCodeAggregatorJob
-        ) else throw makeCME(expected = uninitialized)
+        nextState = nextState.copy(exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
+            val result = exitCodeInflection.await()
+            // the concurrent nature here means we could get std-out messages after an exit code,
+            // which is just strange. So We'll sync on the output streams, making sure they come first.
+            nextState.stdoutAggregatorJob.join()
+            nextState.stderrAggregatorJob.join()
+
+            if (config.exitCodeInResultAggregateChannel) {
+                aggregateChannel.pushForward(ExitCode(result))
+            }
+            else {} //even if we dont aggregate the output, we sill need this job as a sync point.
+        })
+
+        nextState = nextState.copy(jvmProcessBuilder = makeProcessBuilder(config.command).apply {
+
+            if (environment() !== config.environment) environment().apply {
+                clear()
+                putAll(config.environment)
+            }
+
+            if(config.run { standardErrorBufferCharCount == 0 && aggregateOutputBufferLineCount == 0 }){
+                redirectError(java.lang.ProcessBuilder.Redirect.DISCARD)
+            }
+            if(config.run { standardOutputBufferCharCount == 0 && aggregateOutputBufferLineCount == 0}){
+                redirectOutput(java.lang.ProcessBuilder.Redirect.DISCARD)
+            }
+
+            directory(config.workingDirectory.toFile())
+        })
+
+        state = if(state == State.WarmingUp) nextState else throw makeCME(expected = State.WarmingUp)
     }
 
     internal fun kickoff() {
         // remember:`jvmProcess.start()` is NOT safe in a cas loop!
 
-        val warmingUp = state
-        require(warmingUp is State.WarmingUp)
+        val readyState = state
+        require(readyState is State.Ready)
 
-        val process = try { warmingUp.jvmProcessBuilder.start() }
+        val process = try { readyState.jvmProcessBuilder.start() }
         catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message ?: "", ex) }
 
         val pid = pidGen.findPID(process)
 
-        val running = State.Running(warmingUp, process, pid)
-        state = if(state == warmingUp) running else throw makeCME(expected = warmingUp)
+        val running = State.Running(readyState, process, pid)
+        state = if(state == readyState) running else throw makeCME(expected = readyState)
 
         val listeners = listenerFactory.create(running.process, processID, config)
 
@@ -222,7 +213,8 @@ internal class ExecCoroutine(
         val initialState = state
         val initialized = when(initialState){
             is State.Uninitialized -> TODO()
-            is State.WarmingUp -> {
+            is State.WarmingUp -> TODO()
+            is State.Ready -> {
                 kickoff()
                 initialState
             }
@@ -232,7 +224,6 @@ internal class ExecCoroutine(
             is State.Completed -> throw IllegalStateException("state=$initialState")
             is State.Euthanized -> null
         }
-
 
         val running = state
         require(running is State.Running)
@@ -261,8 +252,6 @@ internal class ExecCoroutine(
         val result = when {
 //            stateBeforeCompletion.interrupt != null -> throw CancellationException().apply { initCause(stateBeforeCompletion.interrupt.first) }
             stateBeforeCompletion.interrupt != null -> {
-                fail; //ok so the stack trace on this exception is pure garbage,
-                // we really dont need it for anything except maybe debugging this library.
                 throw ProcessInterruptedException(exitCode, config.source, stateBeforeCompletion.interrupt.source)
             }
             stateBeforeCompletion.reaper != null -> {
@@ -293,8 +282,6 @@ internal class ExecCoroutine(
 
     private fun tryKillAsync(source: CancellationException, gentle: Boolean = false): Unit {
 
-        if(config.notKillable) return
-
         fun makeUnstartedInterruptOrReaper(running: State.Running) = GlobalScope.launch(start = CoroutineStart.LAZY){
             val killer = processControlFacade.create(config, running.process, running.pid).value
             when(gentle){
@@ -312,11 +299,12 @@ internal class ExecCoroutine(
             }
             is State.Completed -> it
             is State.Euthanized -> it.copy(first = false)
+            is State.Ready -> TODO()
             is State.WarmingUp -> TODO()
         }}
 
         val reaperOrInterrupt = when(newState) {
-            is State.Uninitialized, is State.WarmingUp -> TODO()
+            is State.Uninitialized, is State.Ready, is State.WarmingUp -> TODO()
             is State.Running -> when {
                 gentle -> newState.interrupt!!
                 else -> newState.reaper!!
@@ -343,7 +331,7 @@ internal class ExecCoroutine(
     override fun onStart() {
         prestart()
         kickoff()
-        (ExecCoroutine::waitFor).createCoroutineUnintercepted(this, this).intercepted().resume(Unit)
+        ::waitFor.createCoroutine(this).resume(Unit)
     }
 
     override suspend fun kill() {
@@ -532,3 +520,4 @@ private fun makeNameString(config: ProcessBuilder, targetLength: Int) = buildStr
     }
 }
 
+private val NullProcBuilder = java.lang.ProcessBuilder()

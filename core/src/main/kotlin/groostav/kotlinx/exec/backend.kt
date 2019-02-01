@@ -1,8 +1,6 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.plus
+import kotlinx.coroutines.*
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.Reader
@@ -150,4 +148,4 @@ data class IntProgressionSet(val src: IntProgression): Set<Int> {
     override fun iterator(): Iterator<Int> = src.iterator()
 }
 
-
+object DONE_JOB: Job by GlobalScope.launch(CoroutineName("DONE_JOB"), block = {})
