@@ -18,4 +18,12 @@ class CancelTests {
         What exactly is that unhappy path?
 
     """.trimIndent())
+
+    @Test fun `when cancelling an exec job should kill subprocess`(){
+        TODO()
+    }
+
+    @Test fun `when cancelling parent of an exec job should kill subprocess`(){
+        TODO()
+    }
 }
