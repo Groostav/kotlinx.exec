@@ -72,7 +72,7 @@ internal val SupportedUnit = Supported(Unit)
 internal class NamedTracingProcessReader private constructor(
         src: InputStream,
         val name: String,
-        val config: ProcessBuilder
+        val config: ProcessConfiguration
 ): Reader() {
 
     val src = InputStreamReader(src, config.encoding)
@@ -100,10 +100,10 @@ internal class NamedTracingProcessReader private constructor(
 
     companion object {
 
-        fun forStandardError(process: java.lang.Process, pid: Int, config: ProcessBuilder) =
+        fun forStandardError(process: java.lang.Process, pid: Int, config: ProcessConfiguration) =
                 NamedTracingProcessReader(process.errorStream, "stderr-$pid", config)
 
-        fun forStandardOutput(process: java.lang.Process, pid: Int, config: ProcessBuilder) =
+        fun forStandardOutput(process: java.lang.Process, pid: Int, config: ProcessConfiguration) =
                 NamedTracingProcessReader(process.inputStream, "stdout-$pid", config)
     }
 }

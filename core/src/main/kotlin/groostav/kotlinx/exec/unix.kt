@@ -14,7 +14,7 @@ internal class UnixProcessControl(val process: Process, val pid: Int): ProcessCo
 
     companion object: ProcessControlFacade.Factory {
 
-        override fun create(config: ProcessBuilder, process: Process, pid: Int) = if (JavaProcessOS != ProcessOS.Unix) OS_NOT_UNIX else {
+        override fun create(config: ProcessConfiguration, process: Process, pid: Int) = if (JavaProcessOS != ProcessOS.Unix) OS_NOT_UNIX else {
             Supported(UnixProcessControl(process, pid))
         }
     }

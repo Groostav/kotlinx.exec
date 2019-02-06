@@ -11,10 +11,10 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 
 
-internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int, val config: ProcessBuilder): ProcessListenerProvider {
+internal class ThreadBlockingListenerProvider(val process: Process, val pid: Int, val config: ProcessConfiguration): ProcessListenerProvider {
 
     companion object: ProcessListenerProvider.Factory {
-        override fun create(process: Process, pid: Int, config: ProcessBuilder) =
+        override fun create(process: Process, pid: Int, config: ProcessConfiguration) =
                 ThreadBlockingListenerProvider(process, pid, config)
     }
 

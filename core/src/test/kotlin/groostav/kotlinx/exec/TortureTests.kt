@@ -11,7 +11,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -47,6 +46,7 @@ class TortureTests {
         assertTrue(exec.state is ExecCoroutine.State.Running, "expected state=RUNNING, but was state=${exec.state}")
     }
 
+    @Test fun `when process emits exit code before emitting and closing standard error should hold process open`(): Unit = TODO()
 
     internal object FakePIDGenerator: ProcessIDGenerator {
 
@@ -75,14 +75,14 @@ class TortureTests {
         }
 
         val listenerFacade = object: ProcessListenerProvider.Factory {
-            override fun create(process: Process, pid: Int, config: ProcessBuilder) = object: ProcessListenerProvider {
+            override fun create(process: Process, pid: Int, config: ProcessConfiguration) = object: ProcessListenerProvider {
                 override val standardErrorChannel = Supported(standardError)
                 override val standardOutputChannel = Supported(standardOutput)
                 override val exitCodeDeferred = Supported(exitCode)
             }
         }
         val controlFacade = object: ProcessControlFacade.Factory {
-            override fun create(config: ProcessBuilder, process: Process, pid: Int) = Supported(object: ProcessControlFacade{
+            override fun create(config: ProcessConfiguration, process: Process, pid: Int) = Supported(object: ProcessControlFacade{
                 override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
                     TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
                 }
@@ -95,7 +95,7 @@ class TortureTests {
     }
 
     private fun makeExecCoroutine(interceptors: Interceptors) = ExecCoroutine(
-            ProcessBuilder().apply {
+            ProcessConfiguration().apply {
                 command = listOf("asdf.exe")
             },
             EmptyCoroutineContext,

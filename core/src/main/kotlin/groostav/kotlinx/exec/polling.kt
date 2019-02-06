@@ -2,7 +2,6 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Unconfined
-import kotlinx.coroutines.channels.ChannelIterator
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.produce
@@ -11,10 +10,10 @@ import java.io.Reader
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 
-internal class PollingListenerProvider(val process: Process, val pid: Int, val config: ProcessBuilder): ProcessListenerProvider {
+internal class PollingListenerProvider(val process: Process, val pid: Int, val config: ProcessConfiguration): ProcessListenerProvider {
 
     companion object: ProcessListenerProvider.Factory {
-        override fun create(process: Process, pid: Int, config: ProcessBuilder) = PollingListenerProvider(process, pid, config)
+        override fun create(process: Process, pid: Int, config: ProcessConfiguration) = PollingListenerProvider(process, pid, config)
     }
 
     private val standardErrorReader = NamedTracingProcessReader.forStandardError(process, pid, config)

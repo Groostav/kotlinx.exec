@@ -150,6 +150,6 @@ internal suspend fun assertNotListed(vararg deadProcessIDs: Int){
     }
 
     for(deadProcessID in deadProcessIDs){
-        assertFalse("$deadProcessID is a running") { deadProcessID in runningPIDs }
+        assertFalse("$deadProcessID is running") { deadProcessID in runningPIDs }
     }
 }

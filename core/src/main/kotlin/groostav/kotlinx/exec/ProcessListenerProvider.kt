@@ -2,7 +2,6 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.channels.SendChannel
 import java.lang.Process
 import java.lang.Boolean.getBoolean
 
@@ -17,7 +16,7 @@ internal interface ProcessListenerProvider {
     val exitCodeDeferred: Maybe<Deferred<Int>>// get() = Unsupported
 
     interface Factory {
-        fun create(process: Process, pid: Int, config: ProcessBuilder): ProcessListenerProvider
+        fun create(process: Process, pid: Int, config: ProcessConfiguration): ProcessListenerProvider
     }
 }
 

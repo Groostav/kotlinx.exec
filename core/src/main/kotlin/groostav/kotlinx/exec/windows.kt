@@ -15,8 +15,8 @@ import com.sun.jna.platform.win32.WinDef.BOOL
 import com.sun.jna.platform.win32.WinError.ERROR_INVALID_HANDLE
 import com.sun.jna.ptr.IntByReference
 import java.io.Closeable
+import java.lang.ProcessBuilder.*
 import java.time.Instant
-import java.time.temporal.ChronoUnit
 import java.util.*
 import kotlin.jvm.internal.FunctionReference
 import kotlin.reflect.KClass
@@ -25,10 +25,10 @@ import kotlin.reflect.jvm.jvmName
 
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
 // isnt supported on windows' implementation of ProcessHandle.
-internal class WindowsProcessControl(val config: ProcessBuilder, val process: Process, val selfPID: Int): ProcessControlFacade {
+internal class WindowsProcessControl(val config: ProcessConfiguration, val process: Process, val selfPID: Int): ProcessControlFacade {
 
     companion object: ProcessControlFacade.Factory {
-        override fun create(config: ProcessBuilder, process: Process, pid: Int) = if(Platform.isWindows()) {
+        override fun create(config: ProcessConfiguration, process: Process, pid: Int) = if(Platform.isWindows()) {
             Supported(WindowsProcessControl(config, process, pid))
         }
         else OS_NOT_WINDOWS
@@ -89,7 +89,7 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
         // If yes: write a merge here so we dont excessively create/dispose handles
         // if no: this strategy is probably fine.
 
-        var actualTree: Win32ProcessProxy
+        val actualTree: Win32ProcessProxy
 
         while(true) {
             var newTree: Win32ProcessProxy? = null
@@ -122,46 +122,49 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
         runBlocking {
 
             actualTree.use {
-                val path = "${System.getProperty("java.home")}/bin/javaw"
 
                 for (win32Proc in actualTree.toSequence()) {
-                    //                        fail; //whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
-                    // also: can you re-use the same process to kill all of them?
+
+                    // some concerns:
+                    // whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
+                    //   -> need to support an "atomic" process to use this library.
+                    //      In the mean time the fire-and-forget j.l.ProcessBuilder will suffice.
+                    // can we re-use the same process to kill all of them? (ie killer -pids 123,4567,8901 to kill 3 PIDs at once)
+                    //   -> probably: TBD.
                     // also: what if it spawns a new process while its being interrupted??
-                    // --that process should probably not be cancelled right?
+                    //   -> not this libraries problem. If that does happen its entirely likely the
+                    //      spawned sub-process was some kind of cleanup, possibly initiated by a finally{} block
+                    //      so I think its best to leave it running.
 
                     trace { "killing ${win32Proc.pid}" }
                     val killpb = java.lang.ProcessBuilder().apply {
                         command(
-                                path,
+                                System.getProperty("java.home") + "/bin/javaw",
                                 "-cp", System.getProperty("java.class.path"),
                                 PoliteLeechKiller::main.instanceTypeName,
                                 "-pid", win32Proc.pid.toString()
                         )
-                        redirectError(java.lang.ProcessBuilder.Redirect.INHERIT)
-                        redirectOutput(java.lang.ProcessBuilder.Redirect.INHERIT)
+                        redirectError(Redirect.INHERIT)
+                        redirectOutput(Redirect.INHERIT)
                     }
 
                     killpb.start()
                 }
 
-//                    withTimeoutOrNull(Instant.now().until(deadline, ChronoUnit.MILLIS)) {
-//                        jobs.forEach { it.join() }
-//                    }
+
+                // at time of writing, no synchronization is required here,
+                // but if you need it, we can either add support for atomic (un-killable) processes and simply dogfood this library here.
+                // or you can use the win32Proc object to synchronize on the process in a blocking way.
+                // win32 offers a blocking timeout API that may well be sufficient,
+                // and similary this `pollIsAlive` on a win32 process is trivially implemented.
             }
         }
 
         return Supported(Unit)
     }
 
-    fun doStuff(){
-        val x =4;
-    }
-
     @InternalCoroutinesApi
     override fun killForcefullyAsync(includeDescendants: Boolean): Supported<Unit> {
-
-        doStuff()
 
         var command = listOf("taskkill")
         if(includeDescendants) command += "/T"
@@ -169,7 +172,8 @@ internal class WindowsProcessControl(val config: ProcessBuilder, val process: Pr
         command += listOf("/PID", "$selfPID")
 
         GlobalScope.launch(Unconfined + CoroutineName("process(PID=$selfPID).killForcefully")) {
-            execAsync { this.command = command }.consumeEach { trace { it.formattedMessage } }
+            val proc = execAsync { this.command = command }
+            proc.consumeEach { trace { "${proc.processID} (kill $selfPID): ${it.formattedMessage}" } }
         }
 
         return Supported(Unit)
@@ -327,8 +331,9 @@ internal object PoliteLeechKiller {
                 println("starting taskkill /PID $pid")
                 java.lang.ProcessBuilder()
                         .command("taskkill", "/PID", "$pid")
-                        .redirectError(java.lang.ProcessBuilder.Redirect.INHERIT)
-                        .redirectOutput(java.lang.ProcessBuilder.Redirect.INHERIT)
+                        //note: children are handled by the invoker of this program/
+                        .redirectError(Redirect.INHERIT)
+                        .redirectOutput(Redirect.INHERIT)
                         .start()
             }
             else {

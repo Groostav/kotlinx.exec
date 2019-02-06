@@ -160,7 +160,7 @@ enum class MatchState { NoMatch, NewMatch, ContinuedMatch }
 
 internal fun <T> ReceiveChannel<T>.tail(bufferSize: Int, context: CoroutineContext = Unconfined): ReceiveChannel<T> {
 
-    // see [ProcessBuilder.standardErrorBufferCharCount]
+    // see [ProcessConfiguration.standardErrorBufferCharCount]
     val channelTypeOrArrayBufferSize = bufferSize.asQueueChannelCapacity()
 
     //if we request a buffer size of 0, we use a simple conflated channel.
@@ -214,7 +214,7 @@ internal suspend inline fun <T> Channel<T>.pushForward(next: T): List<T> {
     }}
 }
 
-internal fun OutputStream.toSendChannel(config: ProcessBuilder): SendChannel<Char> {
+internal fun OutputStream.toSendChannel(config: ProcessConfiguration): SendChannel<Char> {
     return GlobalScope.actor<Char>(Unconfined + CoroutineName("process.stdin")) {
 
         val writer = OutputStreamWriter(this@toSendChannel, config.encoding)

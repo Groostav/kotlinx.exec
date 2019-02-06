@@ -14,7 +14,7 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
             Unsupported("ProcessHandle.destroy failed for pid=$pid")
         }
 
-        override fun create(config: ProcessBuilder, process: Process, pid: Int) =
+        override fun create(config: ProcessConfiguration, process: Process, pid: Int) =
                 if(JavaVersion >= 9) Supported(JEP102ProcessFacade(process)) else NOT_JAVA_9
     }
 

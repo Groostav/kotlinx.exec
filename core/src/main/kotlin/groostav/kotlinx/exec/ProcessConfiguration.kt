@@ -3,9 +3,8 @@ package groostav.kotlinx.exec
 import java.nio.charset.Charset
 import java.nio.file.Path
 import java.nio.file.Paths
-import java.lang.ProcessBuilder as PRocBuilder
 
-data class ProcessBuilder internal constructor(
+data class ProcessConfiguration internal constructor(
 
         /**
          * The command to execute.
@@ -112,10 +111,14 @@ data class ProcessBuilder internal constructor(
         var aggregateOutputBufferLineCount: Int = 2000,
 
         /**
-         * The amount of time to wait before considering a SIG_INT kill command to have failed.
+         * The amount of time to wait before considering a SIG_INT command to have failed.
          *
-         * Using a time of zero will result in no SIG_INT signals at all, instead using only kill -9,
-         * or similar techniques.
+         * Using a time of zero will result in no `SIG_INT` signals at all. In this cercomstance
+         * calls to [RunningProcess.kill] will simply fire a `SIG_KILL` immediately.
+         *
+         * This operation is supported on all platforms,
+         * and thus has an implementation different from JEP102 on windows.
+         * See [WindowsProcessControl.tryKillGracefullyAsync] for more details.
          */
         var gracefulTimeoutMillis: Long = 1500L,
 
@@ -158,18 +161,19 @@ data class ProcessBuilder internal constructor(
 
 object InheritedDefaultEnvironment: Map<String, String> by System.getenv()
 
-internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): ProcessBuilder {
+internal inline fun configureProcess(configureBlock: ProcessConfiguration.() -> Unit): ProcessConfiguration {
 
-    val initial = ProcessBuilder().apply(configureBlock)
+    val initial = ProcessConfiguration().apply(configureBlock)
     val initialCommandList = initial.command.toList()
 
     val result = initial.copy (
             command = initialCommandList,
+            environment = if(initial.environment === InheritedDefaultEnvironment) initial.environment else initial.environment.toMap(),
             delimiters = initial.delimiters.toList(),
-            expectedOutputCodes = initial.expectedOutputCodes?.toSet(),
-            environment = if(initial.environment === InheritedDefaultEnvironment) initial.environment else initial.environment.toMap()
+            expectedOutputCodes = initial.expectedOutputCodes?.toSet()
 
-            //dont deep-copy source, since its internal
+            // TBD: other non-final types like workingDirectory: Path, encoding: CharSet,
+            // how careful does this defensive copy need to be? do we need it at all?
     )
 
     result.run {
@@ -190,9 +194,3 @@ internal inline fun processBuilder(configureBlock: ProcessBuilder.() -> Unit): P
 interface ExecEntryPoint
 class AsynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint
 class SynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint
-
-private inline fun ProcessBuilder.require(requirement: Boolean, message: () -> String) {
-    if( ! requirement){
-        throw InvalidExecConfigurationException(message())
-    }
-}

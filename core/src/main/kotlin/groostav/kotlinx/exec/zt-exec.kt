@@ -18,7 +18,7 @@ internal class ZeroTurnaroundProcessFacade(val process: Process, pid: Int): Proc
 
         val ZT_EXEC_CANT_INCLUDE_CHILDREN = Unsupported("cant include children in kill with zt-exec")
 
-        override fun create(config: ProcessBuilder, process: Process, pid: Int) = ifZTAvailable { ZeroTurnaroundProcessFacade(process, pid) }
+        override fun create(config: ProcessConfiguration, process: Process, pid: Int) = ifZTAvailable { ZeroTurnaroundProcessFacade(process, pid) }
     }
 
     private val pidProcess = Processes.newPidProcess(pid)

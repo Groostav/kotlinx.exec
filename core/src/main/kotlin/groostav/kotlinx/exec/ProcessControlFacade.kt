@@ -24,7 +24,7 @@ internal interface ProcessControlFacade {
 
 
     interface Factory {
-        fun create(config: ProcessBuilder, process: Process, pid: Int): Maybe<ProcessControlFacade>
+        fun create(config: ProcessConfiguration, process: Process, pid: Int): Maybe<ProcessControlFacade>
     }
 
 }
@@ -55,7 +55,7 @@ internal object CompositeProcessControlFactory: ProcessControlFacade.Factory {
             ZeroTurnaroundProcessFacade
     )
 
-    override fun create(config: ProcessBuilder, process: Process, pid: Int): Maybe<ProcessControlFacade> {
+    override fun create(config: ProcessConfiguration, process: Process, pid: Int): Maybe<ProcessControlFacade> {
         val facades = factories.filterSupporting { it.create(config, process, pid) }
         return Supported(CompositeProcessControl(facades))
 

@@ -49,7 +49,7 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Def
      * The exit code of the process, or [InvalidExitValueException] if configured
      *
      * If the process exits normally, and the process exit code is one of
-     * [ProcessBuilder.expectedOutputCodes], then this value will be completed
+     * [ProcessConfiguration.expectedOutputCodes], then this value will be completed
      * with the exit code provided by the child process. If the process exits
      * with a code that is _not_ in the `expectedOutputCodes`, it will throw
      * an [InvalidExitValueException].
@@ -70,7 +70,7 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Def
      * kills the process
      *
      * This method attempts to kill the process gracefully with an interrupt signal (SIG_INT)
-     * in accordance with the settings in [ProcessBuilder.gracefulTimeoutMillis], then, if that fails,
+     * in accordance with the settings in [ProcessConfiguration.gracefulTimeoutMillis], then, if that fails,
      * uses a more aggressive kill signal (SIG_KILL) to end the process, suspending until the process
      * is terminated.
      *
@@ -92,8 +92,8 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Def
      * from standard-output, standard-error, or the aggregate channel
      *
      * Note, if you intended to mute the output channel without killing the process,
-     * consider setting [ProcessBuilder.standardOutputBufferCharCount],
-     * [ProcessBuilder.standardErrorBufferCharCount] and [ProcessBuilder.aggregateOutputBufferLineCount]
+     * consider setting [ProcessConfiguration.standardOutputBufferCharCount],
+     * [ProcessConfiguration.standardErrorBufferCharCount] and [ProcessConfiguration.aggregateOutputBufferLineCount]
      * to zero.
      */
     override fun cancel(): Unit { cancel(null) }

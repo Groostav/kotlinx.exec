@@ -2,13 +2,13 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
+import java.lang.IllegalArgumentException
 import kotlin.coroutines.EmptyCoroutineContext
-import java.lang.ProcessBuilder as JProcBuilder
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
 
 @InternalCoroutinesApi
-internal fun CoroutineScope.execAsync(config: ProcessBuilder, start: CoroutineStart): RunningProcess {
+internal fun CoroutineScope.execAsync(config: ProcessConfiguration, start: CoroutineStart): RunningProcess {
 
     val newContext = newCoroutineContext(EmptyCoroutineContext)
     val coroutine = ExecCoroutine(
@@ -27,16 +27,15 @@ internal fun CoroutineScope.execAsync(config: ProcessBuilder, start: CoroutineSt
 }
 
 @InternalCoroutinesApi
-fun CoroutineScope.execAsync(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessBuilder.() -> Unit): RunningProcess {
+fun CoroutineScope.execAsync(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessConfiguration.() -> Unit): RunningProcess {
 
-    val configActual = processBuilder() {
+    val configActual = configureProcess {
         config()
         source = AsynchronousExecutionStart(command.toList())
     }
     return execAsync(configActual, start)
 }
 @InternalCoroutinesApi
-@Throws(InvalidExitValueException::class)
 fun CoroutineScope.execAsync(
         commandFirst: String,
         vararg commandRest: String,
@@ -49,10 +48,10 @@ fun CoroutineScope.execAsync(
 @Throws(InvalidExitValueException::class)
 suspend fun exec(
         start: CoroutineStart = CoroutineStart.DEFAULT,
-        config: ProcessBuilder.() -> Unit
+        config: ProcessConfiguration.() -> Unit
 ): ProcessResult = coroutineScope {
 
-    val configActual = processBuilder {
+    val configActual = configureProcess {
         apply(config)
 
         source = SynchronousExecutionStart(command.toList())
@@ -76,14 +75,15 @@ suspend fun exec(commandFirst: String, vararg commandRest: String, start: Corout
 
 @InternalCoroutinesApi
 @Throws(InvalidExitValueException::class)
-suspend fun execVoid(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessBuilder.() -> Unit): Int = coroutineScope {
+suspend fun execVoid(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessConfiguration.() -> Unit): Int = coroutineScope {
 
-    val configActual = processBuilder {
+    val configActual = configureProcess {
+
+        apply(config)
+
         aggregateOutputBufferLineCount = 0
         standardErrorBufferCharCount = 0
         standardErrorBufferCharCount = 0
-
-        apply(config)
 
         source = SynchronousExecutionStart(command.toList())
     }
@@ -99,6 +99,9 @@ suspend fun execVoid(
     command = listOf(commandFirst) + commandRest.toList()
 }
 
+class InvalidExecConfigurationException(message: String, cause: Exception? = null)
+    : IllegalArgumentException(message, cause)
+
 class InvalidExitValueException(
         val command: List<String>,
         val exitValue: Int,
@@ -110,6 +113,20 @@ class InvalidExitValueException(
 
     init {
         mergeCauses(null, entryPoint)
+    }
+}
+
+class ProcessInterruptedException(val exitCode: Int, entryPoint: ExecEntryPoint?, killSource: CancellationException)
+    : CancellationException("process interrupted, finished with exit code $exitCode"){
+    init {
+        mergeCauses(killSource, entryPoint)
+    }
+}
+
+class ProcessKilledException(val exitCode: Int, entryPoint: ExecEntryPoint?, killSource: CancellationException)
+    : CancellationException("process killed, finished with exit code $exitCode"){
+    init {
+        mergeCauses(killSource, entryPoint)
     }
 }
 
@@ -135,7 +152,7 @@ private fun Throwable.mergeCauses(cause: Throwable?, entryPoint: ExecEntryPoint?
 }
 
 
-internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): InvalidExitValueException {
+internal fun makeExitCodeException(config: ProcessConfiguration, exitCode: Int, recentErrorOutput: List<String>): InvalidExitValueException {
     val expectedCodes = config.expectedOutputCodes
     val builder = buildString {
 
@@ -160,21 +177,4 @@ internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recent
     require(result.stackTrace != null)
 
     return result
-}
-
-class InvalidExecConfigurationException(message: String, cause: Exception? = null)
-    : RuntimeException(message, cause)
-
-class ProcessInterruptedException(val exitCode: Int, entryPoint: ExecEntryPoint?, killSource: CancellationException)
-    : CancellationException("process interrupted, finished with exit code $exitCode"){
-    init {
-         mergeCauses(killSource, entryPoint)
-    }
-}
-
-class ProcessKilledException(val exitCode: Int, entryPoint: ExecEntryPoint?, killSource: CancellationException)
-    : CancellationException("process killed, finished with exit code $exitCode"){
-    init {
-        mergeCauses(killSource, entryPoint)
-    }
 }

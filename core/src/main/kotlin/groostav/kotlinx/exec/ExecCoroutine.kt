@@ -20,7 +20,7 @@ import kotlin.coroutines.*
 
 @InternalCoroutinesApi
 internal class ExecCoroutine(
-        private val config: ProcessBuilder,
+        private val config: ProcessConfiguration,
         parentContext: CoroutineContext,
         isActive: Boolean,
         private val pidGen: ProcessIDGenerator,
@@ -540,7 +540,7 @@ internal class ExecCoroutine(
     companion object Factory {
 
         operator fun invoke(
-                config: ProcessBuilder,
+                config: ProcessConfiguration,
                 parentContext: CoroutineContext,
                 start: CoroutineStart,
                 pidGen: ProcessIDGenerator,
@@ -571,9 +571,9 @@ internal class ExecCoroutine(
 
 private val jobId = AtomicInteger(1)
 
-private fun makeName(config: ProcessBuilder): CoroutineName = CoroutineName(config.debugName ?: "exec ${makeNameString(config, 50)}")
+private fun makeName(config: ProcessConfiguration): CoroutineName = CoroutineName(config.debugName ?: "exec ${makeNameString(config, 50)}")
 
-private fun makeNameString(config: ProcessBuilder, targetLength: Int) = buildString {
+private fun makeNameString(config: ProcessConfiguration, targetLength: Int) = buildString {
     val commandSeq = config.command.asSequence()
     append(commandSeq.first().replace("\\", "/").substringAfterLast("/").take(targetLength))
 
