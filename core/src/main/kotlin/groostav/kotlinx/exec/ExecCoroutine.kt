@@ -63,23 +63,29 @@ internal class ExecCoroutine(
                 val prev: Ready,
                 val process: Process,
                 val pid: Int,
-                val comittedExitCode: Int? = null,
+                val obtrudingExitCode: Int? = null,
                 val interrupt: SourcedTermination? = null,
-                val reaper: SourcedTermination? = null
+                val reaper: SourcedTermination? = null,
+                val stderrEOF: Boolean = false,
+                val stdoutEOF: Boolean = false
         ): State(){
-            override fun toString() = buildString {
-                append("Running(")
-                append("PID=").append(pid)
-                if (reaper != null) append(", hasReaper")
-                append(")")
-            }
 
-            internal data class SourcedTermination(val source: CancellationException, val job: Job)
+            internal class SourcedTermination(val source: CancellationException, val job: Job)
+
+            override fun toString(): String {
+                return "Running(pid=$pid, obtrudingExitCode=$obtrudingExitCode, interrupt=$interrupt, reaper=$reaper, stderrEOF=$stderrEOF, stdoutEOF=$stdoutEOF)"
+            }
         }
-        class Completed(val pid: Int, val exitCode: Int): State(){
-            override fun toString() = "Completed(PID=$pid, exitCode=$exitCode)"
-        }
-        data class Euthanized(val first: Boolean): State()
+        data class Completed(
+                val pid: Int,
+                val exitCode: Int,
+                val interrupt: CancellationException?,
+                val reaper: CancellationException?,
+                val stderrEOF: Boolean,
+                val stdoutEOF: Boolean
+        ): State()
+
+        data class Euthanized(val first: Boolean, val source: CancellationException): State()
     }
 
     private val shortName = config.debugName ?: makeNameString(config, targetLength = 20)
@@ -173,19 +179,7 @@ internal class ExecCoroutine(
         }
 
         readyness = readyness.copy(exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
-            var result = exitCodeInflection.await()
-
-            fail; // what does this say about the state machine?
-            val completing = atomicState.updateAndGet(this@ExecCoroutine){ when {
-                it is State.Running && it.comittedExitCode == null -> it.copy(comittedExitCode = result)
-                else -> it
-            }}
-            result = when(completing){
-                is State.Completed -> completing.exitCode
-                is State.Running -> completing.comittedExitCode!!
-                else -> TODO()
-            }
-
+            val result = exitCodeInflection.await()
 
             // the concurrent nature here means we could get std-out messages after an exit code,
             // which is just strange. So We'll sync on the output streams, making sure they come first.
@@ -215,15 +209,10 @@ internal class ExecCoroutine(
             directory(config.workingDirectory.toFile())
         })
 
-        val result = atomicState.updateAndGet(this){ when(it){
+        atomicState.updateAndGet(this){ when(it){
             warmingUp -> readyness
-            else -> it
+            else -> throw makeCME(warmingUp)
         }}
-
-        if(result != readyness){
-            trace { "state set to $result while warming-up."}
-            return false
-        }
 
         return true
     }
@@ -248,16 +237,43 @@ internal class ExecCoroutine(
         require(readyState is State.Ready)
 
         val process = try { readyState.jvmProcessBuilder.start() }
-        catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message ?: "", ex) }
+        catch(ex: IOException){ throw IllegalArgumentException(ex.message ?: "", ex) }
 
         val pid = pidGen.findPID(process)
 
         val listeners = listenerFactory.create(process, pid, config)
 
-        stdoutInflection.sinkFrom(listeners.standardOutputChannel.value)
-        stderrInflection.sinkFrom(listeners.standardErrorChannel.value)
-        exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value)
         makeInputStreamActor(process).sinkFrom(stdinInflection)
+
+        stdoutInflection.sinkFrom(listeners.standardOutputChannel.value.thenOnCompletion {
+            atomicState.updateAndGet(this){ when(it) {
+                is State.Completed -> it.copy(stdoutEOF = true)
+                is State.Running -> it.copy(stdoutEOF = true)
+                else -> TODO()
+            }}
+        })
+        stderrInflection.sinkFrom(listeners.standardErrorChannel.value.thenOnCompletion {
+            atomicState.updateAndGet(this){ when(it) {
+                is State.Completed -> it.copy(stderrEOF = true)
+                is State.Running -> it.copy(stderrEOF = true)
+                else -> TODO()
+            }}
+        })
+        exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value.then { exitCode ->
+            val finalState = atomicState.updateAndGet(this){ when(it) {
+                is State.Running -> State.Completed(
+                        it.pid,
+                        it.obtrudingExitCode ?: exitCode,
+                        it.interrupt?.source,
+                        it.reaper?.source,
+                        it.stderrEOF,
+                        it.stdoutEOF
+                )
+                else -> TODO()
+            }} as State.Completed
+
+            finalState.exitCode
+        })
 
         val suiters = atomicState.getAndUpdate(this){ when(it){
             is State.Starting -> State.Running(readyState, process, pid)
@@ -281,43 +297,30 @@ internal class ExecCoroutine(
             is State.Uninitialized, is State.WarmingUp, is State.Ready, is State.Starting -> TODO("state=$initialState")
             is State.Running -> initialState.prev
             is State.Completed -> return initialState.exitCode
-            is State.Euthanized -> null
+            is State.Euthanized -> throw ProcessKilledException(-1, config.source, initialState.source)
         }
 
         return try {
             val running = state
             require(running is State.Running)
-            require(initialized != null)
 
             initialized.run {
-                stderrAggregatorJob?.join()
-                stdoutAggregatorJob?.join()
+                stderrAggregatorJob.join()
+                stdoutAggregatorJob.join()
                 exitCodeAggregatorJob.join()
             }
 
             stderrInflection.asJob().join()
             stdoutInflection.asJob().join()
-            val providedExitCode = exitCodeInflection.await()
+            val exitCode = exitCodeInflection.await()
 
-            fail; //TODO this means if you dont call waitFor itl never complete?!
-            val stateBeforeCompletion = atomicState.getAndUpdate(this){ when(it){
-                is State.Running -> State.Completed(running.pid, it.comittedExitCode ?: providedExitCode)
-                else -> throw makeCME(expected = running)
-            }} as State.Running
-
-            val exitCode = stateBeforeCompletion.comittedExitCode ?: providedExitCode
+            val state = state as? State.Completed ?: throw makeCME<State.Completed>()
 
             val expectedExitCodes = config.expectedOutputCodes
 
             val result = when {
-                stateBeforeCompletion.interrupt != null -> {
-                    stateBeforeCompletion.interrupt.job.join()
-                    throw ProcessInterruptedException(exitCode, config.source, stateBeforeCompletion.interrupt.source)
-                }
-                stateBeforeCompletion.reaper != null -> {
-                    stateBeforeCompletion.reaper.job.join()
-                    throw ProcessKilledException(exitCode, config.source, stateBeforeCompletion.reaper.source)
-                }
+                state.interrupt != null -> throw ProcessInterruptedException(exitCode, config.source, state.interrupt)
+                state.reaper != null -> throw ProcessKilledException(exitCode, config.source, state.reaper)
                 expectedExitCodes == null -> exitCode
                 exitCode in expectedExitCodes -> exitCode
                 else -> throw makeExitCodeException(config, exitCode, initialized.recentErrorOutput.toList())
@@ -357,9 +360,9 @@ internal class ExecCoroutine(
     private fun tryKillAsync(source: CancellationException, obtrudeExitCode: Int?, gentle: Boolean = false): Unit {
 
         val newState = atomicState.updateAndGet(this){ when(it) {
-            State.Uninitialized -> State.Euthanized(first = true)
-            is State.WarmingUp -> State.Euthanized(first = true)
-            is State.Ready -> State.Euthanized(first = true)
+            State.Uninitialized -> State.Euthanized(first = true, source = source)
+            is State.WarmingUp -> State.Euthanized(first = true, source = source)
+            is State.Ready -> State.Euthanized(first = true, source = source)
             is State.Starting -> {
                 it.copy(jobs = it.jobs + { tryKillAsync(source, obtrudeExitCode, gentle) })
             }
@@ -367,8 +370,8 @@ internal class ExecCoroutine(
                 val interruptOrReaper = makeUnstartedInterruptOrReaper(it, gentle)
                 val sourcedInterruptOrReaper = State.Running.SourcedTermination(source, interruptOrReaper)
 
-                if (gentle) it.copy(interrupt = sourcedInterruptOrReaper, comittedExitCode = obtrudeExitCode)
-                        else it.copy(reaper = sourcedInterruptOrReaper, comittedExitCode = obtrudeExitCode)
+                if (gentle) it.copy(interrupt = sourcedInterruptOrReaper, obtrudingExitCode = obtrudeExitCode)
+                        else it.copy(reaper = sourcedInterruptOrReaper, obtrudingExitCode = obtrudeExitCode)
             }
             is State.Completed -> it
             is State.Euthanized -> it.copy(first = false)
@@ -556,6 +559,9 @@ internal class ExecCoroutine(
 
     private fun makeCME(expected: State) = ConcurrentModificationException(
             "expected state=$expected but was actually $state"
+    )
+    private inline fun <reified T: State> makeCME() = ConcurrentModificationException(
+            "expected 'state is ${T::class.simpleName}' but was actually state=$state"
     )
 
     companion object Factory {

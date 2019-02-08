@@ -24,7 +24,7 @@ class UnhappyConfigurationTests {
     @Test fun `when attempting to run nonexistant program should get exception`() = runBlocking<Unit> {
 
         //act
-        val result = Catch<InvalidExecConfigurationException> {
+        val result = Catch<IllegalArgumentException> {
             exec { command = listOf("prog-that-doesn't-exist-a1ccfa01-cf9a-474c-b95f-94377655ea75") }
         }
 
@@ -38,7 +38,7 @@ class UnhappyConfigurationTests {
 
     @Test fun `when attempting to run empty command line should complain`() = runBlocking<Unit> {
         //act
-        val result = Catch<InvalidExecConfigurationException> {
+        val result = Catch<IllegalArgumentException> {
             exec { command = emptyList() }
         }
 

@@ -128,24 +128,6 @@ internal fun <R, S> List<S>.filterSupporting(call: (S) -> Maybe<R>): List<R> {
 
 internal inline fun <T> Try(block: () -> T) = try { block() } catch (e: Exception) { null }
 
-internal fun IntProgression.asSet(): Set<Int> = IntProgressionSet(this)
-data class IntProgressionSet(val src: IntProgression): Set<Int> {
-
-    init {
-        require(src.first <= src.last)
-        require(src.step >= 1)
-    }
-
-    override val size: Int = (src.last - src.first + 1) / src.step + 1
-
-    override operator fun contains(element: Int): Boolean {
-        if(element < src.first || element > src.last) return false
-
-        return (element - src.first) % src.step == 0
-    }
-    override fun containsAll(elements: Collection<Int>) = elements.all { it in this }
-    override fun isEmpty(): Boolean = src.isEmpty()
-    override fun iterator(): Iterator<Int> = src.iterator()
-}
-
+// uhhh does this leak handles? if you attach your coroutine to this... does it hang on?
+// done jobs have not listeners. No, this is not a leak.
 object DONE_JOB: Job by GlobalScope.launch(CoroutineName("DONE_JOB"), block = {})

@@ -18,8 +18,8 @@ internal fun CoroutineScope.execAsync(config: ProcessConfiguration, start: Corou
     )
 
     if(start != CoroutineStart.LAZY) {
-        require(coroutine.prestart())
-        require(coroutine.kickoff())
+        coroutine.prestart().also { require(it) }
+        coroutine.kickoff().also { require(it) }
     }
     coroutine.start(start, coroutine, ExecCoroutine::waitFor)
 
@@ -98,9 +98,6 @@ suspend fun execVoid(
 ): Int = execVoid(start) {
     command = listOf(commandFirst) + commandRest.toList()
 }
-
-class InvalidExecConfigurationException(message: String, cause: Exception? = null)
-    : IllegalArgumentException(message, cause)
 
 class InvalidExitCodeException(
         val command: List<String>,

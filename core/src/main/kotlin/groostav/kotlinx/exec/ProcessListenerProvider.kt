@@ -16,6 +16,11 @@ internal interface ProcessListenerProvider {
     val exitCodeDeferred: Maybe<Deferred<Int>>// get() = Unsupported
 
     interface Factory {
+
+        // TODO: I think this leaks: what if the user starts a hangingProcess(), then abandons is,
+        // then the process object is off the graph, but any created threads for pumping will still be there,
+        // continuing to pump the outputs even if nobody cares.
+        // can we simply make Process a WeakRef or should we try to tie this into a scope with exceptions?
         fun create(process: Process, pid: Int, config: ProcessConfiguration): ProcessListenerProvider
     }
 }

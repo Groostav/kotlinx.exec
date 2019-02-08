@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.channels.consumeEach
 import com.sun.jna.platform.win32.WinDef.BOOL
 import com.sun.jna.platform.win32.WinError.ERROR_INVALID_HANDLE
+import com.sun.jna.platform.win32.WinError.ERROR_SUCCESS
 import com.sun.jna.ptr.IntByReference
 import java.io.Closeable
 import java.lang.ProcessBuilder.*
@@ -25,11 +26,11 @@ import kotlin.reflect.jvm.jvmName
 
 //note this class may be preferable to the jep102 based class because kill gracefully (aka normally)
 // isnt supported on windows' implementation of ProcessHandle.
-internal class WindowsProcessControl(val config: ProcessConfiguration, val process: Process, val selfPID: Int): ProcessControlFacade {
+internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val process: Process, val selfPID: Int): ProcessControlFacade {
 
     companion object: ProcessControlFacade.Factory {
         override fun create(config: ProcessConfiguration, process: Process, pid: Int) = if(Platform.isWindows()) {
-            Supported(WindowsProcessControl(config, process, pid))
+            Supported(WindowsProcessControl(config.gracefulTimeoutMillis, process, pid))
         }
         else OS_NOT_WINDOWS
     }
@@ -69,7 +70,7 @@ internal class WindowsProcessControl(val config: ProcessConfiguration, val proce
             trace { "graceful termination of $selfPID timed-out" }
         }
 
-        val deadline = Instant.now().plusMillis(config.gracefulTimeoutMillis)
+        val deadline = Instant.now().plusMillis(gracefulTimeoutMillis)
 
         // by the time `buildPIDIndex()` returns, it might be stale
         var previousTree: Win32ProcessProxy = when {
@@ -336,7 +337,7 @@ internal object PoliteLeechKiller {
                         .redirectOutput(Redirect.INHERIT)
                         .start()
             }
-            else {
+            else  {
                 val (eventName, eventCode) = "CTRL_C_EVENT" to Kernel32.CTRL_C_EVENT
                 println("submitting $eventName to pid=$pid")
 

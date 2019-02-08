@@ -11,20 +11,19 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
  * Use fake process objects to project odd but legal behaviour from process API,
  * ensure that kotlinx.exec handles it properly
  */
 @InternalCoroutinesApi
-class TortureTests {
+internal class TortureTests {
 
     @Test fun `when process emits exit code before emitting and closing standard out should hold process open`() = runBlocking<Unit> {
 
         // setup
         val interceptors = Interceptors()
-        val exec = makeExecCoroutine(interceptors)
+        val exec = makeStartedExecCoroutine(interceptors)
 
         // act
         interceptors.apply {
@@ -43,10 +42,45 @@ class TortureTests {
         // assert
         assertEquals("ahah", firstMessage)
         assertFalse(exec.isCompleted)
-        assertTrue(exec.state is ExecCoroutine.State.Running, "expected state=RUNNING, but was state=${exec.state}")
+        assertFalse(exec.state.outEOF, "expected stdoutEOF=false, but state=${exec.state}")
     }
 
-    @Test fun `when process emits exit code before emitting and closing standard error should hold process open`(): Unit = TODO()
+    @Test fun `when process emits exit code before emitting and closing standard error should hold process open`(): Unit = runBlocking {
+
+        // setup
+        val interceptors = Interceptors()
+        val exec = makeStartedExecCoroutine(interceptors)
+
+        // act
+        interceptors.apply {
+            emit(ExitCode(99))
+            emit(StandardOutputMessage("ahah"))
+            standardOutput.close()
+            standardInput.close()
+        }
+        val firstMessage = select<String?> {
+            onTimeout(1500) { null }
+            exec.onAwait { "exit code $it" }
+            exec.onReceive { it.formattedMessage }
+        }
+        delay(500)
+
+        // assert
+        assertEquals("ahah", firstMessage)
+        assertFalse(exec.isCompleted)
+        assertFalse(exec.state.errEOF, "expected stderrEOF=false, but state=${exec.state}")
+    }
+
+    val ExecCoroutine.State.outEOF: Boolean get() = when(this){
+        is ExecCoroutine.State.Running -> stdoutEOF
+        is ExecCoroutine.State.Completed -> stdoutEOF
+        else -> false
+    }
+    val ExecCoroutine.State.errEOF: Boolean get() = when(this){
+        is ExecCoroutine.State.Running -> stderrEOF
+        is ExecCoroutine.State.Completed -> stderrEOF
+        else -> false
+    }
 
     internal object FakePIDGenerator: ProcessIDGenerator {
 
@@ -94,7 +128,7 @@ class TortureTests {
         }
     }
 
-    private fun makeExecCoroutine(interceptors: Interceptors) = ExecCoroutine(
+    private fun makeStartedExecCoroutine(interceptors: Interceptors) = ExecCoroutine(
             ProcessConfiguration().apply {
                 command = listOf("asdf.exe")
             },

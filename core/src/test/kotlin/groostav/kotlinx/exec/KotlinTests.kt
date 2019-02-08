@@ -207,20 +207,6 @@ class KotlinTests {
         assertTrue(evaluatedRight)
     }
 
-    @Test fun `when using simple integer progression as set should get reasonable responses`(){
-        val oneToSevenStepTwoSet = (1 .. 7 step 2).asSet()
-
-        assertTrue(1 in oneToSevenStepTwoSet)
-        assertTrue(3 in oneToSevenStepTwoSet)
-        assertTrue(5 in oneToSevenStepTwoSet)
-        assertTrue(7 in oneToSevenStepTwoSet)
-        assertTrue(oneToSevenStepTwoSet.all { it in oneToSevenStepTwoSet })
-        assertFalse(0 in oneToSevenStepTwoSet)
-        assertFalse(2 in oneToSevenStepTwoSet)
-        assertFalse(6 in oneToSevenStepTwoSet)
-        assertFalse(8 in oneToSevenStepTwoSet)
-    }
-
     @Ignore("expected behaviour is to hang")
     @Test fun `when using runblockign with parent-child coroutine and child is abandoned should never return`(){
         runBlocking {

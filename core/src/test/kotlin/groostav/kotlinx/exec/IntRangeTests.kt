@@ -5,16 +5,6 @@ import kotlin.test.assertEquals
 
 class IntRangeTests {
 
-    @Test fun `int progression sanity check`(){
-        //setup
-        val range = (0..7 step 5).asSet()
-
-        //act & assert
-        assertEquals(2, range.size)
-        assertEquals(0, range.first())
-        assertEquals(5, range.last())
-    }
-
     @Test fun `when parsing simple it range should get correct result`(){
         //setup
         val key = "groostav.testing.abcd"
