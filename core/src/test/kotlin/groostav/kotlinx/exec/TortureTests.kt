@@ -117,13 +117,8 @@ internal class TortureTests {
         }
         val controlFacade = object: ProcessControlFacade.Factory {
             override fun create(config: ProcessConfiguration, process: Process, pid: Int) = Supported(object: ProcessControlFacade{
-                override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
-                    TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
-                }
-
-                override fun killForcefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
-                    TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
-                }
+                override fun tryKillGracefullyAsync(includeDescendants: Boolean) = Unsupported("testing")
+                override fun killForcefullyAsync(includeDescendants: Boolean)= Unsupported("testing")
             })
         }
     }

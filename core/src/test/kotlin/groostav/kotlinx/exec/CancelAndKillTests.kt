@@ -8,7 +8,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-@InternalCoroutinesApi
 class CancelAndKillTests {
 
     @Test
@@ -198,5 +197,17 @@ class CancelAndKillTests {
             assertTrue(isClosedForReceive) //still has data that can be read out.
             assertTrue(isClosedForSend)
         }
+    }
+
+    @Test fun `when attempting to get PID for a completed process should succeed`() = runBlocking<Unit> {
+        //setup
+        val deadProc = execAsync { command = emptyScriptCommand() }
+        deadProc.join()
+
+        //act
+        val pid = deadProc.processID
+
+        //assert
+        assertNotListed(pid)
     }
 }

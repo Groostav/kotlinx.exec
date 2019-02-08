@@ -1,13 +1,11 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import java.nio.file.Paths
 import java.util.*
 import kotlin.test.assertEquals
 
-@InternalCoroutinesApi
 class ConfigurationTests {
 
     @Test fun `when setting working directory resulting subprocess should see that directory`() = runBlocking {

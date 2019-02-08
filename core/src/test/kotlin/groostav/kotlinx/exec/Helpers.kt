@@ -101,7 +101,6 @@ inline fun <reified X: Exception> assertThrows(action: () -> Any?): X? {
 internal inline fun <reified X: Exception> Catch(action: () -> Any?): X? =
         try { action(); null } catch(ex: Exception){ if(ex is X) ex else throw ex }
 
-@InternalCoroutinesApi
 internal suspend fun assertNotListed(vararg deadProcessIDs: Int){
 
     // both powershell and ps have output formatting options,
@@ -113,7 +112,6 @@ internal suspend fun assertNotListed(vararg deadProcessIDs: Int){
     assertTrue(zombies.isEmpty(), "${zombies.joinToString()} is still running")
 }
 
-@InternalCoroutinesApi
 internal suspend fun waitForTerminationOf(pid: Int, timeout: Long = 30_000){
 
     val finished = withTimeoutOrNull(timeout){
@@ -125,7 +123,6 @@ internal suspend fun waitForTerminationOf(pid: Int, timeout: Long = 30_000){
     require(finished != null) { "timed-out waiting for completion of $pid" }
 }
 
-@InternalCoroutinesApi
 private suspend fun pollRunningPIDs(): List<Int> {
     val runningPIDs: List<Int> = when (JavaProcessOS) {
         Unix -> {

@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -11,7 +10,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-@InternalCoroutinesApi
 class JoinTests {
 
     @Test

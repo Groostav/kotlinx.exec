@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.map
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
@@ -12,7 +11,6 @@ import org.junit.Ignore
 import org.junit.Test
 import kotlin.test.assertEquals
 
-@InternalCoroutinesApi
 class LinuxTests {
 
     companion object {

@@ -14,7 +14,6 @@ import kotlin.test.assertNotNull
 
 // Wow, so powershell takes 10X longer to start (~1 second) than cmd (~100ms)
 // I suppose thats .netframework startup time, which is supposidly faster than the jvm, but it sure ain't fast.
-@InternalCoroutinesApi
 class WindowsTests {
 
     companion object {

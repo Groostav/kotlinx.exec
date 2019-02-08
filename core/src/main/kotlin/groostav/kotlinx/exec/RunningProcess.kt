@@ -17,7 +17,7 @@ import java.lang.IllegalStateException
  * It has two main modes:
  *
  * 1. two high-level line-by-line channels: one SendChannel (for input)
- *    and one RecieveChannel (for output)
+ *    and one ReceiveChannel (for output)
  * 2. a set of lower level channels for character-by-character access to
  *    std-in, std-err, std-out, and the process exit code as a
  *    [SendChannel], two [ReceiveChannel]s, and a [Deferred] respectively.

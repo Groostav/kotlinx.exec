@@ -2,31 +2,13 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
-import java.lang.IllegalArgumentException
-import kotlin.coroutines.EmptyCoroutineContext
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
 
-@InternalCoroutinesApi
 internal fun CoroutineScope.execAsync(config: ProcessConfiguration, start: CoroutineStart): RunningProcess {
-
-    val newContext = newCoroutineContext(EmptyCoroutineContext)
-    val coroutine = ExecCoroutine(
-            config,
-            newContext, start,
-            makePIDGenerator(), makeListenerProviderFactory(), CompositeProcessControlFactory
-    )
-
-    if(start != CoroutineStart.LAZY) {
-        coroutine.prestart().also { require(it) }
-        coroutine.kickoff().also { require(it) }
-    }
-    coroutine.start(start, coroutine, ExecCoroutine::waitFor)
-
-    return coroutine
+    return EXEC_ASYNC_WRAPPER.execAsync(this, config, start)
 }
 
-@InternalCoroutinesApi
 fun CoroutineScope.execAsync(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessConfiguration.() -> Unit): RunningProcess {
 
     val configActual = configureProcess {
@@ -35,7 +17,7 @@ fun CoroutineScope.execAsync(start: CoroutineStart = CoroutineStart.DEFAULT, con
     }
     return execAsync(configActual, start)
 }
-@InternalCoroutinesApi
+
 fun CoroutineScope.execAsync(
         commandFirst: String,
         vararg commandRest: String,
@@ -44,7 +26,6 @@ fun CoroutineScope.execAsync(
     command = listOf(commandFirst) + commandRest.toList()
 }
 
-@InternalCoroutinesApi
 @Throws(InvalidExitCodeException::class)
 suspend fun exec(
         start: CoroutineStart = CoroutineStart.DEFAULT,
@@ -68,12 +49,10 @@ suspend fun exec(
     ProcessResult(output, runningProcess.getCompleted())
 }
 
-@InternalCoroutinesApi
 @Throws(InvalidExitCodeException::class)
 suspend fun exec(commandFirst: String, vararg commandRest: String, start: CoroutineStart = CoroutineStart.DEFAULT): ProcessResult
         = exec(start) { command = listOf(commandFirst) + commandRest }
 
-@InternalCoroutinesApi
 @Throws(InvalidExitCodeException::class)
 suspend fun execVoid(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessConfiguration.() -> Unit): Int = coroutineScope {
 
@@ -90,7 +69,6 @@ suspend fun execVoid(start: CoroutineStart = CoroutineStart.DEFAULT, config: Pro
     val runningProcess = execAsync(configActual, start)
     runningProcess.await()
 }
-@InternalCoroutinesApi
 @Throws(InvalidExitCodeException::class)
 suspend fun execVoid(
         commandFirst: String, vararg commandRest: String,
@@ -144,7 +122,7 @@ private fun Throwable.mergeCauses(cause: Throwable?, entryPoint: ExecEntryPoint?
         null -> {
             //nothing to do
         }
-        else -> TODO("unknown entryPoint type $entryPoint")
+        else -> nfg("unknown entryPoint type $entryPoint")
     }
 }
 
@@ -156,7 +134,7 @@ internal fun makeExitCodeException(config: ProcessConfiguration, exitCode: Int, 
         appendln("exec '${config.command.joinToString(" ")}'")
 
         val parentheticDescription = when(expectedCodes?.size){
-            null -> "any exit value".also { TODO("How did you get here!?") }
+            null -> "any exit value".also { nfg("How did you get here!?") }
             1 -> "${expectedCodes.single()}"
             in 2 .. Int.MAX_VALUE -> "one of ${expectedCodes.joinToString()}"
             else -> TODO()

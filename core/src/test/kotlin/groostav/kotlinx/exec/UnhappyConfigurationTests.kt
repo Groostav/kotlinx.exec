@@ -1,14 +1,12 @@
 package groostav.kotlinx.exec
 
 import junit.framework.Assert.assertTrue
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import java.nio.file.Paths
 import kotlin.test.assertEquals
 
-@InternalCoroutinesApi
 class UnhappyConfigurationTests {
 
     val OSLocalizedNoSuchFileMessage = when(JavaProcessOS) {

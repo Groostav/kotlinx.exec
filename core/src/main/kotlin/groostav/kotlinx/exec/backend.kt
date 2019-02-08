@@ -131,3 +131,6 @@ internal inline fun <T> Try(block: () -> T) = try { block() } catch (e: Exceptio
 // uhhh does this leak handles? if you attach your coroutine to this... does it hang on?
 // done jobs have not listeners. No, this is not a leak.
 object DONE_JOB: Job by GlobalScope.launch(CoroutineName("DONE_JOB"), block = {})
+
+internal fun nfg(): Nothing = TODO()
+internal fun nfg(message: String): Nothing = TODO(message)

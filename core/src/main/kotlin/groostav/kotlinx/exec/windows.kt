@@ -60,7 +60,6 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
      *
      * It has no impact on GUI applications.
      */
-    @InternalCoroutinesApi
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
 
         fun exitedWhileBeingKilled() = Supported(Unit).also {
@@ -164,7 +163,6 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
         return Supported(Unit)
     }
 
-    @InternalCoroutinesApi
     override fun killForcefullyAsync(includeDescendants: Boolean): Supported<Unit> {
 
         var command = listOf("taskkill")

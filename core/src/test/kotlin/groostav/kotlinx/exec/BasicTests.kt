@@ -1,14 +1,12 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-@InternalCoroutinesApi
 class BasicTests {
 
     @Test
@@ -36,7 +34,6 @@ class BasicTests {
         val procWasComplete = proc.isCompleted
 
         //act
-        proc.start()
         val code = proc.await()
 
         //assert 2

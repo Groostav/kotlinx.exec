@@ -17,6 +17,7 @@ import kotlin.reflect.jvm.jvmName
 import kotlin.test.*
 
 
+@InternalCoroutinesApi
 class KotlinTests {
 
     @Ignore("unbelievable, select {} does simply abandon you!")
@@ -149,7 +150,7 @@ class KotlinTests {
             //else wait for the other to complete
             side == Side.Left -> right.await()
             side == Side.Right -> left.await()
-            else -> TODO()
+            else -> nfg()
         }
     }
 
@@ -181,7 +182,7 @@ class KotlinTests {
 
     @Test fun `when using orAsyncLazy should not start until left completes`() = runBlocking {
         val left = CompletableDeferred<Boolean>()
-        val right: suspend () -> Nothing = { TODO("blam: you evaluated right eagerly!") }
+        val right: suspend () -> Nothing = { nfg("blam: you evaluated right eagerly!") }
 
         val result = left orAsyncLazy { right() }
 
@@ -358,11 +359,11 @@ class KotlinTests {
         //region copied from DeferredCoroutine
 
 //        override val cancelsParent: Boolean get() = true
-        override fun getCompleted(): Int = TODO("delegates to internal method with bad type: getCompletedInternal() as Int")
-        override suspend fun await(): Int = TODO("delegates to internal method with bad type: awaitInternal() as Int")
+        override fun getCompleted(): Int = nfg("delegates to internal method with bad type: getCompletedInternal() as Int")
+        override suspend fun await(): Int = nfg("delegates to internal method with bad type: awaitInternal() as Int")
         override val onAwait: SelectClause1<Int> get() = this
         override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R) =
-                TODO("delegates to internal method with bad type: registerSelectClause1Internal(select, block)")
+                nfg("delegates to internal method with bad type: registerSelectClause1Internal(select, block)")
 
         //endregion
 
@@ -383,7 +384,6 @@ class KotlinTests {
         }
     }
 
-    @InternalCoroutinesApi
     @Ignore("written to poke at the internals of coroutines, doesnt actually check anything.")
     @Test fun `when using my coroutine should coroutine things nicely`() = with(MyCoroutine){
 
@@ -483,7 +483,7 @@ class KotlinTests {
     }
     object MaindThingy{
         @JvmStatic fun main(args: Array<String>){
-            TODO()
+            nfg()
         }
     }
 

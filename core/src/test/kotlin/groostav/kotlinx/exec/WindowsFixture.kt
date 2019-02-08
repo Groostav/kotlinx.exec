@@ -1,13 +1,10 @@
 package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
-import io.mockk.mockk
-import kotlinx.coroutines.InternalCoroutinesApi
 import org.junit.Assume
 import org.junit.BeforeClass
 import org.junit.Test
 
-@InternalCoroutinesApi
 class WindowsFixture {
 
     companion object {

@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
@@ -25,7 +24,6 @@ import kotlin.test.assertTrue
  * Thus, this library asks you for a set of expected exit codes, runs your process,
  * and throws an exception with a copy of recent std-err when the actual exit code does not match.
  */
-@InternalCoroutinesApi
 class BadExitCodeTests {
 
     @Test

@@ -1,7 +1,6 @@
 package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
@@ -9,7 +8,6 @@ import org.amshove.kluent.shouldEqual
 import org.junit.Test
 import kotlin.test.assertEquals
 
-@InternalCoroutinesApi
 class StandardIOTests {
 
     @Test

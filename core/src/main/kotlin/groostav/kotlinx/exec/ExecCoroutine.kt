@@ -18,6 +18,35 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 import kotlin.coroutines.*
 
+//this class exists to avoid @InternalCoroutinesApi.
+// I get the concern, but I really dont think the things I'm doing are likely to be un-implementable.
+// I'll stay at < version 1.0 until we are using 100% stable APIs.
+
+internal interface ExecAsyncProvider {
+    fun execAsync(scope: CoroutineScope, config: ProcessConfiguration, start: CoroutineStart): RunningProcess
+}
+internal object ExecAsyncImpl: ExecAsyncProvider {
+    @InternalCoroutinesApi
+    override fun execAsync(scope: CoroutineScope, config: ProcessConfiguration, start: CoroutineStart) = scope.run {
+        val newContext = newCoroutineContext(EmptyCoroutineContext)
+        val coroutine = ExecCoroutine(
+                config,
+                newContext, start,
+                makePIDGenerator(), makeListenerProviderFactory(), CompositeProcessControlFactory
+        )
+
+        if(start != CoroutineStart.LAZY) {
+            coroutine.prestart().also { require(it) }
+            coroutine.kickoff().also { require(it) }
+        }
+        coroutine.start(start, coroutine, ExecCoroutine::waitFor)
+
+        coroutine
+    }
+}
+
+internal val EXEC_ASYNC_WRAPPER = ExecAsyncImpl as ExecAsyncProvider
+
 @InternalCoroutinesApi
 internal class ExecCoroutine(
         private val config: ProcessConfiguration,
@@ -117,7 +146,7 @@ internal class ExecCoroutine(
         is State.Euthanized -> throw IllegalStateException("process not started")
     }
 
-    internal fun prestart(): Boolean {
+    fun prestart(): Boolean {
 
         val myChange = State.WarmingUp()
         val warmingUp = atomicState.updateAndGet(this) { when(it){
@@ -217,7 +246,7 @@ internal class ExecCoroutine(
         return true
     }
 
-    internal fun kickoff(): Boolean {
+    fun kickoff(): Boolean {
 
         val myChange = State.Starting()
 
@@ -290,7 +319,7 @@ internal class ExecCoroutine(
         return true
     }
 
-    internal suspend fun waitFor(): Int {
+    suspend fun waitFor(): Int {
 
         val initialState = state
         val initialized = when(initialState){
@@ -351,7 +380,7 @@ internal class ExecCoroutine(
             true -> killer.tryKillGracefullyAsync(config.includeDescendantsInKill)
             false -> killer.killForcefullyAsync(config.includeDescendantsInKill)
         }
-        //TODO: from what i can tell theres nothing meaningful to synchronize on here.
+        //from what i can tell theres nothing meaningful to synchronize on here.
         // - waiting until the interrupt/kill is dispatched doesnt provide anything useful
         // - waiting until the process is dead is redundant --you can just use exitCode.await() for that.
         // so why return a job at all? why not just return unit? _it gives me the willies_
@@ -588,17 +617,13 @@ internal class ExecCoroutine(
                 "state"
         )
     }
-
-    private fun loopOnState(block: (State) -> Unit){
-        while(true){
-            block(state)
-        }
-    }
 }
 
 private val jobId = AtomicInteger(1)
 
-private fun makeName(config: ProcessConfiguration): CoroutineName = CoroutineName(config.debugName ?: "exec ${makeNameString(config, 50)}")
+private fun makeName(config: ProcessConfiguration)= CoroutineName(
+        config.debugName ?: "exec ${makeNameString(config, 50)}"
+)
 
 private fun makeNameString(config: ProcessConfiguration, targetLength: Int) = buildString {
     val commandSeq = config.command.asSequence()
