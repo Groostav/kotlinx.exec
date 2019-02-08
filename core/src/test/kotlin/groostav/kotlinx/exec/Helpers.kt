@@ -3,11 +3,13 @@ package groostav.kotlinx.exec
 
 import groostav.kotlinx.exec.ProcessOS.Unix
 import groostav.kotlinx.exec.ProcessOS.Windows
-import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.*
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.time.onTimeout
 import java.nio.file.Paths
 import java.util.*
 import java.util.regex.Pattern
-import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 inline fun <T> queueOf(vararg elements: T): Queue<T> {
     val result = LinkedList<T>()
@@ -105,13 +107,33 @@ internal suspend fun assertNotListed(vararg deadProcessIDs: Int){
     // both powershell and ps have output formatting options,
     // but I'd rather demo working line-by-line with a regex.
 
-    val runningPIDs: List<Int> = when(JavaProcessOS){
+    val runningPIDs: List<Int> = pollRunningPIDs().sorted()
+    val zombies = deadProcessIDs.toSet() intersect runningPIDs.toSet()
+
+    assertTrue(zombies.isEmpty(), "${zombies.joinToString()} is still running")
+}
+
+@InternalCoroutinesApi
+internal suspend fun waitForTerminationOf(pid: Int, timeout: Long = 30_000){
+
+    val finished = withTimeoutOrNull(timeout){
+        while(pid in pollRunningPIDs()) delay(20)
+        require(pid !in pollRunningPIDs())
+        Unit
+    }
+
+    require(finished != null) { "timed-out waiting for completion of $pid" }
+}
+
+@InternalCoroutinesApi
+private suspend fun pollRunningPIDs(): List<Int> {
+    val runningPIDs: List<Int> = when (JavaProcessOS) {
         Unix -> {
             val firstIntOnLineRegex = Pattern.compile(
-                    "(?<pid>\\d+)\\s+"+
-                    "(?<terminalName>\\S+)\\s+"+
-                    "(?<time>\\d\\d:\\d\\d:\\d\\d)\\s+"+
-                    "(?<processName>\\S+)"
+                    "(?<pid>\\d+)\\s+" +
+                            "(?<terminalName>\\S+)\\s+" +
+                            "(?<time>\\d\\d:\\d\\d:\\d\\d)\\s+" +
+                            "(?<processName>\\S+)"
             )
             exec("ps", "-a")
                     .outputAndErrorLines
@@ -125,13 +147,13 @@ internal suspend fun assertNotListed(vararg deadProcessIDs: Int){
         Windows -> {
             val getProcessLineRegex = Pattern.compile(
                     "(?<handleCount>\\d)+\\s+" +
-                    "(?<nonPagedMemKb>\\d)+\\s+" +
-                    "(?<pagedMemKb>\\d+)\\s+" +
-                    "(?<workingSetKb>\\d+)\\s+" +
-                    "((?<processorTimeSeconds>\\S+)\\s+)?" +
-                    "(?<pid>\\d+)\\s+" +
-                    "(?<somethingImportant>\\d+)\\s+" +
-                    "(?<processName>.*)"
+                            "(?<nonPagedMemKb>\\d)+\\s+" +
+                            "(?<pagedMemKb>\\d+)\\s+" +
+                            "(?<workingSetKb>\\d+)\\s+" +
+                            "((?<processorTimeSeconds>\\S+)\\s+)?" +
+                            "(?<pid>\\d+)\\s+" +
+                            "(?<somethingImportant>\\d+)\\s+" +
+                            "(?<processName>.*)"
             )
             val getProcess = exec {
                 command = listOf("powershell.exe", "-Command", "Get-Process")
@@ -146,10 +168,6 @@ internal suspend fun assertNotListed(vararg deadProcessIDs: Int){
                                 ?: TODO("no PID on `GetProcess` record '$pidRecord'")
                     }
         }
-
     }
-
-    for(deadProcessID in deadProcessIDs){
-        assertFalse("$deadProcessID is running") { deadProcessID in runningPIDs }
-    }
+    return runningPIDs
 }

@@ -4,16 +4,12 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.select
 import org.amshove.kluent.*
-import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.BeforeClass
 import org.junit.Ignore
 import org.junit.Test
 import java.util.*
-import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 
 // Wow, so powershell takes 10X longer to start (~1 second) than cmd (~100ms)
@@ -216,7 +212,7 @@ class WindowsTests {
             null
         }
         //note, a scripts 'thrown error' is simply 'exit code 1' in powershell semantics
-        catch(ex: InvalidExitValueException){ ex }
+        catch(ex: InvalidExitCodeException){ ex }
 
         assertEquals("""
             |exec 'powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass'
@@ -246,7 +242,7 @@ class WindowsTests {
             running.await()
             null
         }
-        catch(ex: InvalidExitValueException){ ex }
+        catch(ex: InvalidExitCodeException){ ex }
 
         assertEquals("""
             |exec 'powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass'

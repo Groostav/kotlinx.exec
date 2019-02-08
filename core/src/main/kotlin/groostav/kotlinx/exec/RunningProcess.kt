@@ -46,17 +46,17 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Def
     val standardInput: SendChannel<Char>
 
     /**
-     * The exit code of the process, or [InvalidExitValueException] if configured
+     * awaits the exit code of the process,
+     * or a [CancellationException] at time of [kill] or [cancel],
+     * or an [InvalidExitCodeException] if one was configured via [ProcessBuilder.expectedOutputCodes]
      *
      * If the process exits normally, and the process exit code is one of
      * [ProcessConfiguration.expectedOutputCodes], then this value will be completed
      * with the exit code provided by the child process. If the process exits
      * with a code that is _not_ in the `expectedOutputCodes`, it will throw
-     * an [InvalidExitValueException].
-     *
-     * Cancellation of this deferred will kill the backing process.
+     * an [InvalidExitCodeException].
      */
-    @Throws(InvalidExitValueException::class)
+    @Throws(InvalidExitCodeException::class, CancellationException::class)
     override suspend fun await(): Int
 
     /**
@@ -76,7 +76,7 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Def
      *
      * Once this method returns, all outputs will be closed.
      */
-    suspend fun kill(): Unit
+    suspend fun kill(obtrudeExitCode: Int? = null): Unit
 
 
     override val isClosedForReceive: Boolean

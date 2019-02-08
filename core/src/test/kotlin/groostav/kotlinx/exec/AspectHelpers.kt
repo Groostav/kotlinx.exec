@@ -1,9 +1,12 @@
 package groostav.kotlinx.exec
 
+import org.junit.Ignore
 import org.junit.Test
 
 
 class AspectHelpers {
+
+    @Ignore("after an attempt, I couldnt get aspectJ into the build system with kapt. Will try again")
     @Test fun `stuff`(): Unit = TODO("""
         Can we apply some aspect oriented programming techniques to help us cover some things?
         For example, buffers (or threads, in the case of blocking listeners) must be acquired before the `start()` call

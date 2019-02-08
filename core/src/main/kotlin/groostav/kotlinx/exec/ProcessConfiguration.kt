@@ -136,14 +136,14 @@ data class ProcessConfiguration internal constructor(
          * If a [RunningProcess] instance exits...
          * 1. ...and this set is `null` then all exit codes will be treated as valid will be used to complete [RunningProcess.exitCode]
          * 2. ...with an exit code that is in this set then it will be used to complete [RunningProcess.exitCode]
-         * 3. ...with an exit code that is not in this non-null set then [RunningProcess.exitCode] throws [InvalidExitValueException].
+         * 3. ...with an exit code that is not in this non-null set then [RunningProcess.exitCode] throws [InvalidExitCodeException].
          */
         var expectedOutputCodes: Set<Int>? = setOf(0), //see also
 
         /**
          * Number of lines to be kept for generation of the exception on a bad exit code.
          *
-         * [InvalidExitValueException]s are thrown when an unexpected exit code is generatated,
+         * [InvalidExitCodeException]s are thrown when an unexpected exit code is generatated,
          * those exceptions include a message that contains the most recent messages written to standard-error.
          * This value changes the number of lines that will be buffered for the purpose of generating that message.
          *

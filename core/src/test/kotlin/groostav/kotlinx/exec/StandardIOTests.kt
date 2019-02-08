@@ -1,11 +1,8 @@
 package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.ClosedSendChannelException
-import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
 import org.amshove.kluent.shouldEqual
@@ -39,7 +36,7 @@ class StandardIOTests {
             running.await()
             null
         }
-        catch(ex: InvalidExitValueException){ ex }
+        catch(ex: InvalidExitCodeException){ ex }
 
         // assert that the error message contains the most recently emitted std-error message,
         // not something from the beginning

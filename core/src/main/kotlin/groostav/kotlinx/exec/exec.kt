@@ -45,7 +45,7 @@ fun CoroutineScope.execAsync(
 }
 
 @InternalCoroutinesApi
-@Throws(InvalidExitValueException::class)
+@Throws(InvalidExitCodeException::class)
 suspend fun exec(
         start: CoroutineStart = CoroutineStart.DEFAULT,
         config: ProcessConfiguration.() -> Unit
@@ -69,12 +69,12 @@ suspend fun exec(
 }
 
 @InternalCoroutinesApi
-@Throws(InvalidExitValueException::class)
+@Throws(InvalidExitCodeException::class)
 suspend fun exec(commandFirst: String, vararg commandRest: String, start: CoroutineStart = CoroutineStart.DEFAULT): ProcessResult
         = exec(start) { command = listOf(commandFirst) + commandRest }
 
 @InternalCoroutinesApi
-@Throws(InvalidExitValueException::class)
+@Throws(InvalidExitCodeException::class)
 suspend fun execVoid(start: CoroutineStart = CoroutineStart.DEFAULT, config: ProcessConfiguration.() -> Unit): Int = coroutineScope {
 
     val configActual = configureProcess {
@@ -91,7 +91,7 @@ suspend fun execVoid(start: CoroutineStart = CoroutineStart.DEFAULT, config: Pro
     runningProcess.await()
 }
 @InternalCoroutinesApi
-@Throws(InvalidExitValueException::class)
+@Throws(InvalidExitCodeException::class)
 suspend fun execVoid(
         commandFirst: String, vararg commandRest: String,
         start: CoroutineStart = CoroutineStart.DEFAULT
@@ -102,7 +102,7 @@ suspend fun execVoid(
 class InvalidExecConfigurationException(message: String, cause: Exception? = null)
     : IllegalArgumentException(message, cause)
 
-class InvalidExitValueException(
+class InvalidExitCodeException(
         val command: List<String>,
         val exitValue: Int,
         val expectedExitCodes: Set<Int>?,
@@ -152,7 +152,7 @@ private fun Throwable.mergeCauses(cause: Throwable?, entryPoint: ExecEntryPoint?
 }
 
 
-internal fun makeExitCodeException(config: ProcessConfiguration, exitCode: Int, recentErrorOutput: List<String>): InvalidExitValueException {
+internal fun makeExitCodeException(config: ProcessConfiguration, exitCode: Int, recentErrorOutput: List<String>): InvalidExitCodeException {
     val expectedCodes = config.expectedOutputCodes
     val builder = buildString {
 
@@ -172,7 +172,7 @@ internal fun makeExitCodeException(config: ProcessConfiguration, exitCode: Int, 
         }
     }
 
-    val result = InvalidExitValueException(config.command, exitCode, expectedCodes, recentErrorOutput, builder, config.source)
+    val result = InvalidExitCodeException(config.command, exitCode, expectedCodes, recentErrorOutput, builder, config.source)
 
     require(result.stackTrace != null)
 

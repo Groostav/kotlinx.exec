@@ -6,14 +6,13 @@ import org.junit.Test
 import java.util.regex.Pattern
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 @InternalCoroutinesApi
-class KillTests {
+class CancelAndKillTests {
 
     @Test
-    fun `when killing a process should exit without finishing`() = runBlocking<Unit>{
+    fun `when killing a process should suspend until process is terminated`() = runBlocking<Unit>{
         //setup
         val runningProcess = execAsync {
             command = hangingCommand()
@@ -21,7 +20,26 @@ class KillTests {
 
         //act
         val completedAfter100ms = withTimeoutOrNull(100) { runningProcess.join() } != null
-        runningProcess.kill()
+        runningProcess.kill(99)
+
+        //assert
+        assertFalse(completedAfter100ms)
+        assertTrue(runningProcess.isCompleted)
+        assertNotListed(runningProcess.processID)
+        assertEquals(ExitCode(99), runningProcess.last())
+    }
+
+    @Test
+    fun `when cancelling a process should exit without finishing asynchronously`() = runBlocking<Unit>{
+        //setup
+        val runningProcess = execAsync {
+            command = hangingCommand()
+        }
+
+        //act
+        val completedAfter100ms = withTimeoutOrNull(100) { runningProcess.join() } != null
+        runningProcess.cancel()
+        waitForTerminationOf(runningProcess.processID) //note that cancel() does not synchronize on the job finishing.
 
         //assert
         assertFalse(completedAfter100ms)
@@ -34,21 +52,23 @@ class KillTests {
         // as a correllary to the above test, when cancelling the parent scope,
         // we emit a `kill` command to the process.
 
-        var id: Int? = null
+        var pid: Int? = null
         val jobThatSpawnsSubProcess = launch {
             val proxy = this.execAsync {
                 command = hangingCommand()
             }
 
-            id = proxy.processID
+            pid = proxy.processID
         }
 
+        //act
         delay(100) // cant call `jobThatSpawnsProcess.join()`
         // because it never finishes, because `hangingCommand` never exits
-
         jobThatSpawnsSubProcess.cancel()
+        waitForTerminationOf(pid!!)
 
-        assertNotListed(id!!)
+        //assert
+        assertNotListed(pid!!)
     }
 
 
@@ -66,13 +86,10 @@ class KillTests {
             listOf(first) + runningProcess.toList()
         }
         firstMessageReceived.await()
-        runningProcess.kill()
+        runningProcess.kill(99)
 
         //assert
-        val messages = result.await()
-        assertEquals(2, messages.size)
-        assertEquals(StandardOutputMessage("Hello!"), messages.first())
-        assertNotEquals(ExitCode(0), messages.last())
+        assertEquals(listOf(StandardOutputMessage("Hello!"), ExitCode(99)), result.await())
         assertThrows<CancellationException> { runningProcess.await() }
         assertNotListed(runningProcess.processID)
     }
@@ -110,7 +127,7 @@ class KillTests {
 
         //act
         val pids = pidsFuture.await()
-        runningProcess.kill()
+        runningProcess.kill(null)
 
         //assert
         assertEquals(3, pids.size)
@@ -134,7 +151,7 @@ class KillTests {
         }
 
         //act
-        process.kill()
+        process.kill(null)
 
         //assert
         assertNotListed(process.processID)
@@ -151,7 +168,7 @@ class KillTests {
             gracefulTimeoutMillis = 9999999999
         }
         delay(3000)
-        launch { process.kill() }
+        launch { process.kill(null) }
 
         //act
         val result = process.toList()
@@ -170,7 +187,7 @@ class KillTests {
         }
 
         //act
-        unstartedProcess.kill()
+        unstartedProcess.kill(null)
 
         //assert
         unstartedProcess.apply {

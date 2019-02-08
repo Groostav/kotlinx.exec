@@ -44,7 +44,11 @@ internal class ExecCoroutine(
 
     sealed class State {
         object Uninitialized: State()
-        class WarmingUp: State()
+        class WarmingUp: State() {
+            override fun equals(other: Any?) = this === other
+            override fun hashCode() = System.identityHashCode(this)
+        }
+
         data class Ready(
                 val jvmProcessBuilder: java.lang.ProcessBuilder = NullProcBuilder,
                 val recentErrorOutput: LinkedList<String> = LinkedList(),
@@ -59,14 +63,16 @@ internal class ExecCoroutine(
                 val prev: Ready,
                 val process: Process,
                 val pid: Int,
+                val comittedExitCode: Int? = null,
                 val interrupt: SourcedTermination? = null,
                 val reaper: SourcedTermination? = null
         ): State(){
-            // unfortunately I just want the data-class for the copy.
-            // equals and hashcode are overidden so CAS semantics stay ref-safe.
-            override fun toString() = "Running(PID=$pid${if(reaper != null) ", hasReaper)" else ")"}"
-            override fun equals(other: Any?) = super.equals(other)
-            override fun hashCode(): Int = super.hashCode()
+            override fun toString() = buildString {
+                append("Running(")
+                append("PID=").append(pid)
+                if (reaper != null) append(", hasReaper")
+                append(")")
+            }
 
             internal data class SourcedTermination(val source: CancellationException, val job: Job)
         }
@@ -132,7 +138,7 @@ internal class ExecCoroutine(
             stdoutInflection.openSubscription().tail(config.standardOutputBufferCharCount).sinkTo(standardOutput)
         }
 
-        var nextState = State.Ready(NullProcBuilder, LinkedList(), DONE_JOB, DONE_JOB, DONE_JOB)
+        var readyness = State.Ready(NullProcBuilder, LinkedList(), DONE_JOB, DONE_JOB, DONE_JOB)
 
         run prestartStderr@ {
             stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount).sinkTo(standardError)
@@ -140,7 +146,7 @@ internal class ExecCoroutine(
             val errorLines = stderrInflection.openSubscription("err-cache").lines()
 
             launchChild("errorCacheJob") {
-                nextState.recentErrorOutput.apply {
+                readyness.recentErrorOutput.apply {
                     errorLines.consumeEach { errorMessageLine ->
                         addLast(errorMessageLine)
                         if (size > config.linesForExceptionError) {
@@ -153,25 +159,38 @@ internal class ExecCoroutine(
 
         if(config.aggregateOutputBufferLineCount > 0) {
             val stdoutForAggregator = stdoutInflection.openSubscription("aggregator").lines()
-            nextState = nextState.copy(stdoutAggregatorJob = launchChild("stdoutAggregatorJob") {
+            readyness = readyness.copy(stdoutAggregatorJob = launchChild("stdoutAggregatorJob") {
                 for (message in stdoutForAggregator) {
                     aggregateChannel.pushForward(StandardOutputMessage(message))
                 }
             })
             val stderrForAggregator = stderrInflection.openSubscription("aggregator").lines()
-            nextState = nextState.copy(stderrAggregatorJob = launchChild("stderrAggregatorJob") {
+            readyness = readyness.copy(stderrAggregatorJob = launchChild("stderrAggregatorJob") {
                 for (message in stderrForAggregator) {
                     aggregateChannel.pushForward(StandardErrorMessage(message))
                 }
             })
         }
 
-        nextState = nextState.copy(exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
-            val result = exitCodeInflection.await()
+        readyness = readyness.copy(exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
+            var result = exitCodeInflection.await()
+
+            fail; // what does this say about the state machine?
+            val completing = atomicState.updateAndGet(this@ExecCoroutine){ when {
+                it is State.Running && it.comittedExitCode == null -> it.copy(comittedExitCode = result)
+                else -> it
+            }}
+            result = when(completing){
+                is State.Completed -> completing.exitCode
+                is State.Running -> completing.comittedExitCode!!
+                else -> TODO()
+            }
+
+
             // the concurrent nature here means we could get std-out messages after an exit code,
             // which is just strange. So We'll sync on the output streams, making sure they come first.
-            nextState.stdoutAggregatorJob.join()
-            nextState.stderrAggregatorJob.join()
+            readyness.stdoutAggregatorJob.join()
+            readyness.stderrAggregatorJob.join()
 
             if (config.exitCodeInResultAggregateChannel) {
                 aggregateChannel.pushForward(ExitCode(result))
@@ -179,7 +198,7 @@ internal class ExecCoroutine(
             else {} //even if we dont aggregate the output, we sill need this job as a sync point.
         })
 
-        nextState = nextState.copy(jvmProcessBuilder = makeProcessBuilder(config.command).apply {
+        readyness = readyness.copy(jvmProcessBuilder = makeProcessBuilder(config.command).apply {
 
             if (environment() !== config.environment) environment().apply {
                 clear()
@@ -197,11 +216,11 @@ internal class ExecCoroutine(
         })
 
         val result = atomicState.updateAndGet(this){ when(it){
-            warmingUp -> nextState
+            warmingUp -> readyness
             else -> it
         }}
 
-        if(result != nextState){
+        if(result != readyness){
             trace { "state set to $result while warming-up."}
             return false
         }
@@ -278,15 +297,15 @@ internal class ExecCoroutine(
 
             stderrInflection.asJob().join()
             stdoutInflection.asJob().join()
-            val exitCode = exitCodeInflection.await()
+            val providedExitCode = exitCodeInflection.await()
 
+            fail; //TODO this means if you dont call waitFor itl never complete?!
             val stateBeforeCompletion = atomicState.getAndUpdate(this){ when(it){
-                running -> State.Completed(running.pid, exitCode)
-                // somebody concurrently updated us to running, adding a reaper
-                // either way we're done.
-                is State.Running -> State.Completed(running.pid, exitCode)
+                is State.Running -> State.Completed(running.pid, it.comittedExitCode ?: providedExitCode)
                 else -> throw makeCME(expected = running)
             }} as State.Running
+
+            val exitCode = stateBeforeCompletion.comittedExitCode ?: providedExitCode
 
             val expectedExitCodes = config.expectedOutputCodes
 
@@ -305,10 +324,12 @@ internal class ExecCoroutine(
             }
 
             result.also { trace { "exec '$shortName'(PID=${running.pid}) returned with code $result" } }
-        } catch(ex: Exception){
+        }
+        catch(ex: Exception){
             trace { "exec '$shortName'(PID=${Try { processID }}) threw an exception of '$ex'" }
             throw ex
-        } finally {
+        }
+        finally {
             teardown()
         }
     }
@@ -333,22 +354,21 @@ internal class ExecCoroutine(
         // so why return a job at all? why not just return unit? _it gives me the willies_
     }
 
-    private fun tryKillAsync(source: CancellationException, gentle: Boolean = false): Unit {
+    private fun tryKillAsync(source: CancellationException, obtrudeExitCode: Int?, gentle: Boolean = false): Unit {
 
-        // we atomically update a state to 'Doomed', that state is checked before return in the exec body
         val newState = atomicState.updateAndGet(this){ when(it) {
             State.Uninitialized -> State.Euthanized(first = true)
             is State.WarmingUp -> State.Euthanized(first = true)
             is State.Ready -> State.Euthanized(first = true)
             is State.Starting -> {
-                it.copy(jobs = it.jobs + { tryKillAsync(source, gentle) })
+                it.copy(jobs = it.jobs + { tryKillAsync(source, obtrudeExitCode, gentle) })
             }
             is State.Running -> {
                 val interruptOrReaper = makeUnstartedInterruptOrReaper(it, gentle)
                 val sourcedInterruptOrReaper = State.Running.SourcedTermination(source, interruptOrReaper)
 
-                if (gentle) it.copy(interrupt = sourcedInterruptOrReaper)
-                        else it.copy(reaper = sourcedInterruptOrReaper)
+                if (gentle) it.copy(interrupt = sourcedInterruptOrReaper, comittedExitCode = obtrudeExitCode)
+                        else it.copy(reaper = sourcedInterruptOrReaper, comittedExitCode = obtrudeExitCode)
             }
             is State.Completed -> it
             is State.Euthanized -> it.copy(first = false)
@@ -395,13 +415,13 @@ internal class ExecCoroutine(
         ::waitFor.createCoroutine(this).resume(Unit)
     }
 
-    override suspend fun kill() {
+    override suspend fun kill(obtrudeExitCode: Int?) {
 
         val killSource = CancellationException()
 
         val killedNormally = if(config.gracefulTimeoutMillis > 0){
             val killed = withTimeoutOrNull(config.gracefulTimeoutMillis) {
-                tryKillAsync(gentle = true, source = killSource)
+                tryKillAsync(gentle = true, obtrudeExitCode = obtrudeExitCode, source = killSource)
                 join()
             } != null
 
@@ -410,7 +430,7 @@ internal class ExecCoroutine(
         else false
 
         if ( ! killedNormally) {
-            tryKillAsync(gentle = false, source = killSource)
+            tryKillAsync(gentle = false, obtrudeExitCode = obtrudeExitCode, source = killSource)
             join()
         }
 
@@ -425,10 +445,10 @@ internal class ExecCoroutine(
         val description = when(cause){
             null -> "completed normally"
             is CancellationException -> {
-                tryKillAsync(cause)
+                tryKillAsync(cause, obtrudeExitCode = null)
                 "cancelled"
             }
-            is InvalidExitValueException -> {
+            is InvalidExitCodeException -> {
                 "completed with bad exit code"
             }
             else -> {
@@ -436,13 +456,14 @@ internal class ExecCoroutine(
                 "unknown failure"
             }
         }
-        trace { "finished as '$description' $this" }
+        trace { "onCancellation for $shortName: '$description'" }
     }
 
     override fun cancel0(): Boolean = cancel(null)
 
     override fun cancel(cause: Throwable?): Boolean {
         return super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
+        //see [onCancellation]
     }
 
     override fun close() {
