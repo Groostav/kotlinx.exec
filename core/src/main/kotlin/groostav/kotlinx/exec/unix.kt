@@ -72,4 +72,4 @@ internal class UnixReflectivePIDGen: ProcessIDGenerator {
     override fun findPID(process: Process): PID = field.getInt(process)
 }
 
-private val OS_NOT_UNIX = Unsupported("OS is not unix")
+private val OS_NOT_UNIX = Unsupported("OS is not unix", UnixProcessControl::class.simpleName)

@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Use fake process objects to project odd but legal behaviour from process API,
@@ -27,7 +28,7 @@ internal class TortureTests {
 
         // act
         interceptors.apply {
-            emit(ExitCode(99))
+            emit(ExitCode(0))
             emit(StandardOutputMessage("ahah"))
             standardError.close()
             standardInput.close()
@@ -53,7 +54,7 @@ internal class TortureTests {
 
         // act
         interceptors.apply {
-            emit(ExitCode(99))
+            emit(ExitCode(0))
             emit(StandardOutputMessage("ahah"))
             standardOutput.close()
             standardInput.close()
@@ -71,14 +72,33 @@ internal class TortureTests {
         assertFalse(exec.state.errEOF, "expected stderrEOF=false, but state=${exec.state}")
     }
 
+    @Test fun `when process completes without anybody waiting for it should go into completed state anyways`() = runBlocking<Unit> {
+        // setup
+        val interceptors = Interceptors()
+        val exec = makeStartedExecCoroutine(interceptors)
+
+        // act
+        interceptors.apply {
+            standardOutput.close()
+            standardInput.close()
+            standardError.close()
+            exitCode.complete(0)
+        }
+        delay(300)
+
+        // assert
+        assertTrue(exec.isCompleted)
+        assertEquals(ExecCoroutine.State.Completed(1, 0, null, null), exec.state)
+    }
+
     val ExecCoroutine.State.outEOF: Boolean get() = when(this){
         is ExecCoroutine.State.Running -> stdoutEOF
-        is ExecCoroutine.State.Completed -> stdoutEOF
+        is ExecCoroutine.State.WindingDown -> stdoutEOF
         else -> false
     }
     val ExecCoroutine.State.errEOF: Boolean get() = when(this){
         is ExecCoroutine.State.Running -> stderrEOF
-        is ExecCoroutine.State.Completed -> stderrEOF
+        is ExecCoroutine.State.WindingDown -> stderrEOF
         else -> false
     }
 

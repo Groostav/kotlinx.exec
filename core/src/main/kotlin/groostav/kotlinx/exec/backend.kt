@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import com.sun.jna.Platform
 import kotlinx.coroutines.*
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -8,6 +9,9 @@ import java.nio.CharBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
 import kotlin.concurrent.thread
+import kotlin.jvm.internal.FunctionReference
+import kotlin.reflect.KClass
+import kotlin.reflect.KFunction
 
 //internal val TRACE = java.lang.Boolean.getBoolean("kotlinx.exec.trace")
 internal val TRACE = true
@@ -24,20 +28,13 @@ internal inline fun trace(message: () -> String){
 
 //TODO: this sorta ssumed we could decouple from JNA. Seems unlikely, so maybe just do Platform.isWindows() & Platform.isUnix()?
 enum class ProcessOS {
-    Windows, Unix;
+    Windows, Unix
 }
 
-internal val JavaProcessOS: ProcessOS = run {
-    //this is the strategy from apache commons lang... I hate it, but they seem to think it works.
-    //https://github.com/apache/commons-lang/blob/master/src/main/java/org/apache/commons/lang3/SystemUtils.java
-
-    val name = System.getProperty("os.name").toLowerCase()
-
-    when {
-        name.startsWith("windows") -> ProcessOS.Windows
-        name.startsWith("linux") || name.endsWith("bsd") -> ProcessOS.Unix
-        else -> throw UnsupportedOperationException("")
-    }
+internal val JavaProcessOS: ProcessOS = when {
+    Platform.isWindows() || Platform.isWindowsCE() -> ProcessOS.Windows
+    Platform.isLinux() || Platform.isFreeBSD() || Platform.isOpenBSD() || Platform.isSolaris()-> ProcessOS.Unix
+    else -> throw UnsupportedOperationException("unsupported OS:"+System.getProperty("os.name"))
 }
 
 //https://github.com/openstreetmap/josm/blob/master/src/org/openstreetmap/josm/tools/Utils.java
@@ -63,11 +60,22 @@ internal sealed class Maybe<out T> {
     abstract val value: T
 }
 internal data class Supported<out T>(override val value: T): Maybe<T>()
-internal data class Unsupported(val reason: String): Maybe<Nothing>() {
-    val platform = "${System.getProperty("os.name")}-jre${System.getProperty("java.version")}"
-    override val value: Nothing get() = throw UnsupportedOperationException("unsupported platform $platform")
+internal data class Unsupported(
+        val reason: String?,
+        val functionName: String? = null,
+        val typeName: String? = null,
+        val src: Unsupported? = null
+): Maybe<Nothing>() {
+    override val value: Nothing get(){
+        throw UnsupportedOperationException("cannot invoke ${header()}${traceMembers().joinToString("\n", "\n")}")
+    }
 }
 internal val SupportedUnit = Supported(Unit)
+
+internal val <T> Maybe<T>.valueOrNull: T? get() = when(this){
+    is Supported -> value
+    is Unsupported -> null
+}
 
 internal class NamedTracingProcessReader private constructor(
         src: InputStream,
@@ -111,20 +119,63 @@ internal class NamedTracingProcessReader private constructor(
 internal const val EOF_VALUE: Int = -1
 
 
+internal fun <T: Any> Sequence<Maybe<T>>.firstSupported(): T {
+    val candidate = this.firstOrNull { it is Supported<*> }
+    if(candidate != null) return candidate.value
 
-internal fun <R, S> List<S>.firstSupporting(call: (S) -> Maybe<R>): R {
-    val candidate = this.asSequence().map(call).filterIsInstance<Supported<R>>().firstOrNull()
-            ?: throw UnsupportedOperationException("none of $this supports $call")
+    val problems = this.filterIsInstance<Unsupported>().toList()
 
-    return candidate.value
+    val message = problems
+            .flatMap { listOf(it.header()) + it.traceMembers() }
+            .joinToString("\n\t", "\n\t")
+
+    val method = problems.map { it.functionName }.toSet().joinToString()
+
+    // killAsync 'reason' because 'cause.reason'
+    throw UnsupportedOperationException("$method is not supported:$message")
 }
 
-internal fun <R, S> List<S>.filterSupporting(call: (S) -> Maybe<R>): List<R> {
-    return this.map { call(it) }
-            .filterIsInstance<Supported<R>>()
-            .map { it.value }
+internal fun Unsupported.header() = "$typeName/$functionName:${reason?.let { " $it" } ?: ""}"
+internal fun Unsupported.traceMembers(): List<String> {
+    val members = generateSequence(src) { it.src }
+    return members.map { it.run {"\t$typeName/$functionName:${reason?.let { " $it" } ?: ""}"} }.toList()
 }
 
+
+internal fun <H, R, F> Maybe<H>.supporting(call: F): Maybe<R>
+        where H: Any, F: Function1<H, Maybe<R>>, F: KFunction<Maybe<R>>
+        = mapAndAppendMetaIfAppropriate(call) { call(it) }
+
+internal fun <H, P1, R, F> Maybe<H>.supporting(call: F, p1: P1): Maybe<R>
+        where H: Any, F: Function2<H, P1, Maybe<R>>, F: KFunction<Maybe<R>>
+        = mapAndAppendMetaIfAppropriate(call) { call(it, p1) }
+
+internal fun <H, P1, P2, R, F> Maybe<H>.supporting(call: F, p1: P1, p2: P2): Maybe<R>
+        where H: Any, F: Function3<H, P1, P2, Maybe<R>>, F: KFunction<Maybe<R>>
+        = mapAndAppendMetaIfAppropriate(call) { call(it, p1, p2) }
+
+internal fun <H, P1, P2, P3, R, F> Maybe<H>.supporting(call: F, p1: P1, p2: P2, p3: P3): Maybe<R>
+        where H: Any, F: Function4<H, P1, P2, P3, Maybe<R>>, F: KFunction<Maybe<R>>
+        = mapAndAppendMetaIfAppropriate(call) { call(it, p1, p2, p3) }
+
+//a lot of this goes away if they give us this syntax Host::method(arg1, arg2)
+// which binds arg1 and arg2 to p1 and p2.
+
+private fun <T: Any, R> Maybe<T>.mapAndAppendMetaIfAppropriate(call: KFunction<Maybe<R>>, boundCall: (T) -> Maybe<R>): Maybe<R> {
+
+    val result = if(this is Unsupported) Unsupported(null, src = this) else boundCall(value)
+
+    return when(result){
+        is Supported -> result
+        is Unsupported -> {
+            val typeName = when(this){
+                is Unsupported -> ((call as? FunctionReference)?.owner as? KClass<*>)?.qualifiedName ?: "unknown"
+                is Supported -> value::class.let { it.qualifiedName ?: "<anonymous>" }
+            }
+            result.copy(functionName = call.name, typeName = typeName.removePrefix("groostav.kotlinx.exec."))
+        }
+    }
+}
 
 internal inline fun <T> Try(block: () -> T) = try { block() } catch (e: Exception) { null }
 

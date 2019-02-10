@@ -13,10 +13,11 @@ import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.channels.consumeEach
 import com.sun.jna.platform.win32.WinDef.BOOL
 import com.sun.jna.platform.win32.WinError.ERROR_INVALID_HANDLE
-import com.sun.jna.platform.win32.WinError.ERROR_SUCCESS
 import com.sun.jna.ptr.IntByReference
 import java.io.Closeable
 import java.lang.ProcessBuilder.*
+import java.nio.file.Files
+import java.nio.file.Paths
 import java.time.Instant
 import java.util.*
 import kotlin.jvm.internal.FunctionReference
@@ -29,10 +30,12 @@ import kotlin.reflect.jvm.jvmName
 internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val process: Process, val selfPID: Int): ProcessControlFacade {
 
     companion object: ProcessControlFacade.Factory {
-        override fun create(config: ProcessConfiguration, process: Process, pid: Int) = if(Platform.isWindows()) {
+        override fun create(config: ProcessConfiguration, process: Process, pid: Int) = if(JavaProcessOS == ProcessOS.Windows) {
             Supported(WindowsProcessControl(config.gracefulTimeoutMillis, process, pid))
         }
         else OS_NOT_WINDOWS
+
+        val JavawLocation = System.getProperty("kotlinx.exec.javaw") ?: System.getProperty("java.home") + "/bin/javaw"
     }
 
     private val procHandle: WinNT.HANDLE = KERNEL_32.OpenProcess(WinNT.READ_CONTROL, false, selfPID)
@@ -61,6 +64,16 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
      * It has no impact on GUI applications.
      */
     override fun tryKillGracefullyAsync(includeDescendants: Boolean): Maybe<Unit> {
+
+        val javaw = Paths.get(JavawLocation)
+        if ( ! javaw.isAbsolute) {
+            // user could specify a relative javaw, and put it on $PATH/LD_LIBRARY_PATH,
+            // meaning we simply cant validate it eagerly.
+            // rather annoying that both System and JNA dont expose a "can i find this executable" option.
+            if ( ! Files.exists(javaw.parent) && ! Files.newDirectoryStream(javaw.parent, "javaw*").any()) {
+                return Unsupported("cannot find javaw executable at 'kotlinx.exec.javaw=$JavawLocation'")
+            }
+        }
 
         fun exitedWhileBeingKilled() = Supported(Unit).also {
             trace { "pid $selfPID exited while being killed" }
@@ -139,7 +152,7 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
                     trace { "killing ${win32Proc.pid}" }
                     val killpb = java.lang.ProcessBuilder().apply {
                         command(
-                                System.getProperty("java.home") + "/bin/javaw",
+                                javaw.toAbsolutePath().toString(),
                                 "-cp", System.getProperty("java.class.path"),
                                 PoliteLeechKiller::main.instanceTypeName,
                                 "-pid", win32Proc.pid.toString()
@@ -282,11 +295,10 @@ interface KERNEL_32: Kernel32 {
 }
 
 
-private val OS_NOT_WINDOWS = Unsupported("os is not windows")
+internal val OS_NOT_WINDOWS = Unsupported("OS is not windows")
 
 private const val SUCCESS = 0
 private const val UNKNOWN_ERROR = 1
-private const val NO_CONSOLE_TO_ATTACH_TO = 2
 
 /**
  * A Strange program that attaches itself to a PID's console input and sends it a CTRL + C signal.

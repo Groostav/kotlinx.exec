@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.SelectInstance
 import kotlinx.coroutines.sync.Mutex
+import java.io.Closeable
 import java.io.IOException
 import java.lang.ClassCastException
 import java.lang.IllegalStateException
@@ -71,14 +72,27 @@ internal class ExecCoroutine(
         require( ! aggregateChannel.isFull) { "aggregate channel is full at start, looks like a rendezvous channel?" }
     }
 
+    interface ExitCodeProvider {
+        val pid: Int
+        val exitCode: Int
+        val interrupt: CancellationException?
+        val reaper: CancellationException?
+    }
     sealed class State {
-        object Uninitialized: State()
+        class Uninitialized(name: String): State() {
+            val exitCodeInflection = CompletableDeferred<Int>()
+            val stdinInflection: Channel<Char> = Channel(Channel.RENDEZVOUS)
+            val stdoutInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("stdout[$name]")
+            val stderrInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("stderr[$name]")
+
+        }
         class WarmingUp: State() {
             override fun equals(other: Any?) = this === other
             override fun hashCode() = System.identityHashCode(this)
         }
 
         data class Ready(
+                val init: Uninitialized,
                 val jvmProcessBuilder: java.lang.ProcessBuilder = NullProcBuilder,
                 val recentErrorOutput: LinkedList<String> = LinkedList(),
                 val stdoutAggregatorJob: Job = DONE_JOB,
@@ -89,8 +103,10 @@ internal class ExecCoroutine(
         }
         data class Starting(val jobs: List<() -> Unit> = emptyList()): State()
         data class Running(
-                val prev: Ready,
+                val init: Uninitialized,
+                val ready: Ready,
                 val process: Process,
+                val pumps: Closeable,
                 val pid: Int,
                 val obtrudingExitCode: Int? = null,
                 val interrupt: SourcedTermination? = null,
@@ -105,33 +121,28 @@ internal class ExecCoroutine(
                 return "Running(pid=$pid, obtrudingExitCode=$obtrudingExitCode, interrupt=$interrupt, reaper=$reaper, stderrEOF=$stderrEOF, stdoutEOF=$stdoutEOF)"
             }
         }
-        data class Completed(
-                val pid: Int,
-                val exitCode: Int,
-                val interrupt: CancellationException?,
-                val reaper: CancellationException?,
+        data class WindingDown(
+                val pumps: Closeable,
+                override val pid: Int,
+                override val exitCode: Int,
+                override val interrupt: CancellationException?,
+                override val reaper: CancellationException?,
                 val stderrEOF: Boolean,
                 val stdoutEOF: Boolean
-        ): State()
+        ): State(), ExitCodeProvider
 
+        data class Completed(
+                override val pid: Int,
+                override val exitCode: Int,
+                override val interrupt: CancellationException?,
+                override val reaper: CancellationException?
+        ): State(), ExitCodeProvider
         data class Euthanized(val first: Boolean, val source: CancellationException): State()
     }
 
     private val shortName = config.debugName ?: makeNameString(config, targetLength = 20)
 
-    // we CAS for the states:
-    // - Uninitialized to WarmingUp,
-    // - Running(*) to Running(reaper)
-    // - Running to Completed
-    // the other states (WarmingUp, Ready, Running) are not CAS'd but instead use a best-effort CME.
-
-    internal @Volatile var state: State = State.Uninitialized
-        set(value) { field = value.also { trace { "process '$shortName' moved to state $it" } } }
-
-    private val exitCodeInflection = CompletableDeferred<Int>()
-    private val stdinInflection: Channel<Char> = Channel(Channel.RENDEZVOUS)
-    private val stdoutInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("stdout[$shortName]")
-    private val stderrInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("stderr[$shortName]")
+    internal @Volatile var state: State = State.Uninitialized(shortName)
 
     override val standardInput: Channel<Char> = Channel(Channel.RENDEZVOUS)
     override val standardOutput: Channel<Char> = Channel(Channel.RENDEZVOUS)
@@ -140,8 +151,9 @@ internal class ExecCoroutine(
     override val processID: Int get() = when(val state = state){
         // only way to get this exception AFAIK is to create ExecCoroutine(Start.LAZY).processID,
         // which seems unlikely.
-        State.Uninitialized, is State.Ready, is State.WarmingUp, is State.Starting -> throw IllegalStateException("process not started")
+        is State.Uninitialized, is State.Ready, is State.WarmingUp, is State.Starting -> throw IllegalStateException("process not started")
         is State.Running -> state.pid
+        is State.WindingDown -> state.pid
         is State.Completed -> state.pid
         is State.Euthanized -> throw IllegalStateException("process not started")
     }
@@ -149,16 +161,17 @@ internal class ExecCoroutine(
     fun prestart(): Boolean {
 
         val myChange = State.WarmingUp()
-        val warmingUp = atomicState.updateAndGet(this) { when(it){
-            State.Uninitialized -> myChange
+        val (init, warmingUp) = atomicState.getAndUpdateAndGet(this) { when(it){
+            is State.Uninitialized -> myChange
             else -> it
         }}
 
+        require(init is State.Uninitialized)
         if(warmingUp !is State.WarmingUp) {
             trace { "state=$warmingUp before prestart: $this" }
             return false
         }
-        if(warmingUp != myChange) {
+        if(warmingUp !== myChange) {
             trace { "WARN: contention in prestart!?"}
             return false
         }
@@ -166,19 +179,19 @@ internal class ExecCoroutine(
         run prestartStdin@{
             val stdinMutex = Mutex()
 
-            inputLines.sinkTo(stdinInflection.flatMap<Char, String> { (it + config.inputFlushMarker).asIterable() }.lockedBy(stdinMutex))
-            standardInput.sinkTo(stdinInflection.lockedBy(stdinMutex))
+            inputLines.sinkTo(init.stdinInflection.flatMap<Char, String> { (it + config.inputFlushMarker).asIterable() }.lockedBy(stdinMutex))
+            standardInput.sinkTo(init.stdinInflection.lockedBy(stdinMutex))
         }
         run prestartStdout@ {
-            stdoutInflection.openSubscription().tail(config.standardOutputBufferCharCount).sinkTo(standardOutput)
+            init.stdoutInflection.openSubscription().tail(config.standardOutputBufferCharCount).sinkTo(standardOutput)
         }
 
-        var readyness = State.Ready(NullProcBuilder, LinkedList(), DONE_JOB, DONE_JOB, DONE_JOB)
+        var readyness = State.Ready(init, NullProcBuilder, LinkedList(), DONE_JOB, DONE_JOB, DONE_JOB)
 
         run prestartStderr@ {
-            stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount).sinkTo(standardError)
+            init.stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount).sinkTo(standardError)
 
-            val errorLines = stderrInflection.openSubscription("err-cache").lines()
+            val errorLines = init.stderrInflection.openSubscription("err-cache").lines()
 
             launchChild("errorCacheJob") {
                 readyness.recentErrorOutput.apply {
@@ -193,13 +206,13 @@ internal class ExecCoroutine(
         }
 
         if(config.aggregateOutputBufferLineCount > 0) {
-            val stdoutForAggregator = stdoutInflection.openSubscription("aggregator").lines()
+            val stdoutForAggregator = init.stdoutInflection.openSubscription("aggregator").lines()
             readyness = readyness.copy(stdoutAggregatorJob = launchChild("stdoutAggregatorJob") {
                 for (message in stdoutForAggregator) {
                     aggregateChannel.pushForward(StandardOutputMessage(message))
                 }
             })
-            val stderrForAggregator = stderrInflection.openSubscription("aggregator").lines()
+            val stderrForAggregator = init.stderrInflection.openSubscription("aggregator").lines()
             readyness = readyness.copy(stderrAggregatorJob = launchChild("stderrAggregatorJob") {
                 for (message in stderrForAggregator) {
                     aggregateChannel.pushForward(StandardErrorMessage(message))
@@ -208,7 +221,7 @@ internal class ExecCoroutine(
         }
 
         readyness = readyness.copy(exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
-            val result = exitCodeInflection.await()
+            val result = init.exitCodeInflection.await()
 
             // the concurrent nature here means we could get std-out messages after an exit code,
             // which is just strange. So We'll sync on the output streams, making sure they come first.
@@ -259,7 +272,7 @@ internal class ExecCoroutine(
             trace { "state=$starting before kickoff: $this" }
             return false
         }
-        if(starting != myChange) {
+        if(starting !== myChange) {
             trace { "WARN: contention in kickoff!?"}
             return false
         }
@@ -272,25 +285,42 @@ internal class ExecCoroutine(
 
         val listeners = listenerFactory.create(process, pid, config)
 
-        makeInputStreamActor(process).sinkFrom(stdinInflection)
+        makeInputStreamActor(process).sinkFrom(readyState.init.stdinInflection)
 
-        stdoutInflection.sinkFrom(listeners.standardOutputChannel.value.thenOnCompletion {
-            atomicState.updateAndGet(this){ when(it) {
-                is State.Completed -> it.copy(stdoutEOF = true)
+        fun moveTowardCompletion(stateChange: (State) -> State): State {
+            val (prev, new) = atomicState.getAndUpdateAndGet(this){
+                val next = stateChange(it)
+                if(next is State.WindingDown) {
+                    next.takeUnless { it.stdoutEOF && it.stderrEOF }
+                            ?: State.Completed(next.pid, next.exitCode, next.interrupt, next.reaper)
+                } else next
+            }
+
+            if(prev is State.WindingDown && new is State.Completed){
+                prev.pumps.close()
+            }
+
+            return new
+        }
+
+        readyState.init.stdoutInflection.sinkFrom(listeners.standardOutputChannel.value.thenOnCompletion {
+            moveTowardCompletion { when(it) {
+                is State.WindingDown -> it.copy(stdoutEOF = true)
                 is State.Running -> it.copy(stdoutEOF = true)
-                else -> TODO()
+                else -> nfg("state = $state")
             }}
         })
-        stderrInflection.sinkFrom(listeners.standardErrorChannel.value.thenOnCompletion {
-            atomicState.updateAndGet(this){ when(it) {
-                is State.Completed -> it.copy(stderrEOF = true)
+        readyState.init.stderrInflection.sinkFrom(listeners.standardErrorChannel.value.thenOnCompletion {
+            moveTowardCompletion { when(it) {
+                is State.WindingDown -> it.copy(stderrEOF = true)
                 is State.Running -> it.copy(stderrEOF = true)
-                else -> TODO()
+                else -> nfg("State = $state")
             }}
         })
-        exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value.then { exitCode ->
-            val finalState = atomicState.updateAndGet(this){ when(it) {
-                is State.Running -> State.Completed(
+        readyState.init.exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value.then { exitCode ->
+            val finalState = moveTowardCompletion { when(it) {
+                is State.Running -> State.WindingDown(
+                        it.pumps,
                         it.pid,
                         it.obtrudingExitCode ?: exitCode,
                         it.interrupt?.source,
@@ -298,14 +328,14 @@ internal class ExecCoroutine(
                         it.stderrEOF,
                         it.stdoutEOF
                 )
-                else -> TODO()
-            }} as State.Completed
+                else -> nfg("state = $state")
+            }}
 
-            finalState.exitCode
+            (finalState as? ExitCodeProvider)?.exitCode ?: throw makeCME<ExitCodeProvider>()
         })
 
         val suiters = atomicState.getAndUpdate(this){ when(it){
-            is State.Starting -> State.Running(readyState, process, pid)
+            is State.Starting -> State.Running(readyState.init, readyState, process, listeners, pid)
             else -> throw makeCME(starting)
         }}
 
@@ -322,9 +352,10 @@ internal class ExecCoroutine(
     suspend fun waitFor(): Int {
 
         val initialState = state
-        val initialized = when(initialState){
+        val ready = when(initialState){
             is State.Uninitialized, is State.WarmingUp, is State.Ready, is State.Starting -> TODO("state=$initialState")
-            is State.Running -> initialState.prev
+            is State.Running -> initialState.ready
+            is State.WindingDown -> return initialState.exitCode
             is State.Completed -> return initialState.exitCode
             is State.Euthanized -> throw ProcessKilledException(-1, config.source, initialState.source)
         }
@@ -333,26 +364,26 @@ internal class ExecCoroutine(
             val running = state
             require(running is State.Running)
 
-            initialized.run {
+            ready.run {
                 stderrAggregatorJob.join()
                 stdoutAggregatorJob.join()
                 exitCodeAggregatorJob.join()
             }
 
-            stderrInflection.asJob().join()
-            stdoutInflection.asJob().join()
-            val exitCode = exitCodeInflection.await()
+            running.init.stderrInflection.asJob().join()
+            running.init.stdoutInflection.asJob().join()
+            val exitCode = running.init.exitCodeInflection.await()
 
-            val state = state as? State.Completed ?: throw makeCME<State.Completed>()
+            val state = state as? ExitCodeProvider ?: throw makeCME<State.WindingDown>()
 
             val expectedExitCodes = config.expectedOutputCodes
 
             val result = when {
-                state.interrupt != null -> throw ProcessInterruptedException(exitCode, config.source, state.interrupt)
-                state.reaper != null -> throw ProcessKilledException(exitCode, config.source, state.reaper)
+                state.interrupt != null -> throw ProcessInterruptedException(exitCode, config.source, state.interrupt!!)
+                state.reaper != null -> throw ProcessKilledException(exitCode, config.source, state.reaper!!)
                 expectedExitCodes == null -> exitCode
                 exitCode in expectedExitCodes -> exitCode
-                else -> throw makeExitCodeException(config, exitCode, initialized.recentErrorOutput.toList())
+                else -> throw makeExitCodeException(config, exitCode, ready.recentErrorOutput.toList())
             }
 
             result.also { trace { "exec '$shortName'(PID=${running.pid}) returned with code $result" } }
@@ -389,7 +420,7 @@ internal class ExecCoroutine(
     private fun tryKillAsync(source: CancellationException, obtrudeExitCode: Int?, gentle: Boolean = false): Unit {
 
         val newState = atomicState.updateAndGet(this){ when(it) {
-            State.Uninitialized -> State.Euthanized(first = true, source = source)
+            is State.Uninitialized -> State.Euthanized(first = true, source = source)
             is State.WarmingUp -> State.Euthanized(first = true, source = source)
             is State.Ready -> State.Euthanized(first = true, source = source)
             is State.Starting -> {
@@ -402,6 +433,7 @@ internal class ExecCoroutine(
                 if (gentle) it.copy(interrupt = sourcedInterruptOrReaper, obtrudingExitCode = obtrudeExitCode)
                         else it.copy(reaper = sourcedInterruptOrReaper, obtrudingExitCode = obtrudeExitCode)
             }
+            is State.WindingDown -> it
             is State.Completed -> it
             is State.Euthanized -> it.copy(first = false)
         }}
@@ -419,8 +451,8 @@ internal class ExecCoroutine(
                 gentle -> newState.interrupt!!
                 else -> newState.reaper!!
             }
-            is State.Completed -> {
-                trace { "attempted to kill/interrupt '$shortName' but its already completed." }
+            is State.Completed, is State.WindingDown -> {
+                trace { "attempted to kill/interrupt '$shortName' but its already state=$newState." }
                 null
             }
             is State.Euthanized -> {
@@ -589,7 +621,7 @@ internal class ExecCoroutine(
     private fun makeCME(expected: State) = ConcurrentModificationException(
             "expected state=$expected but was actually $state"
     )
-    private inline fun <reified T: State> makeCME() = ConcurrentModificationException(
+    private inline fun <reified T> makeCME() = ConcurrentModificationException(
             "expected 'state is ${T::class.simpleName}' but was actually state=$state"
     )
 

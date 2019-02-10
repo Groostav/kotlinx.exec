@@ -29,34 +29,40 @@ internal interface ProcessControlFacade {
 
 }
 
-internal class CompositeProcessControl(val facades: List<ProcessControlFacade>): ProcessControlFacade {
+internal class CompositeProcessControl(val facades: List<Maybe<ProcessControlFacade>>): ProcessControlFacade {
 
     init {
-        require(facades.all { it !is CompositeProcessControl } ) { "composite of composites: $this" }
+        require(facades.all { it.valueOrNull !is CompositeProcessControl } ) { "composite of composites: $this" }
         require(facades.any()) { "composite has no implementations!" }
     }
 
-    override fun tryKillGracefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
-        it.tryKillGracefullyAsync(includeDescendants)
-    })
-    override fun killForcefullyAsync(includeDescendants: Boolean) = Supported(facades.firstSupporting {
-        it.killForcefullyAsync(includeDescendants)
-    })
+    override fun tryKillGracefullyAsync(includeDescendants: Boolean): Supported<Unit> {
+        return Supported(facades.asSequence().map {
+            it.supporting(ProcessControlFacade::tryKillGracefullyAsync, includeDescendants)
+        }.firstSupported())
+    }
+    override fun killForcefullyAsync(includeDescendants: Boolean): Supported<Unit> {
+        return Supported(facades.asSequence().map {
+            it.supporting(ProcessControlFacade::killForcefullyAsync, includeDescendants)
+        }.firstSupported())
+    }
 
     override fun toString() = "CompositeProcessControl[${facades.joinToString()}]"
 }
 
-internal object CompositeProcessControlFactory: ProcessControlFacade.Factory {
+internal class CompositeProcessControlFactory(val factories: List<ProcessControlFacade.Factory>): ProcessControlFacade.Factory {
 
-    private val factories = listOf(
+    companion object: ProcessControlFacade.Factory by CompositeProcessControlFactory(listOf(
             JEP102ProcessFacade,
             WindowsProcessControl,
             UnixProcessControl,
             ZeroTurnaroundProcessFacade
-    )
+    ))
 
     override fun create(config: ProcessConfiguration, process: Process, pid: Int): Maybe<ProcessControlFacade> {
-        val facades = factories.filterSupporting { it.create(config, process, pid) }
+        val facades = factories.map {
+            Supported(it).supporting(ProcessControlFacade.Factory::create, config, process, pid)
+        }
         return Supported(CompositeProcessControl(facades))
 
     }

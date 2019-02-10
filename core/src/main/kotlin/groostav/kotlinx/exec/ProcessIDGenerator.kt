@@ -14,11 +14,12 @@ internal interface ProcessIDGenerator {
 }
 
 internal fun makePIDGenerator(): ProcessIDGenerator {
-    val factories = listOf(
+    val factories = sequenceOf(
             JEP102ProcessIDGenerator,
-            WindowsReflectiveNativePIDGen, UnixReflectivePIDGen,
+            WindowsReflectiveNativePIDGen,
+            UnixReflectivePIDGen,
             ZeroTurnaroundPIDGenerator
     )
 
-    return factories.firstSupporting { it.create() }
+    return factories.map { Supported(it).supporting(ProcessIDGenerator.Factory::create) }.firstSupported()
 }

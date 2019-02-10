@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import kotlin.reflect.KFunction
 import kotlin.streams.asSequence
 
 internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade {
@@ -8,7 +9,7 @@ internal class JEP102ProcessFacade(val process: Process) : ProcessControlFacade 
 
     companion object: ProcessControlFacade.Factory {
         val CANT_NORMAL_TERMINATION_FOR = { pid: Long ->
-            Unsupported("ProcessHandle does not support normal termination of pid=$pid")
+            Unsupported("ProcessHandle does not support normal termination of pid=$pid on platform=$JavaProcessOS")
         }
         val DESTROY_FAILED_FOR = { pid: Long ->
             Unsupported("ProcessHandle.destroy failed for pid=$pid")
@@ -78,4 +79,4 @@ internal class JEP102ProcessIDGenerator(): ProcessIDGenerator {
 
 }
 
-private val NOT_JAVA_9 = Unsupported("${JEP102ProcessFacade::class.simpleName} not java-9 or higher")
+private val NOT_JAVA_9 = Unsupported("needed java-9 or higher (is ${System.getProperty("java.version")})")
