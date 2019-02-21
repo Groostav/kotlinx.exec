@@ -103,10 +103,7 @@ internal class TortureTests {
     }
 
     internal object FakePIDGenerator: ProcessIDGenerator {
-
-        private val lastPID = AtomicInteger(0)
-
-        override fun findPID(process: Process) = lastPID.incrementAndGet()
+        override fun findPID(process: Process) = 1
     }
 
     internal class Interceptors {

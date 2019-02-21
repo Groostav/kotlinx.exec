@@ -82,6 +82,10 @@ fun interruptableHangingCommand() = when(JavaProcessOS){
     Windows -> `powershell -ExecPolicy Bypass -File`("InterruptableHanging.ps1")
     Unix -> TODO()
 }
+fun fluidProcessCommand() = when(JavaProcessOS){
+    Windows -> `powershell -ExecPolicy Bypass -File`("FluidChildProcesses.ps1")
+    Unix -> TODO()
+}
 
 
 

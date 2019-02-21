@@ -136,6 +136,8 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
 
             actualTree.use {
 
+                trace { "comitted to killing process-tree $actualTree" }
+
                 for (win32Proc in actualTree.toSequence()) {
 
                     // some concerns:
