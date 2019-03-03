@@ -2,6 +2,7 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.channels.Channel.Factory.RENDEZVOUS
 import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.SelectInstance
 import kotlinx.coroutines.selects.select
@@ -503,4 +504,44 @@ class KotlinTests {
         }
     }
 
+    @Test fun `when using a rendezvous channel can see through to caller if configured`() = runBlocking{
+
+        val channel = Channel<String>(RENDEZVOUS)
+        var exception: Exception? = null
+
+        val producer = GlobalScope.launch(Dispatchers.IO){
+            hardpoint {
+                channel.send("hello!")
+            }
+        }
+
+        val consumer = GlobalScope.launch(Dispatchers.Unconfined){
+            val next = channel.receive()
+
+            exception = Exception("blam!!")
+        }
+
+        consumer.join()
+        producer.join()
+
+        assertTrue(
+                hardpointFrame in (exception?.stackTrace ?: emptyArray<StackTraceElement>()),
+                "expected \n$hardpointFrame\nin\n${exception?.stackTrace?.joinToString("\n  at ")}"
+        )
+
+        // ok so this is interesting. It seems that both the parent event loop and the `send` call
+        // will attempt to dispatch the `receive` continuation.
+        // if the `send` call gets it, then the code is nice and debuggable and hardpoint is on stack
+        // if the parent event loop gets it, its not.
+        // on my machine it seems biased toward the parent event loop, I can only get the `send` call to dispatch under the debugger.
+    }
+
+    var hardpointFrame: StackTraceElement? = null
+    private suspend fun <R> hardpoint(block: suspend() -> R){
+        if(hardpointFrame == null){
+            hardpointFrame = StackWalker.getInstance().walk { it.findFirst() }.orElse(null)?.toStackTraceElement()
+        }
+        block()
+    }
 }
+

@@ -5,7 +5,7 @@ $block = { param($millis)
     Start-Sleep -Milliseconds $millis
 }
 
-$deadline = $(Get-Date) + $(New-TimeSpan -Seconds 45)
+$deadline = $(Get-Date) + $(New-TimeSpan -Seconds 25)
 $warmedUp = $false
 
 While($(Get-Date) -lt $deadline)

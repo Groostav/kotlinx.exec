@@ -2,10 +2,10 @@ package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.dropWhile
-import kotlinx.coroutines.channels.map
+import kotlinx.coroutines.channels.*
 import org.junit.Assume
 import org.junit.BeforeClass
+import org.junit.Ignore
 import org.junit.Test
 
 @InternalCoroutinesApi
@@ -63,23 +63,16 @@ class WindowsFixture {
         assertNotListed(process.pid().toInt())
     }
 
-    @Test(timeout = 60_000) fun `when killing a process tree with very fluid child count should properly end all processes`() = runBlocking<Unit> {
+    @Test(timeout = 30_000)
+    fun `when killing a process tree with very fluid child count should properly end all processes`() = runBlocking<Unit> {
         val process = execAsync { command = fluidProcessCommand() }
-
-        fail; //this flaps.
 
         val jproc = ((process as ExecCoroutine).state as ExecCoroutine.State.Running).process
         val windowsControl = WindowsProcessControl(30_000, jproc, process.processID)
 
-        val warmedUp = CompletableDeferred<Unit>()
-        GlobalScope.launch {
-            process.map {
-                val x = it.formattedMessage
-                System.err.println(x)
-                if(it.formattedMessage == "warmed-up") warmedUp.complete(Unit) else Unit
-            }
+        for(message in process.nonCancelling()){
+            if(message.formattedMessage == "warmed-up") break
         }
-        warmedUp.await()
 
         //act
         windowsControl.tryKillGracefullyAsync(true)
@@ -88,4 +81,11 @@ class WindowsFixture {
         process.waitFor()
         assertNotListed(process.processID)
     }
+}
+
+fun <T> ReceiveChannel<T>.nonCancelling(): ReceiveChannel<T> = GlobalScope.produce<T>{
+    for(message in this@nonCancelling){
+        send(message)
+    }
+    //if the return value is cancelled, that wont propagate to this@nonCancelling.
 }

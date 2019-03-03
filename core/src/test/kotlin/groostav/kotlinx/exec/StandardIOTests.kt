@@ -2,6 +2,7 @@ package groostav.kotlinx.exec
 
 import com.sun.jna.Platform
 import kotlinx.coroutines.channels.ClosedSendChannelException
+import kotlinx.coroutines.channels.map
 import kotlinx.coroutines.channels.toList
 import kotlinx.coroutines.runBlocking
 import org.amshove.kluent.shouldEqual
@@ -104,4 +105,16 @@ class StandardIOTests {
         } // looks like a regular closed Send channel.
     }
 
+    @Test fun `assert that the polling or blocking thread for the IO is on stack trace when you do something like map on aggregate channel`() = runBlocking<Unit>{
+
+        val runningProc = execAsync{
+            command = printMultipleLinesCommand()
+        }
+
+        val exceptions = runningProc.map {
+            Exception("stack producing: $it")
+        }.toList()
+
+        assertEquals(emptyList<Exception>(), exceptions)
+    }
 }

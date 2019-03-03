@@ -300,12 +300,13 @@ internal fun <T, R> Deferred<T>.then(block: suspend (T) -> R): Deferred<R> = Glo
     block(input)
 }
 @InternalCoroutinesApi
-internal fun <T> ReceiveChannel<T>.thenOnCompletion(block: suspend () -> Unit): ReceiveChannel<T> = GlobalScope.produce {
-    try {
-        consumeEach { it -> send(it) }
-    }
-    finally {
-        block()
+internal fun <T> ReceiveChannel<T>.thenOnCompletion(context: CoroutineContext, block: suspend () -> Unit): ReceiveChannel<T> {
+    return GlobalScope.produce(context) {
+        try {
+            consumeEach { it -> send(it) }
+        } finally {
+            block()
+        }
     }
 }
 

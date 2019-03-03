@@ -303,14 +303,14 @@ internal class ExecCoroutine(
             return new
         }
 
-        readyState.init.stdoutInflection.sinkFrom(listeners.standardOutputChannel.value.thenOnCompletion {
+        readyState.init.stdoutInflection.sinkFrom(listeners.standardOutputChannel.value.thenOnCompletion(Dispatchers.Unconfined) {
             moveTowardCompletion { when(it) {
                 is State.WindingDown -> it.copy(stdoutEOF = true)
                 is State.Running -> it.copy(stdoutEOF = true)
                 else -> nfg("state = $state")
             }}
         })
-        readyState.init.stderrInflection.sinkFrom(listeners.standardErrorChannel.value.thenOnCompletion {
+        readyState.init.stderrInflection.sinkFrom(listeners.standardErrorChannel.value.thenOnCompletion(Dispatchers.Unconfined) {
             moveTowardCompletion { when(it) {
                 is State.WindingDown -> it.copy(stderrEOF = true)
                 is State.Running -> it.copy(stderrEOF = true)

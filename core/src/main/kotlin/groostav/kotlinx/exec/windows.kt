@@ -1,7 +1,6 @@
 package groostav.kotlinx.exec
 
 import com.sun.jna.Native
-import com.sun.jna.Platform
 import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.Tlhelp32
@@ -97,11 +96,6 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
         // meaning that if we generate the tree a second time, and the entry is still there,
         // its has to be one of our children.
 
-
-        //todo: is handle allocation to be avoided (maybe because its expensive)?
-        // If yes: write a merge here so we dont excessively create/dispose handles
-        // if no: this strategy is probably fine.
-
         val actualTree: Win32ProcessProxy
 
         while(true) {
@@ -132,18 +126,18 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
             }
         }
 
-        runBlocking {
+        //TODO: we need assurances about who we're blocking here...
+        runBlocking(NonCancellable) {
 
             actualTree.use {
 
                 trace { "comitted to killing process-tree $actualTree" }
 
-                for (win32Proc in actualTree.toSequence()) {
-
                     // some concerns:
                     // whats to stop this from recursing? what if we cancel the interruptor? what if we cancel that?
                     //   -> need to support an "atomic" process to use this library.
                     //      In the mean time the fire-and-forget j.l.ProcessBuilder will suffice.
+                    //   -> MITIGATED: use "NonCancellable" dispatcher
                     // can we re-use the same process to kill all of them? (ie killer -pids 123,4567,8901 to kill 3 PIDs at once)
                     //   -> probably: TBD.
                     // also: what if it spawns a new process while its being interrupted??
@@ -151,21 +145,19 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
                     //      spawned sub-process was some kind of cleanup, possibly initiated by a finally{} block
                     //      so I think its best to leave it running.
 
-                    trace { "killing ${win32Proc.pid}" }
-                    val killpb = java.lang.ProcessBuilder().apply {
-                        command(
-                                javaw.toAbsolutePath().toString(),
-                                "-cp", System.getProperty("java.class.path"),
-                                PoliteLeechKiller::main.instanceTypeName,
-                                "-pid", win32Proc.pid.toString()
-                        )
-                        redirectError(Redirect.INHERIT)
-                        redirectOutput(Redirect.INHERIT)
-                    }
 
-                    killpb.start()
+                val pids: String = actualTree.toSequence().joinToString { it.pid.toString() }
+
+                execAsync {
+                    command = listOf(
+                            javaw.toAbsolutePath().toString(),
+                            "-cp", System.getProperty("java.class.path"),
+                            PoliteLeechKiller::main.instanceTypeName,
+                            "-pid", pids
+                    )
+                }.consumeEach { message: ProcessEvent ->
+                    trace { "interrupt ${if(includeDescendants)"-recurse " else ""}$selfPID ${message.formattedMessage}" }
                 }
-
 
                 // at time of writing, no synchronization is required here,
                 // but if you need it, we can either add support for atomic (un-killable) processes and simply dogfood this library here.
@@ -224,16 +216,14 @@ internal class Win32ProcessProxy(
         children.forEach { it.close() }
     }
 
-    fun toSequence(): Sequence<Win32ProcessProxy> = children.asSequence().flatMap { it.toSequence() } + this
+    //returns a depth-first sequence (such that children are earliest in the list)
+    fun toSequence(): Sequence<Win32ProcessProxy> = sequenceOf(this) + children.asSequence().flatMap { it.toSequence() }
 
     override fun equals(other: Any?): Boolean =
             other is Win32ProcessProxy && other.pid == this.pid && other.children == this.children
 
-    override fun hashCode(): Int =
-            pid xor children.hashCode()
-
+    override fun hashCode(): Int = pid xor children.hashCode()
     override fun toString(): String = "Win32ProcessProxy(pid=$pid, children=$children)"
-
 
 }
 
@@ -312,23 +302,25 @@ private const val UNKNOWN_ERROR = 1
  */
 internal object PoliteLeechKiller {
     @JvmStatic fun main(args: Array<String>){
-        println("running! args=[${args.joinToString()}]")
+        println("running! args=${args.joinToString("'", "'", "', '")}")
         require(args.size == 2) { "expected args: -pid <pid_int>"}
         require(args[0] == "-pid") { "expected args: -pid <pid_int>, but args[0] was ${args[0]}"}
-        require(args[1].toIntOrNull() != null) { "expected -pid as integer value, but was ${args[1]}"}
+        val pids = args[1].toIntListOrNull()
+        require(pids != null) { "expected -pid as integer value, but was ${args[1]}"}
 
         //https://stackoverflow.com/questions/1229605/is-this-really-the-best-way-to-start-a-second-jvm-from-java-code
         // attaching a breakpoint: https://www.youtube.com/watch?v=fBGWtVOKTkM
         // this code is run in another vm/process!
-        val pid = args[1].toInt()
 
-        val result = run(pid)
+        val result = run(pids)
         System.exit(result)
     }
 
-    private fun run(pid: Int): Int {
+    private fun run(pids: List<Int>): Int {
 
-        try {
+        for(pid in pids) try {
+            println("interrupting $pid:")
+
             printExecutePrintAndThrowIfFailed("SetConsoleCtrlHandler(NULL, TRUE)") {
                 SetConsoleCtrlHandler(Pointer.NULL, BOOL(true))
             }
@@ -358,11 +350,13 @@ internal object PoliteLeechKiller {
                 }
             }
 
-            println("done.")
+            println("done interrupting $pid")
         }
         catch (ex: Throwable) {
             ex.printStackTrace()
-            return UNKNOWN_ERROR
+        }
+        finally {
+            printExecutePrintAndThrowIfFailed("Kernel32.FreeConsole", otherAllowedCodes = null){ FreeConsole() }
         }
 
         return SUCCESS
@@ -370,7 +364,7 @@ internal object PoliteLeechKiller {
 
     private fun printExecutePrintAndThrowIfFailed(
             description: String,
-            otherAllowedCodes: Array<out Int> = emptyArray(),
+            otherAllowedCodes: Array<out Int>? = emptyArray(),
             nativeFunc: KERNEL_32.() -> Boolean
     ): Int {
 
@@ -378,9 +372,12 @@ internal object PoliteLeechKiller {
         val success = KERNEL_32.nativeFunc()
         val errorCode = KERNEL_32.GetLastError()
         println("success=$success, code=$errorCode")
-        return if (success || errorCode in otherAllowedCodes) errorCode
+        return if (success || otherAllowedCodes == null || errorCode in otherAllowedCodes) errorCode
                 else throw RuntimeException("$description failed with code=$errorCode")
     }
+
+    private fun String.toIntListOrNull(): List<Int>? =
+            split(",").map { it.trim().toIntOrNull() }.takeIf { null !in it }?.filterNotNull()
 }
 
 private fun buildPIDIndex(): Map<PID, List<PID>> {
