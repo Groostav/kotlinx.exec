@@ -543,5 +543,34 @@ class KotlinTests {
         }
         block()
     }
+
+    @Test fun `when attempting to join on ignorant launch block should keep job open`() = runBlocking<Unit>{
+        val countdown = CompletableDeferred<Unit>()
+
+        val job = GlobalScope.launch(Dispatchers.IO) {
+            countdown.complete(Unit)
+            Thread.sleep(450_000)
+        }
+        countdown.await()
+
+        //act
+        job.cancel()
+        withTimeoutOrNull(200){
+            job.join()
+        }
+
+        //assert
+        assertFalse(job.isCompleted)
+
+        // ok so, cancel() does effectively just set a flag
+        // join() is the thing that takes a while because
+        // C:/Users/Geoff/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-common/1.0.1/16382dce10af5c4159654272de71e8c0efe854c7/kotlinx-coroutines-core-common-1.0.1-sources.jar!/JobSupport.kt:502
+        // JobSupport::joinSuspend (JobSupport.kt:502)
+        // will suspend until the block finishes.
+        // thus, to get "nice" behaviour where ExecCoroutine doesnt exit until the process is dead,
+        // you need to fire the killAsync() from within the suspend block, not from an onCancellation listener.
+        // which "must be fast and lock free". 
+        fail; //implementing above is my next task!
+    }
 }
 
