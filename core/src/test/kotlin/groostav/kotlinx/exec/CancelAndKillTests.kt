@@ -95,6 +95,8 @@ class CancelAndKillTests {
 
     @Test fun `when killing shell process tree gently should properly end all descendants`() = runBlocking<Unit> {
 
+        fail; //damn, this thing is now a flapper, maybe it has to do with cancellation of children?
+
         //setup
         val pidRegex = Pattern.compile("PID=(?<pid>\\d+)")
 
@@ -131,8 +133,6 @@ class CancelAndKillTests {
         //assert
         assertEquals(3, pids.size)
         assertNotListed(*pids.toIntArray())
-
-//        TODO("I saw this one flap!")
 
 //        fail("this test passes on linux when I dont include the kill-child implementation, so my oracle's broken :sigh:")
         // blah, running forker-compose-up.sh from command line, then ctrl + Z, then ps, then kill -9 (parent), then ps

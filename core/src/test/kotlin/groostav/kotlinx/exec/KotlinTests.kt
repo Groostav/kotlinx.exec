@@ -569,8 +569,7 @@ class KotlinTests {
         // will suspend until the block finishes.
         // thus, to get "nice" behaviour where ExecCoroutine doesnt exit until the process is dead,
         // you need to fire the killAsync() from within the suspend block, not from an onCancellation listener.
-        // which "must be fast and lock free". 
-        fail; //implementing above is my next task!
+        // which "must be fast and lock free".
     }
 }
 

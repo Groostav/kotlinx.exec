@@ -5,6 +5,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.future.await
 import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.SelectInstance
 import kotlinx.coroutines.sync.Mutex
@@ -15,6 +16,7 @@ import java.lang.IllegalStateException
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 import kotlin.coroutines.*
@@ -141,6 +143,8 @@ internal class ExecCoroutine(
     }
 
     private val shortName = config.debugName ?: makeNameString(config, targetLength = 20)
+
+    private val completed = CompletableDeferred<Unit>()
 
     internal @Volatile var state: State = State.Uninitialized(shortName)
 
@@ -298,6 +302,7 @@ internal class ExecCoroutine(
 
             if(prev is State.WindingDown && new is State.Completed){
                 prev.pumps.close()
+                completed.complete(Unit)
             }
 
             return new
@@ -393,11 +398,15 @@ internal class ExecCoroutine(
             throw ex
         }
         finally {
-            teardown()
+            withContext(NonCancellable) {
+                completed.join()
+                teardown()
+            }
         }
     }
 
     private fun teardown() {
+
         aggregateChannel.close()
         inputLines.close()
         // standardError.cancel() --shouldnt need this, the close will propagate from the src to the tail
@@ -457,6 +466,7 @@ internal class ExecCoroutine(
             }
             is State.Euthanized -> {
                 if(newState.first) {
+                    completed.complete(Unit)
                     cancel()
                     teardown()
                     trace { "killed unstarted process" }
