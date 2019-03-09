@@ -1,5 +1,6 @@
 package groostav.kotlinx.exec
 
+import com.sun.jna.Platform
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import org.junit.Test
@@ -93,9 +94,35 @@ class CancelAndKillTests {
         assertNotListed(runningProcess.processID)
     }
 
-    @Test fun `when killing shell process tree gently should properly end all descendants`() = runBlocking<Unit> {
+    @Test fun `when killing parent of stand-alone child should continue to let stand alone child run`() = runBlocking<Unit> {
+        val proc = execAsync {
+            command = singleParentSingleChildCommand()
+            includeDescendantsInKill = false
+            gracefulTimeoutMillis = 0
+        }
 
-        fail; //damn, this thing is now a flapper, maybe it has to do with cancellation of children?
+        val providedPIDs = proc
+                .nonCancelling()
+                .takeWhile { it.formattedMessage.let { Regex("(childPID=\\d+)|(parentPID=\\d+)").matches(it) } }
+                .take(2)
+                .toList()
+                .associate { it.formattedMessage.split("=").let { it.first() to it.last().toInt() } }
+        println("running with PIDs=$providedPIDs")
+
+        //act
+        GlobalScope.launch { proc.kill() }
+        GlobalScope.launch {
+            proc.nonCancelling().consumeEach { System.err.println(it.formattedMessage) }
+        }
+        proc.join()
+
+        //assert
+        val runningPIDs = pollRunningPIDs()
+        providedPIDs["parentPID"].let { assertTrue(it !in runningPIDs, "expected parentPID=$it not to be running, but it was")}
+        providedPIDs["childPID"].let { assertTrue(it in runningPIDs, "expected childPID=$it to still be running, but it wasn't")}
+    }
+
+    @Test fun `when killing shell process tree gently should properly end all descendants`() = runBlocking<Unit> {
 
         //setup
         val pidRegex = Pattern.compile("PID=(?<pid>\\d+)")
@@ -108,33 +135,27 @@ class CancelAndKillTests {
 
         delay(30)
 
-        val pidsFuture = CompletableDeferred<List<Int>>()
 
-        GlobalScope.launch {
-            runningProcess
-                    .map { it.also { trace { it.formattedMessage }}}
-                    .map { pidRegex.matcher(it.formattedMessage) }
-                    .filter { it.find() }
-                    .map { it.group("pid")?.toInt() ?: TODO() }
-                    .fold(emptyList<Int>()){ accum, nextPID ->
-                        trace { "found pid=$nextPID" }
-                        (accum + nextPID).also {
-                            if(it.size == 3){
-                                pidsFuture.complete(it)
-                            }
-                        }
-                    }
-        }
+        val pids = runningProcess
+                .nonCancelling()
+                .map { it.also { trace { it.formattedMessage }}}
+                .map { pidRegex.matcher(it.formattedMessage) }
+                .filter { it.find() }
+                .map { it.group("pid")?.toInt() ?: TODO() }
+                .take(3)
+                .map { nextPID ->
+                    System.err.println("found pid=$nextPID")
+                    nextPID
+                }
+                .toList()
 
         //act
-        val pids = pidsFuture.await()
         runningProcess.kill(null)
 
         //assert
         assertEquals(3, pids.size)
         assertNotListed(*pids.toIntArray())
 
-//        fail("this test passes on linux when I dont include the kill-child implementation, so my oracle's broken :sigh:")
         // blah, running forker-compose-up.sh from command line, then ctrl + Z, then ps, then kill -9 (parent), then ps
         // notice that all the child processes are dead. clearly I dont know enough about parent-child process relationships.
         // it seems that kill -9 in this cercomstance is giving me the "end process tree" behaviour I wanted.

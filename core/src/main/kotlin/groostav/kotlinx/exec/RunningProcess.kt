@@ -60,6 +60,11 @@ interface RunningProcess: SendChannel<String>, ReceiveChannel<ProcessEvent>, Def
     override suspend fun await(): Int
 
     /**
+     * Suspends until the process exits
+     */
+    override suspend fun join(): Unit
+
+    /**
      * Ths process ID associated with this process.
      *
      * If the process has not yet been started, this method will throw [IllegalStateException].

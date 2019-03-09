@@ -42,6 +42,10 @@ fun completableScriptCommand() = when(JavaProcessOS){
     Windows -> `powershell -ExecPolicy Bypass -File`("CompletableScript.ps1")
     Unix -> bash("CompletableScript.sh")
 }
+fun singleParentSingleChildCommand() = when(JavaProcessOS){
+    Windows -> `powershell -ExecPolicy Bypass -File`("SingleParentSingleChildCommand.ps1")
+    Unix -> TODO()
+}
 fun promptScriptCommand() = when(JavaProcessOS){
     Windows -> `powershell -ExecPolicy Bypass -File`("PromptScript.ps1")
     Unix -> bash("PromptScript.sh")
@@ -127,7 +131,7 @@ internal suspend fun waitForTerminationOf(pid: Int, timeout: Long = 30_000){
     require(finished != null) { "timed-out waiting for completion of $pid" }
 }
 
-private suspend fun pollRunningPIDs(): List<Int> {
+internal suspend fun pollRunningPIDs(): List<Int> {
     val runningPIDs: List<Int> = when (JavaProcessOS) {
         Unix -> {
             val firstIntOnLineRegex = Pattern.compile(

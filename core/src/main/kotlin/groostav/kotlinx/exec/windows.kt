@@ -147,6 +147,7 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
 
 
                 val pids: String = actualTree.toSequence().joinToString { it.pid.toString() }
+                val name = "interrupt ${if (includeDescendants) "-recurse " else ""}$selfPID"
 
                 execAsync {
                     command = listOf(
@@ -155,8 +156,9 @@ internal class WindowsProcessControl(val gracefulTimeoutMillis: Long, val proces
                             PoliteLeechKiller::main.instanceTypeName,
                             "-pid", pids
                     )
+                    debugName = name
                 }.consumeEach { message: ProcessEvent ->
-                    trace { "interrupt ${if(includeDescendants)"-recurse " else ""}$selfPID ${message.formattedMessage}" }
+                    trace { "$name: ${message.formattedMessage}" }
                 }
 
                 // at time of writing, no synchronization is required here,
@@ -302,7 +304,7 @@ private const val UNKNOWN_ERROR = 1
  */
 internal object PoliteLeechKiller {
     @JvmStatic fun main(args: Array<String>){
-        println("running! args=${args.joinToString("'", "'", "', '")}")
+        println("running! args=${args.joinToString("', '", "'", "'")}")
         require(args.size == 2) { "expected args: -pid <pid_int>"}
         require(args[0] == "-pid") { "expected args: -pid <pid_int>, but args[0] was ${args[0]}"}
         val pids = args[1].toIntListOrNull()
