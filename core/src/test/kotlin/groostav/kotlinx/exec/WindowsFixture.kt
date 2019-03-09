@@ -65,7 +65,9 @@ class WindowsFixture {
 
     @Test(timeout = 30_000)
     fun `when killing a process tree with very fluid child count should properly end all processes`() = runBlocking<Unit> {
-        val process = execAsync { command = fluidProcessCommand() }
+        val process = execAsync {
+            command = fluidProcessCommand()
+        }
 
         val jproc = ((process as ExecCoroutine).state as ExecCoroutine.State.Running).process
         val windowsControl = WindowsProcessControl(30_000, jproc, process.processID)

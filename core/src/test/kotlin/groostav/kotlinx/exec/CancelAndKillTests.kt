@@ -96,7 +96,7 @@ class CancelAndKillTests {
 
     @Test fun `when killing parent of stand-alone child should continue to let stand alone child run`() = runBlocking<Unit> {
         val proc = execAsync {
-            command = singleParentSingleChildCommand()
+            command = singleParentSingleChildCommand() + "-WaitForExit"
             includeDescendantsInKill = false
             gracefulTimeoutMillis = 0
         }

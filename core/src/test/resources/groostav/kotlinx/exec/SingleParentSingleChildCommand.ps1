@@ -1,3 +1,7 @@
+[CmdletBinding()]
+Param(
+    [Switch] $WaitForExit
+)
 
 $pinfo = New-Object System.Diagnostics.ProcessStartInfo
 $pinfo.FileName = "ping"
@@ -13,11 +17,13 @@ $p.Start() | Out-Null
 echo "parentPID=$PID"
 echo "childPID=$($p.Id)"
 
-While($true) { Start-Sleep -Seconds 10 }
+If($WaitForExit)
+{
+    $p.WaitForExit()
 
-$p.WaitForExit()
-$stdout = $p.StandardOutput.ReadToEnd()
-$stderr = $p.StandardError.ReadToEnd()
-Write-Host "stdout: $stdout"
-Write-Host "stderr: $stderr"
-Write-Host "exit code: " + $p.ExitCode
+    $stdout = $p.StandardOutput.ReadToEnd()
+    $stderr = $p.StandardError.ReadToEnd()
+    Write-Host "stdout: $stdout"
+    Write-Host "stderr: $stderr"
+    Write-Host "exit code: " + $p.ExitCode
+}
