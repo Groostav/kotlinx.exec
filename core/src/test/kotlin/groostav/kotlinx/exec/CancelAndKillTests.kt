@@ -122,7 +122,7 @@ class CancelAndKillTests {
         providedPIDs["childPID"].let { assertTrue(it in runningPIDs, "expected childPID=$it to still be running, but it wasn't")}
     }
 
-    @Test fun `when killing shell process tree gently should properly end all descendants`() = runBlocking<Unit> {
+    @Test(timeout=30_000) fun `when killing shell process tree gently should properly end all descendants`() = runBlocking<Unit> {
 
         //setup
         val pidRegex = Pattern.compile("PID=(?<pid>\\d+)")

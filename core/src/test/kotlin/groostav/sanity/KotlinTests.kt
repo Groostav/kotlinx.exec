@@ -1,5 +1,6 @@
-package groostav.kotlinx.exec
+package groostav.sanity
 
+import groostav.kotlinx.exec.nfg
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.channels.Channel.Factory.RENDEZVOUS
@@ -13,7 +14,6 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.jvm.internal.FunctionReference
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction1
-import kotlin.reflect.KSuspendFunction1
 import kotlin.reflect.jvm.jvmName
 import kotlin.test.*
 
@@ -480,7 +480,7 @@ class KotlinTests {
         //I think this is as good as it gets...
         val instanceName= ((x as FunctionReference).boundReceiver::class as KClass<*>).jvmName
 
-        assertEquals("groostav.kotlinx.exec.KotlinTests\$MaindThingy", instanceName)
+        assertEquals("groostav.sanity.KotlinTests\$MaindThingy", instanceName)
     }
     object MaindThingy{
         @JvmStatic fun main(args: Array<String>){

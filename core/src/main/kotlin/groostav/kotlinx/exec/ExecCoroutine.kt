@@ -227,10 +227,13 @@ internal class ExecCoroutine(
         readyness = readyness.copy(exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
             val result = init.exitCodeInflection.await()
 
-            // the concurrent nature here means we could get std-out messages after an exit code,
-            // which is just strange. So We'll sync on the output streams, making sure they come first.
-            readyness.stdoutAggregatorJob.join()
-            readyness.stderrAggregatorJob.join()
+            // we want to make this the last message in the output channel,
+            // but because of the way attachConsole works in windows, we cant be assured the stdout
+            // will ever actually close, this means we have nothing to synchronize on here
+            // to make sure theres no more stdout!
+            // this sucks. _this sucks_!
+            fail;
+            delay(10)
 
             if (config.exitCodeInResultAggregateChannel) {
                 aggregateChannel.pushForward(ExitCode(result))
@@ -369,14 +372,6 @@ internal class ExecCoroutine(
             val running = state
             require(running is State.Running)
 
-            ready.run {
-                stderrAggregatorJob.join()
-                stdoutAggregatorJob.join()
-                exitCodeAggregatorJob.join()
-            }
-
-            running.init.stderrInflection.asJob().join()
-            running.init.stdoutInflection.asJob().join()
             val exitCode = running.init.exitCodeInflection.await()
 
             val state = state as? ExitCodeProvider ?: throw makeCME<State.WindingDown>()
