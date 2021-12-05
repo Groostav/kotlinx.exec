@@ -41,18 +41,18 @@ inline fun <reified X: Exception> assertThrows(action: () -> Any?): X? {
 internal inline fun <reified X: Exception> Catch(action: () -> Any?): X? =
         try { action(); null } catch(ex: Exception){ if(ex is X) ex else throw ex }
 
-internal suspend fun assertNotListed(vararg deadProcessIDs: Int){
+internal suspend fun assertNotListed(vararg deadProcessIDs: Long){
 
     // both powershell and ps have output formatting options,
     // but I'd rather demo working line-by-line with a regex.
 
-    val runningPIDs: List<Int> = pollRunningPIDs().sorted()
+    val runningPIDs: List<Long> = pollRunningPIDs().sorted()
     val zombies = deadProcessIDs.toSet() intersect runningPIDs.toSet()
 
     assertTrue(zombies.isEmpty(), "${zombies.joinToString()} is still running")
 }
 
-internal suspend fun waitForTerminationOf(pid: Int, timeout: Long = 30_000){
+internal suspend fun waitForTerminationOf(pid: Long, timeout: Long = 30_000){
 
     val finished = withTimeoutOrNull(timeout){
         while(pid in pollRunningPIDs()) delay(20)
@@ -63,8 +63,8 @@ internal suspend fun waitForTerminationOf(pid: Int, timeout: Long = 30_000){
     require(finished != null) { "timed-out waiting for completion of $pid" }
 }
 
-internal suspend fun pollRunningPIDs(): List<Int> {
-    val runningPIDs: List<Int> = when (JavaProcessOS) {
+internal suspend fun pollRunningPIDs(): List<Long> {
+    val runningPIDs: List<Long> = when (JavaProcessOS) {
         Unix -> {
             val firstIntOnLineRegex = Pattern.compile(
                     "(?<pid>\\d+)\\s+" +
@@ -77,7 +77,7 @@ internal suspend fun pollRunningPIDs(): List<Int> {
                     .drop(1)
                     .map { it.trim() }
                     .map { pidRecord ->
-                        firstIntOnLineRegex.matcher(pidRecord).apply { find() }.group("pid")?.toInt()
+                        firstIntOnLineRegex.matcher(pidRecord).apply { find() }.group("pid")?.toLong()
                                 ?: TODO("no PID on `ps` record '$pidRecord'")
                     }
         }
@@ -92,16 +92,22 @@ internal suspend fun pollRunningPIDs(): List<Int> {
                             "(?<somethingImportant>\\d+)\\s+" +
                             "(?<processName>.*)"
             )
-            val getProcess = exec {
-                command = listOf("powershell.exe", "-Command", "Get-Process")
-                debugName = "Get-Process.ps1"
-            }
-            getProcess.outputAndErrorLines
+            val process = ProcessBuilder()
+                .command("powershell.exe", "-Command", "Get-Process")
+                .start()
+
+            val lines = process.inputStream.reader().readLines()
+
+//            val getProcess = exec(commandLine = listOf())
+//            val lines = getProcess.outputAndErrorLines
+
+            lines
                     .drop(3) //powershell preamble is a blank line, a header line, and an ascii horizontal separator line
                     .map { it.trim() }
-                    .dropLastWhile { it.isBlank() }
+                    .filter { it.isNotBlank() }
+                    .dropLast(1) //"process finished with exit code 1234"
                     .map { pidRecord ->
-                        getProcessLineRegex.matcher(pidRecord).apply { find() }.group("pid")?.toInt()
+                        getProcessLineRegex.matcher(pidRecord).takeIf { it.find() }?.group("pid")?.toLong()
                                 ?: TODO("no PID on `GetProcess` record '$pidRecord'")
                     }
         }

@@ -27,16 +27,11 @@ data class ProcessConfiguration internal constructor(
          * line delimiters used for parsing lines out of standard-error and standard-out
          * for the the aggregate channel
          */
-        var delimiters: List<String> = listOf("\r", "\n", "\r\n"),
+        var delimiters: List<String> = listOf("\n", "\r\n", "\r"),
 
         /**
-         * value that results in flushing values to operating system standard-input buffers.
+         * encoding for standard-output
          */
-        // this sucks, cant use delimeters because you might flush \r separately from \n.
-        // which does illicit a different behaviour from powershell.
-        var inputFlushMarker: Char = '\n',
-
-
         var encoding: Charset = Charsets.UTF_8,
 
         /**
@@ -113,7 +108,7 @@ data class ProcessConfiguration internal constructor(
         /**
          * The amount of time to wait before considering a SIG_INT command to have failed.
          *
-         * Using a time of zero will result in no `SIG_INT` signals at all. In this cercomstance
+         * Using a time of zero will result in no `SIG_INT` signals at all. In this circumstance
          * calls to [RunningProcess.kill] will simply fire a `SIG_KILL` immediately.
          *
          * This operation is supported on all platforms,
@@ -138,7 +133,7 @@ data class ProcessConfiguration internal constructor(
          * 2. ...with an exit code that is in this set then it will be used to complete [RunningProcess.exitCode]
          * 3. ...with an exit code that is not in this non-null set then [RunningProcess.exitCode] throws [InvalidExitCodeException].
          */
-        var expectedOutputCodes: Set<Int>? = setOf(0), //see also
+        var expectedExitCodes: Set<Int>? = setOf(0), //see also
 
         /**
          * Number of lines to be kept for generation of the exception on a bad exit code.
@@ -151,46 +146,32 @@ data class ProcessConfiguration internal constructor(
          * of stack-trace generation entirely.
          */
         var linesForExceptionError: Int = 15,
-
-        //used to point at caller of exec() through suspension context
-        internal var source: ExecEntryPoint? = null,
-        internal var exitCodeInResultAggregateChannel: Boolean = true,
-
-        internal var debugName: String? = null
 )
 
 object InheritedDefaultEnvironment: Map<String, String> by System.getenv()
 
-internal inline fun configureProcess(configureBlock: ProcessConfiguration.() -> Unit): ProcessConfiguration {
-
-    val initial = ProcessConfiguration().apply(configureBlock)
+internal fun copyAndValidate(initial: ProcessConfiguration): ProcessConfiguration {
     val initialCommandList = initial.command.toList()
 
-    val result = initial.copy (
-            command = initialCommandList,
-            environment = if(initial.environment === InheritedDefaultEnvironment) initial.environment else initial.environment.toMap(),
-            delimiters = initial.delimiters.toList(),
-            expectedOutputCodes = initial.expectedOutputCodes?.toSet()
+    val result = initial.copy(
+        command = initialCommandList,
+        environment = if (initial.environment === InheritedDefaultEnvironment) initial.environment else initial.environment.toMap(),
+        delimiters = initial.delimiters.toList(),
+        expectedExitCodes = initial.expectedExitCodes?.toSet()
 
-            // TBD: other non-final types like workingDirectory: Path, encoding: CharSet,
-            // how careful does this defensive copy need to be? do we need it at all?
+        // TBD: other non-final types like workingDirectory: Path, encoding: CharSet,
+        // how careful does this defensive copy need to be? do we need it at all?
     )
 
     result.run {
         require(initialCommandList.any()) { "cannot exec empty command" }
-        require(initialCommandList.all { '\u0000' !in it }) { "cannot exec command with null character: $this"}
-        require(standardErrorBufferCharCount >= 0) { "cannot exec with output buffer size less than zero: $this"}
-        require(delimiters.all { it.any()}) { "cannot parse output lines with empty delimeter: $this" }
+        require(initialCommandList.all { '\u0000' !in it }) { "cannot exec command with null character: $this" }
+        require(standardErrorBufferCharCount >= 0) { "cannot exec with output buffer size less than zero: $this" }
+        require(delimiters.all { it.any() }) { "cannot parse output lines with empty delimeter: $this" }
         require(aggregateOutputBufferLineCount >= 0)
         require(standardErrorBufferCharCount >= 0)
         require(standardOutputBufferCharCount >= 0)
-
-        require(source != null) { "internal error: no known start point for trace" }
     }
 
     return result
 }
-
-interface ExecEntryPoint
-class AsynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint
-class SynchronousExecutionStart(command: List<String>): RuntimeException(command.joinToString(" ")), ExecEntryPoint

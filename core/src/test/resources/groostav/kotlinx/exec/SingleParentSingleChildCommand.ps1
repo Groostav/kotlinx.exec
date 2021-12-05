@@ -9,7 +9,7 @@ $pinfo.RedirectStandardError = $true
 $pinfo.RedirectStandardOutput = $true
 $pinfo.UseShellExecute = $false
 $pinfo.CreateNoWindow = $true
-$pinfo.Arguments = "-n","20","localhost"
+$pinfo.Arguments = "-n","2000","localhost"
 $p = New-Object System.Diagnostics.Process
 $p.StartInfo = $pinfo
 $p.Start() | Out-Null

@@ -1,690 +1,644 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.future.await
-import kotlinx.coroutines.selects.SelectClause1
-import kotlinx.coroutines.selects.SelectInstance
-import kotlinx.coroutines.sync.Mutex
-import java.io.Closeable
-import java.io.IOException
-import java.lang.ClassCastException
-import java.lang.IllegalStateException
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Method
-import java.util.*
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
-import kotlin.coroutines.*
+import kotlinx.coroutines.channels.receiveOrNull
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.internal.resumeCancellableWith
+import java.lang.IllegalArgumentException
+import java.lang.RuntimeException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.intrinsics.createCoroutineUnintercepted
+import kotlin.coroutines.intrinsics.intercepted
+import kotlin.coroutines.resume
 
-//this class exists to avoid @InternalCoroutinesApi.
-// I get the concern, but I really dont think the things I'm doing are likely to be un-implementable.
-// I'll stay at < version 1.0 until we are using 100% stable APIs.
-
-internal interface ExecAsyncProvider {
-    fun execAsync(scope: CoroutineScope, config: ProcessConfiguration, start: CoroutineStart): RunningProcess
-}
-internal object ExecAsyncImpl: ExecAsyncProvider {
-    @InternalCoroutinesApi
-    override fun execAsync(scope: CoroutineScope, config: ProcessConfiguration, start: CoroutineStart) = scope.run {
-        val newContext = newCoroutineContext(EmptyCoroutineContext)
-        val coroutine = ExecCoroutine(
-                config,
-                newContext, start,
-                makePIDGenerator(), makeListenerProviderFactory(), CompositeProcessControlFactory
-        )
-
-        if(start != CoroutineStart.LAZY) {
-            coroutine.prestart().also { require(it) }
-            coroutine.kickoff().also { require(it) }
-        }
-        coroutine.start(start, coroutine, ExecCoroutine::waitFor)
-
-        coroutine
-    }
-}
-
-internal val EXEC_ASYNC_WRAPPER = ExecAsyncImpl as ExecAsyncProvider
-
-@InternalCoroutinesApi
-internal class ExecCoroutine(
-        private val config: ProcessConfiguration,
-        parentContext: CoroutineContext,
-        isActive: Boolean,
-        private val pidGen: ProcessIDGenerator,
-        private val listenerFactory: ProcessListenerProvider.Factory,
-        private val processControlFacade: ProcessControlFacade.Factory,
-        private val makeProcessBuilder: (List<String>) -> java.lang.ProcessBuilder,
-        private val makeInputStreamActor: (Process) -> SendChannel<Char>,
-        private val aggregateChannel: Channel<ProcessEvent>,
-        private val inputLines: Channel<String>
-):
-        AbstractCoroutine<Int>(parentContext + makeName(config), isActive),
-        RunningProcess,
-        SelectClause1<Int>,
-        ReceiveChannel<ProcessEvent> by aggregateChannel,
-        SendChannel<String> by inputLines
-{
+@OptIn(InternalCoroutinesApi::class)
+class ExecCoroutine(
+    context: CoroutineContext,
+    val config: ProcessConfiguration,
+    private val lazy: Boolean,
+    private val channel: Channel<ProcessEvent> = Channel<ProcessEvent>(
+        capacity = config.aggregateOutputBufferLineCount,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+): AbstractCoroutine<Int?>(context, !lazy), RunningProcess, Flow<ProcessEvent> {
 
     init {
-        require( ! aggregateChannel.isFull) { "aggregate channel is full at start, looks like a rendezvous channel?" }
+        require(config.command.isNotEmpty())
     }
 
-    interface ExitCodeProvider {
-        val pid: Int
-        val exitCode: Int
-        val interrupt: CancellationException?
-        val reaper: CancellationException?
+    private val recentErrors = CircularArray<String>(config.linesForExceptionError)
+
+    internal lateinit var process: Process
+    private lateinit var handle: ProcessHandle
+    private lateinit var out: NamedTracingProcessReader
+    private lateinit var err: NamedTracingProcessReader
+
+    private val outMessages = OutputParser(config.delimiters)
+    private val errMessages = OutputParser(config.delimiters)
+
+    private var processState: AtomicReference<State> = AtomicReference(NotStarted)
+
+    // TODO this should probably be on the state object...
+    private var tracing = CoroutineTracer(config.command.first().split("/").last().take(30))
+
+    init {
+        if( ! lazy) onStart()
+        if(lazy) tracing = tracing.mark("init")
     }
-    sealed class State {
-        class Uninitialized(name: String): State() {
-            val exitCodeInflection = CompletableDeferred<Int>()
-            val stdinInflection: Channel<Char> = Channel(Channel.RENDEZVOUS)
-            val stdoutInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("stdout[$name]")
-            val stderrInflection: SimpleInlineMulticaster<Char> = SimpleInlineMulticaster("stderr[$name]")
 
-        }
-        class WarmingUp: State() {
-            override fun equals(other: Any?) = this === other
-            override fun hashCode() = System.identityHashCode(this)
-        }
+    override val processID: Long get() = handle.pid()
 
-        data class Ready(
-                val init: Uninitialized,
-                val jvmProcessBuilder: java.lang.ProcessBuilder = NullProcBuilder,
-                val recentErrorOutput: LinkedList<String> = LinkedList(),
-                val stdoutAggregatorJob: Job = DONE_JOB,
-                val stderrAggregatorJob: Job = DONE_JOB,
-                val exitCodeAggregatorJob: Job = DONE_JOB
-        ): State(){
-            override fun toString() = "Ready"
-        }
-        data class Starting(val jobs: List<() -> Unit> = emptyList()): State()
-        data class Running(
-                val init: Uninitialized,
-                val ready: Ready,
-                val process: Process,
-                val pumps: Closeable,
-                val pid: Int,
-                val obtrudingExitCode: Int? = null,
-                val interrupt: SourcedTermination? = null,
-                val reaper: SourcedTermination? = null,
-                val stderrEOF: Boolean = false,
-                val stdoutEOF: Boolean = false
-        ): State(){
+    // kotlinx coroutines guarantee: this will only be called once
+    override fun onStart() {
 
-            internal class SourcedTermination(val source: CancellationException, val job: Job)
-
-            override fun toString(): String {
-                return "Running(pid=$pid, obtrudingExitCode=$obtrudingExitCode, interrupt=$interrupt, reaper=$reaper, stderrEOF=$stderrEOF, stdoutEOF=$stdoutEOF)"
+        val newState = processState.updateAndGet { state ->
+            when(state){
+                is NotStarted -> Running()
+                is Closed -> state
+                is AllOutputsReported, is BeingKilled, is Running -> TODO("state=$state onStart()")
             }
         }
-        data class WindingDown(
-                val pumps: Closeable,
-                override val pid: Int,
-                override val exitCode: Int,
-                override val interrupt: CancellationException?,
-                override val reaper: CancellationException?,
-                val stderrEOF: Boolean,
-                val stdoutEOF: Boolean
-        ): State(), ExitCodeProvider
 
-        data class Completed(
-                override val pid: Int,
-                override val exitCode: Int,
-                override val interrupt: CancellationException?,
-                override val reaper: CancellationException?
-        ): State(), ExitCodeProvider
-        data class Euthanized(val first: Boolean, val source: CancellationException): State()
-    }
-
-    private val shortName = config.debugName ?: makeNameString(config, targetLength = 20)
-
-    private val completed = CompletableDeferred<Unit>()
-
-    internal @Volatile var state: State = State.Uninitialized(shortName)
-
-    override val standardInput: Channel<Char> = Channel(Channel.RENDEZVOUS)
-    override val standardOutput: Channel<Char> = Channel(Channel.RENDEZVOUS)
-    override val standardError: Channel<Char> = Channel(Channel.RENDEZVOUS)
-
-    override val processID: Int get() = when(val state = state){
-        // only way to get this exception AFAIK is to create ExecCoroutine(Start.LAZY).processID,
-        // which seems unlikely.
-        is State.Uninitialized, is State.Ready, is State.WarmingUp, is State.Starting -> throw IllegalStateException("process not started")
-        is State.Running -> state.pid
-        is State.WindingDown -> state.pid
-        is State.Completed -> state.pid
-        is State.Euthanized -> throw IllegalStateException("process not started")
-    }
-
-    fun prestart(): Boolean {
-
-        val myChange = State.WarmingUp()
-        val (init, warmingUp) = atomicState.getAndUpdateAndGet(this) { when(it){
-            is State.Uninitialized -> myChange
-            else -> it
-        }}
-
-        require(init is State.Uninitialized)
-        if(warmingUp !is State.WarmingUp) {
-            trace { "state=$warmingUp before prestart: $this" }
-            return false
-        }
-        if(warmingUp !== myChange) {
-            trace { "WARN: contention in prestart!?"}
-            return false
-        }
-
-        run prestartStdin@{
-            val stdinMutex = Mutex()
-
-            inputLines.sinkTo(init.stdinInflection.flatMap<Char, String> { (it + config.inputFlushMarker).asIterable() }.lockedBy(stdinMutex))
-            standardInput.sinkTo(init.stdinInflection.lockedBy(stdinMutex))
-        }
-        run prestartStdout@ {
-            init.stdoutInflection.openSubscription().tail(config.standardOutputBufferCharCount).sinkTo(standardOutput)
-        }
-
-        var readyness = State.Ready(init, NullProcBuilder, LinkedList(), DONE_JOB, DONE_JOB, DONE_JOB)
-
-        run prestartStderr@ {
-            init.stderrInflection.openSubscription().tail(config.standardErrorBufferCharCount).sinkTo(standardError)
-
-            val errorLines = init.stderrInflection.openSubscription("err-cache").lines()
-
-            launchChild("errorCacheJob") {
-                readyness.recentErrorOutput.apply {
-                    errorLines.consumeEach { errorMessageLine ->
-                        addLast(errorMessageLine)
-                        if (size > config.linesForExceptionError) {
-                            removeFirst()
+        when (newState) {
+            is Running -> {
+                val processBuilder = ProcessBuilder(config.command)
+                    .directory(config.workingDirectory.toFile())
+                    .apply {
+                        if(config.environment !== InheritedDefaultEnvironment) {
+                            environment().apply { clear(); putAll(config.environment) }
                         }
+                    }
+
+                process = processBuilder.start()
+                handle = process.toHandle()
+
+                tracing = tracing
+                    .appendName(handle.pid().toString())
+                    .mark("start")
+
+                err = NamedTracingProcessReader.forStandardError(process, processID, config.encoding)
+                out = NamedTracingProcessReader.forStandardOutput(process, processID, config.encoding)
+
+                if (lazy) {
+                    val continuation = body.createCoroutineUnintercepted(this)
+                    try {
+                        continuation.intercepted().resumeCancellableWith(Result.success(Unit))
+                    }
+                    catch (e: Throwable) {
+                        this.resumeWith(Result.failure(e))
                     }
                 }
             }
+            is Closed -> this.resume(KilledBeforeStartedExitCode) // contention on start() and kill()
+            is AllOutputsReported, is BeingKilled, is NotStarted -> TODO("state=$newState onStart()")
         }
-
-        if(config.aggregateOutputBufferLineCount > 0) {
-            val stdoutForAggregator = init.stdoutInflection.openSubscription("aggregator").lines()
-            readyness = readyness.copy(stdoutAggregatorJob = launchChild("stdoutAggregatorJob") {
-                for (message in stdoutForAggregator) {
-                    aggregateChannel.pushForward(StandardOutputMessage(message))
-                }
-            })
-            val stderrForAggregator = init.stderrInflection.openSubscription("aggregator").lines()
-            readyness = readyness.copy(stderrAggregatorJob = launchChild("stderrAggregatorJob") {
-                for (message in stderrForAggregator) {
-                    aggregateChannel.pushForward(StandardErrorMessage(message))
-                }
-            })
-        }
-
-        readyness = readyness.copy(exitCodeAggregatorJob = launchChild("exitCodeAggregatorJob") {
-            val result = init.exitCodeInflection.await()
-
-            // we want to make this the last message in the output channel,
-            // but because of the way attachConsole works in windows, we cant be assured the stdout
-            // will ever actually close, this means we have nothing to synchronize on here
-            // to make sure theres no more stdout!
-            // this sucks. _this sucks_!
-            fail;
-            delay(10)
-
-            if (config.exitCodeInResultAggregateChannel) {
-                aggregateChannel.pushForward(ExitCode(result))
-            }
-            else {} //even if we dont aggregate the output, we sill need this job as a sync point.
-        })
-
-        readyness = readyness.copy(jvmProcessBuilder = makeProcessBuilder(config.command).apply {
-
-            if (environment() !== config.environment) environment().apply {
-                clear()
-                putAll(config.environment)
-            }
-
-            if(config.run { standardErrorBufferCharCount == 0 && aggregateOutputBufferLineCount == 0 }){
-                redirectError(java.lang.ProcessBuilder.Redirect.DISCARD)
-            }
-            if(config.run { standardOutputBufferCharCount == 0 && aggregateOutputBufferLineCount == 0}){
-                redirectOutput(java.lang.ProcessBuilder.Redirect.DISCARD)
-            }
-
-            directory(config.workingDirectory.toFile())
-        })
-
-        atomicState.updateAndGet(this){ when(it){
-            warmingUp -> readyness
-            else -> throw makeCME(warmingUp)
-        }}
-
-        return true
     }
 
-    fun kickoff(): Boolean {
+    internal val body: suspend () -> Int? = body@ {
 
-        val myChange = State.Starting()
+        try { withContext(NonCancellable) {
 
-        val (readyState, starting) = atomicState.getAndUpdateAndGet(this) { prev -> when(prev){
-            is State.Ready -> myChange
-            else -> prev
+            tracing.trace { "${processState.get()} -> body.invoke()" }
+
+            var initialState = processState.get()
+            //note: we may already be in the final state if there is contention between coroutine.start() and kill()
+
+            var backoff = BackoffWindowMillis.first
+
+            while (initialState is RunningOrBeingKilled) {
+
+                initialState.run { check(errOpen || errOpen || exitCodeOrNull != null) { "state not promoted: $this" } }
+
+                if (isCancelled && initialState is Running) {
+                    kill0(CancelledExitCode)
+                }
+
+                check(coroutineContext[ContinuationInterceptor] == Dispatchers.IO)
+
+                when(val outputsOrNull = pollOutputsAndUpdateState(initialState)){
+                    null -> {
+                        backoff = (backoff * 2)
+                            .coerceIn(BackoffWindowMillis)
+                            .coerceAtLeast(1)
+
+                        delay(backoff)
+                    }
+                    else -> for(event in outputsOrNull){
+                        output(event)
+                    }
+                }
+
+                initialState = processState.get()
+            }
+
+            when (val finishingState = initialState) {
+                is AllOutputsReported -> finishingState.closedOutput.exitCode
+                is Closed -> makeResult<Result<Int>>(tracing).getOrThrow()
+                is BeingKilled, is NotStarted, is Running -> TODO("finishingState=$finishingState in body.finally")
+            }
         }}
-
-        if(starting !is State.Starting) {
-            trace { "state=$starting before kickoff: $this" }
-            return false
-        }
-        if(starting !== myChange) {
-            trace { "WARN: contention in kickoff!?"}
-            return false
-        }
-        require(readyState is State.Ready)
-
-        val process = try { readyState.jvmProcessBuilder.start() }
-        catch(ex: IOException){ throw IllegalArgumentException(ex.message ?: "", ex) }
-
-        val pid = pidGen.findPID(process)
-
-        val listeners = listenerFactory.create(process, pid, config)
-
-        makeInputStreamActor(process).sinkFrom(readyState.init.stdinInflection)
-
-        fun moveTowardCompletion(stateChange: (State) -> State): State {
-            val (prev, new) = atomicState.getAndUpdateAndGet(this){
-                val next = stateChange(it)
-                if(next is State.WindingDown) {
-                    next.takeUnless { it.stdoutEOF && it.stderrEOF }
-                            ?: State.Completed(next.pid, next.exitCode, next.interrupt, next.reaper)
-                } else next
-            }
-
-            if(prev is State.WindingDown && new is State.Completed){
-                prev.pumps.close()
-                completed.complete(Unit)
-            }
-
-            return new
-        }
-
-        readyState.init.stdoutInflection.sinkFrom(listeners.standardOutputChannel.value.thenOnCompletion(Dispatchers.Unconfined) {
-            moveTowardCompletion { when(it) {
-                is State.WindingDown -> it.copy(stdoutEOF = true)
-                is State.Running -> it.copy(stdoutEOF = true)
-                else -> nfg("state = $state")
-            }}
-        })
-        readyState.init.stderrInflection.sinkFrom(listeners.standardErrorChannel.value.thenOnCompletion(Dispatchers.Unconfined) {
-            moveTowardCompletion { when(it) {
-                is State.WindingDown -> it.copy(stderrEOF = true)
-                is State.Running -> it.copy(stderrEOF = true)
-                else -> nfg("State = $state")
-            }}
-        })
-        readyState.init.exitCodeInflection.sinkFrom(listeners.exitCodeDeferred.value.then { exitCode ->
-            val finalState = moveTowardCompletion { when(it) {
-                is State.Running -> State.WindingDown(
-                        it.pumps,
-                        it.pid,
-                        it.obtrudingExitCode ?: exitCode,
-                        it.interrupt?.source,
-                        it.reaper?.source,
-                        it.stderrEOF,
-                        it.stdoutEOF
-                )
-                else -> nfg("state = $state")
-            }}
-
-            (finalState as? ExitCodeProvider)?.exitCode ?: throw makeCME<ExitCodeProvider>()
-        })
-
-        val suiters = atomicState.getAndUpdate(this){ when(it){
-            is State.Starting -> State.Running(readyState.init, readyState, process, listeners, pid)
-            else -> throw makeCME(starting)
-        }}
-
-        if(suiters is State.Starting){
-            if(suiters.jobs.any()){
-                trace { "kickoff found ${suiters.jobs.size} deferred jobs on $suiters" }
-            }
-            suiters.jobs.forEach { it.invoke() }
-        }
-
-        return true
-    }
-
-    suspend fun waitFor(): Int {
-
-        val initialState = state
-        val ready = when(initialState){
-            is State.Uninitialized, is State.WarmingUp, is State.Ready, is State.Starting -> TODO("state=$initialState")
-            is State.Running -> initialState.ready
-            is State.WindingDown -> return initialState.exitCode
-            is State.Completed -> return initialState.exitCode
-            is State.Euthanized -> throw ProcessKilledException(-1, config.source, initialState.source)
-        }
-
-        return try {
-            val running = state
-            require(running is State.Running)
-
-            val exitCode = running.init.exitCodeInflection.await()
-
-            val state = state as? ExitCodeProvider ?: throw makeCME<State.WindingDown>()
-
-            val expectedExitCodes = config.expectedOutputCodes
-
-            val result = when {
-                state.interrupt != null -> throw ProcessInterruptedException(exitCode, config.source, state.interrupt!!)
-                state.reaper != null -> throw ProcessKilledException(exitCode, config.source, state.reaper!!)
-                expectedExitCodes == null -> exitCode
-                exitCode in expectedExitCodes -> exitCode
-                else -> throw makeExitCodeException(config, exitCode, ready.recentErrorOutput.toList())
-            }
-
-            result.also { trace { "exec '$shortName'(PID=${running.pid}) returned with code $result" } }
-        }
         catch(ex: Exception){
-            trace { "exec '$shortName'(PID=${Try { processID }}) threw an exception of '$ex'" }
-            throw ex
+            if(ex is CancellationException) throw ex
+            RuntimeException("INTERNAL EXEC COROUTINE FAILURE", ex).printStackTrace()
+            InternalErrorExitCode
         }
         finally {
-            withContext(NonCancellable) {
-                completed.join()
-                teardown()
-            }
+            tracing.trace { "body.invoke() -> ${processState.get()}" }
         }
     }
 
-    private fun teardown() {
+    // ack, this isnt a nice function
+    // it changes the processState field and
+    // and messages.addAndParse() is also not ref transparent
+    // and making them so requires more object allocations... do we care?
+    // TODO: make this more ref transparent --maybe add support for binary IO
+    // the updateState portion of this is tricky since its a CAS...
+    // plenty of sophisticated concepts for a CAS loop around...
+    // can I make this more idiomatic?
+    private suspend fun pollOutputsAndUpdateState(initialState: RunningOrBeingKilled): List<ProcessEvent>? {
 
-        aggregateChannel.close()
-        inputLines.close()
-        // standardError.cancel() --shouldnt need this, the close will propagate from the src to the tail
-        // standardOutput.cancel()
-        standardInput.close()
-    }
+        @Suppress("BlockingMethodInNonBlockingContext") val errReady = err.ready()
+        //im still not actually sure if this calls a prefetching code.
+        @Suppress("BlockingMethodInNonBlockingContext") val outReady = out.ready()
+        val exitCodeReady = !handle.isAlive
 
-    fun makeUnstartedInterruptOrReaper(running: State.Running, gentle: Boolean) = GlobalScope.launch(start = CoroutineStart.LAZY){
-        val killer = processControlFacade.create(config, running.process, running.pid).value
-        when(gentle){
-            true -> killer.tryKillGracefullyAsync(config.includeDescendantsInKill)
-            false -> killer.killForcefullyAsync(config.includeDescendantsInKill)
+        val processEnded = initialState.exitCodeOrNull != null
+
+        val outputsOrNull: List<ProcessEvent>? = when {
+            // we read err preferentially, since when the exit code isnt null
+            // we're going to slam this block
+            initialState.errOpen && (errReady || processEnded) -> {
+
+                val chunk = err.readAvailable(force = processEnded)
+
+                if (chunk === END_OF_FILE_CHUNK) {
+                    processState.updateAndGet { state -> when (state) {
+                        is NotStarted -> TODO()
+                        is Running -> closedOrPromoted(state, errNowOpen = false)
+                        is BeingKilled -> closedOrPromoted(state, errNowOpen = false)
+                        is AllOutputsReported, is Closed -> TODO()
+                    }}
+
+                    emptyList<ProcessEvent>()
+                }
+                // note: we dont need some kind of CAS loop on reading this fragment
+                // since only we can read output from the stream,
+                // so if we get output, even if it was closed by sombody else,
+                // it's still safe to bounce to the output stream
+                else {
+                    val lines = errMessages.addAndParse(chunk!!)
+                    recentErrors += lines
+                    lines.map(::StandardErrorMessage)
+                }
+            }
+            initialState.outOpen && (outReady || processEnded) -> {
+
+                val chunk = out.readAvailable(force = processEnded)
+
+                if (chunk === END_OF_FILE_CHUNK) {
+                    processState.updateAndGet { state -> when (state) {
+                        is NotStarted -> TODO()
+                        is Running -> closedOrPromoted(state, outNowOpen = false)
+                        is BeingKilled -> closedOrPromoted(state, outNowOpen = false)
+                        is AllOutputsReported, is Closed -> TODO()
+                    }}
+
+                    emptyList<ProcessEvent>()
+                }
+                else outMessages
+                    .addAndParse(chunk!!)
+                    .map(::StandardOutputMessage)
+            }
+            initialState.exitCodeOrNull == null && exitCodeReady -> {
+
+                val exitCode = process.exitValue()
+
+                val priorState = processState.getAndUpdate { state -> when (state) {
+                    is NotStarted -> TODO()
+                    is Running -> closedOrPromoted(state, newExitCodeOrNull = exitCode)
+                    is BeingKilled -> closedOrPromoted(state, newExitCodeOrNull = exitCode)
+                    is AllOutputsReported, is Closed -> TODO()
+                }}
+
+                check(priorState is RunningOrBeingKilled && priorState.exitCodeOrNull == null)
+
+                val code = when (priorState) {
+                    is NotStarted -> TODO()
+                    is Running -> exitCode
+                    is BeingKilled -> priorState.closedOutput.exitCode
+                    is AllOutputsReported, is Closed -> TODO()
+                }
+
+                listOf(ExitCode(code))
+            }
+            else -> null
         }
-        //from what i can tell theres nothing meaningful to synchronize on here.
-        // - waiting until the interrupt/kill is dispatched doesnt provide anything useful
-        // - waiting until the process is dead is redundant --you can just use exitCode.await() for that.
-        // so why return a job at all? why not just return unit? _it gives me the willies_
+        return outputsOrNull
     }
 
-    private fun tryKillAsync(source: CancellationException, obtrudeExitCode: Int?, gentle: Boolean = false): Unit {
+    private fun output(it: ProcessEvent) {
+        channel.offer(it)
+    }
 
-        val newState = atomicState.updateAndGet(this){ when(it) {
-            is State.Uninitialized -> State.Euthanized(first = true, source = source)
-            is State.WarmingUp -> State.Euthanized(first = true, source = source)
-            is State.Ready -> State.Euthanized(first = true, source = source)
-            is State.Starting -> {
-                it.copy(jobs = it.jobs + { tryKillAsync(source, obtrudeExitCode, gentle) })
-            }
-            is State.Running -> {
-                val interruptOrReaper = makeUnstartedInterruptOrReaper(it, gentle)
-                val sourcedInterruptOrReaper = State.Running.SourcedTermination(source, interruptOrReaper)
+    override fun onCancelled(cause: Throwable, handled: Boolean) {
+        tracing.trace { "${processState.get()} -> onCancelled($cause, $handled)" }
+        try {
+            val previousState = processState.getAndUpdate { state -> when (state) {
+                is NotStarted -> {
+                    // happens when a lazy coroutine is created and then the parent is killed
+                    Closed(ProcessClosing.Killed(null, makeProcessKilledException(tracing, null)))
+                }
+                is Running, is BeingKilled -> TODO("state=$state in onCancelled($cause)")
+                is AllOutputsReported -> Closed(state.closedOutput)
+                is Closed -> state.also { tracing.trace { "onCancelled when somebody closed?" } }
+            }}
 
-                if (gentle) it.copy(interrupt = sourcedInterruptOrReaper, obtrudingExitCode = obtrudeExitCode)
-                        else it.copy(reaper = sourcedInterruptOrReaper, obtrudingExitCode = obtrudeExitCode)
+            if (previousState !is Closed) onProcessStateClosed()
+        }
+        finally {
+            tracing.trace { "onCancelled(...) -> ${processState.get()}" }
+        }
+    }
+
+    override fun onCompleted(value: Int?) {
+        tracing.trace { "${processState.get()} -> onCompleted($value)" }
+
+        try {
+            val previousState = processState.getAndUpdate { state -> when (state) {
+                is NotStarted, is Running, is BeingKilled -> TODO("state=$state in onCompleted($value)")
+                is AllOutputsReported -> Closed(state.closedOutput)
+                is Closed -> state.also { tracing.trace { "onComplete when somebody closed?" } }
+            }}
+
+            if (previousState !is Closed) onProcessStateClosed()
+        }
+        finally {
+            tracing.trace { "onCompleted(...) -> ${processState.get()}" }
+        }
+    }
+
+    // this method is tricky,
+    // when we complete normally, onCompleted() will be sufficient
+    // but in the case of cancellation, closing-up in onCancel() is too eager
+    // since the process will produce more output.
+    // so the strategy is this: the guy who does a state transfer to Closed() is responsible for calling this.
+    private fun onProcessStateClosed() {
+        val state = processState.get()
+        check(state is Closed)
+
+        val result = makeResult<Result<Int>>(tracing)
+        if(result.isSuccess) channel.close() else channel.close(result.exceptionOrNull()!!)
+    }
+
+//    private fun makeResult(): Result<Int> { -- fails for ABI stability... ehhhh....
+    @Suppress("FINAL_UPPER_BOUND") // using generic to dodge kotlinc edge case "dont use Result as return value"
+    private fun <T: Result<Int>> makeResult(tracing: CoroutineTracer): T /*kotlin.Result<Int>*/ {
+        val state = (processState.get() as Closed)
+
+        @Suppress("UNCHECKED_CAST") return when(val output = state.closedOutput) {
+            is ProcessClosing.CompletedNormally -> {
+                output.exitCode.takeIf { config.expectedExitCodes == null || it in config.expectedExitCodes!! }
+                    ?.let { Result.success(output.exitCode) }
+                    ?: Result.failure(makeInvalidExitCodeException(tracing, output.exitCode))
             }
-            is State.WindingDown -> it
-            is State.Completed -> it
-            is State.Euthanized -> it.copy(first = false)
+            is ProcessClosing.Killed -> {
+                output.obtrudeExitCode.takeIf { config.expectedExitCodes == null || it in config.expectedExitCodes!! }
+                    ?.let { Result.success(it) }
+                    ?: Result.failure(output.killSource)
+            }
+            is ProcessClosing.CancelledAndKilled -> {
+                Result.failure(makeCancelledException(tracing, output.cancellingEx))
+            }
+        } as T
+    }
+
+
+    // TODO: support for binary input and output.
+    override fun sendLine(input: String): Unit {
+        val encoded = (input + '\n').toByteArray(config.encoding)
+        start()
+        process.outputStream.run {
+            write(encoded)
+            flush()
+        }
+    }
+
+    override suspend fun kill(obtrudeExitCode: Int?): Unit {
+        kill0(obtrudeExitCode)
+        join()
+    }
+
+    @Suppress("ThrowableNotThrown")
+    private fun kill0(obtrudingExitCodeOrKillCode: Int?): Unit = try {
+
+        val tracing = tracing.mark("kill")
+        tracing.trace { "${processState.get()} -> kill0(code=$obtrudingExitCodeOrKillCode)" }
+
+        val closedOutput: ProcessClosing = when(obtrudingExitCodeOrKillCode){
+            in 0 .. Int.MAX_VALUE -> ProcessClosing.Killed(obtrudingExitCodeOrKillCode, makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode))
+            null -> ProcessClosing.Killed(null, makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode))
+            KilledBeforeStartedExitCode -> ProcessClosing.Killed(KilledBeforeStartedExitCode, makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode))
+            CancelledExitCode -> ProcessClosing.CancelledAndKilled(makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode, getCancellationException()))
+            else -> throw IllegalArgumentException("unknown obtrudeExitCode $obtrudingExitCodeOrKillCode")
+        }
+
+        val isCancelling = obtrudingExitCodeOrKillCode == CancelledExitCode
+
+        val priorState = processState.getAndUpdate { state -> when(state) {
+            is NotStarted -> Closed(closedOutput)
+            is Running -> killed(state, closedOutput)
+            is BeingKilled -> {
+                if(isCancelling)
+                    state.copy(closedOutput) /*we 'upgrade' from a kill to a cancel*/ else
+                    state
+            }
+            is AllOutputsReported -> {
+                if (isCancelling)
+                    AllOutputsReported(closedOutput) else
+                    state // noop since we tried to kill a finished process --let it finish normally
+            }
+            is Closed -> state // process already finished and reported --this might be a user error?
         }}
 
-        val reaperOrInterrupt = when(newState) {
-            is State.Uninitialized, is State.Ready, is State.WarmingUp -> TODO("state=$newState")
-            is State.Starting -> {
-                trace {
-                    "attempted to kill/interrupt $shortName, " +
-                            "but it hasn't started yet, so the job was deferred to kickoff()"
-                }
-                null
+        when (priorState) {
+            is NotStarted -> {
+                // process never started,
+                check(processState.get() is Closed)
+                onProcessStateClosed()
             }
-            is State.Running -> when {
-                gentle -> newState.interrupt!!
-                else -> newState.reaper!!
+            is Running -> {
+                // we got the kill, so now we actually have to do it!
+                commitKillAsync()
             }
-            is State.Completed, is State.WindingDown -> {
-                trace { "attempted to kill/interrupt '$shortName' but its already state=$newState." }
-                null
-            }
-            is State.Euthanized -> {
-                if(newState.first) {
-                    completed.complete(Unit)
-                    cancel()
-                    teardown()
-                    trace { "killed unstarted process" }
-                }
-                else {
-                    trace { "attempted to kill/interrupt '$shortName' but its euthanized" }
-                }
-                null
+            is BeingKilled -> Unit // contention: the process was killed by somebody else
+            is AllOutputsReported -> Unit // contention: tried killed a process thats already finished
+            is Closed -> {
+                check(!isCancelling) // too late to cancel;
+                // we're protected by coroutines here, it will handle somebody calling cancel() twice or
+                // calling cancel() on a coroutine whose onComplete() has already gone off.
             }
         }
 
-        if(reaperOrInterrupt != null) reaperOrInterrupt.job.start()
-
-        return
+        tracing.trace { "kill0(...) -> ${processState.get()}" }
+    }
+    catch(ex: Throwable){
+        RuntimeException("INTERNAL EXEC COROUTINE FAILURE", ex).printStackTrace()
+        if(ex is Error) throw ex
+        Unit
     }
 
-    override fun onStart() {
-        if( ! prestart()) return
-        if( ! kickoff()) return
-        ::waitFor.createCoroutine(this).resume(Unit)
-    }
+    // function does not provide a synchronization mechanism on
+    // on the process ending!
+    private fun commitKillAsync() {
+        tracing.trace { "commitKillAsync ${handle.pid()}" }
 
-    override suspend fun kill(obtrudeExitCode: Int?) {
+        val deadline = System.currentTimeMillis() + config.gracefulTimeoutMillis
 
-        val killSource = CancellationException()
+        val gracefullyKilled = config.gracefulTimeoutMillis != 0L
+                && doPlatformKillGracefullyAndSynchronize(deadline)
 
-        val killedNormally = if(config.gracefulTimeoutMillis > 0){
-            val killed = withTimeoutOrNull(config.gracefulTimeoutMillis) {
-                tryKillAsync(gentle = true, obtrudeExitCode = obtrudeExitCode, source = killSource)
-                join()
-            } != null
-
-            killed.also { trace { "interrupted '$shortName' gracefully: $killed" } }
+        if (!gracefullyKilled) {
+            JEP102ProcessFacade.killForcefullyAsync(tracing, process, config.includeDescendantsInKill)
+//            process.waitFor()
         }
-        else false
-
-        if ( ! killedNormally) {
-            tryKillAsync(gentle = false, obtrudeExitCode = obtrudeExitCode, source = killSource)
-            join()
-        }
-
     }
 
-    override fun cancel(): Unit {
-        cancel(null)
-    }
+    fun doPlatformKillGracefullyAndSynchronize(deadline: Long): Boolean {
 
-    //MISNOMER: this is not on cancellation so much as its onCompletionOrCancellation!
-    override fun onCancellation(cause: Throwable?) {
-        val description = when(cause){
-            null -> "completed normally"
-            is CancellationException -> {
-                tryKillAsync(cause, obtrudeExitCode = null)
-                "cancelled"
+        val os = System.getProperty("os.name").toLowerCase()
+
+        val probablySuccededInGracefullKilling = when {
+            "windows" in os -> {
+                WindowsProcessControl.tryKillGracefullyAsync(
+                    tracing,
+                    ProcessHandle.current().pid(),
+                    process,
+                    config.includeDescendantsInKill,
+                    deadline
+                )
             }
-            is InvalidExitCodeException -> {
-                "completed with bad exit code"
+            "nix" in os -> {
+                JEP102ProcessFacade.tryKillGracefullyAsync(
+                    tracing,
+                    process,
+                    config.includeDescendantsInKill,
+                    deadline
+                )
             }
-            else -> {
-                cause.printStackTrace()
-                "unknown failure"
-            }
+            else -> TODO("unknown OS: $os")
         }
-        trace { "onCancellation for $shortName: '$description'" }
+
+        val timeout = deadline - System.currentTimeMillis()
+        if(timeout <= 0) return false.also { tracing.trace { "timed out" }}
+
+        val dead = probablySuccededInGracefullKilling
+                && process.waitFor(timeout, TimeUnit.MILLISECONDS)
+
+        return dead
     }
 
-    override fun cancel0(): Boolean = cancel(null)
-
-    override fun cancel(cause: Throwable?): Boolean {
-        return super<AbstractCoroutine<Int>>.cancel(cause) // cancel the job
-        //see [onCancellation]
-    }
-
-    override fun close() {
-        close(null)
-    }
-
-    //regarding cancellation:
-    // problem: our cancellation is long-running.
-    // [potential] solution: attach an unstarted job as a child.
-    //                       override `onCancellation()` to call that job
-    //                       that job an atomic (non-cancellable) impl of killOnceWITHSync
-
-    //other things:
-    // - error history
-    // - PID -- getter that throws illegal state exception
-    // - kill with sync, kill without sync.
-    // - input lines, needs an actor.
-
-    // failure of an exec call is not something special.
-    // If an exec call fails its failure mode is entirely handled by the standard API surface,
-    // there is no need to propagate the failure to parent coroutines, instead it is easier, and smarter,
-    // to simply throw an exception.
-    // if you flip this value, then notice the new strange stack-trace in tests with runBlocking blocks:
-    // groostav.kotlinx.exec.StandardIOTests.when running standard error chatty script with bad exit code
-    // should get the tail of that error output
-
-    override val cancelsParent: Boolean get() = false
-
-    private val _getCompleted: Method
-    private val _await: Method
-    private val _registerSelectClause1: Method
-
-    init {
-        // regarding subclassing this obnoxious internal methods:
-        //
-        // if @elizarov wont give us public visibility THEN WE STORM THE BRIDGES!!
-        //
-        // see if maybe you can find the mangled generated access method,
-        // something like super.internal$getCompletedInternal, that prevents you from forking this.
-        //
-        // then, I think we can take this, you'll need to call `process.start()` somewhere.
-        //
-        // long term, we'll see where this API lands, but fundamentally it shouldnt bee to hard to
-        // grab source code for DeferredCoroutine
-        // (kotlinx-coroutines-core-common-1.0.1-sources.jar!/Builders.common.kt:87),
-        // regardless of its implementation.
-
-        val bridgeMethods = this::class.java.methods
-        _getCompleted = bridgeMethods.single { it.name == "getCompletedInternal\$kotlinx_coroutines_core" }
-        _await = bridgeMethods.single { it.name == "awaitInternal\$kotlinx_coroutines_core" }
-        _registerSelectClause1 = bridgeMethods.single { it.name == "registerSelectClause1Internal\$kotlinx_coroutines_core" }
-    }
-
-    override fun getCompleted(): Int = _getCompleted<Int>()
-    override suspend fun await(): Int = suspendCoroutine<Int> { _await<Any>(it) }
-    override val onAwait: SelectClause1<Int> get() = this
-    override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R): Unit
-            = _registerSelectClause1<Unit>(select, block)
-
-    private inline operator fun <reified T> Method.invoke(vararg args: Any): T {
-        val result = try {
-            this.invoke(this@ExecCoroutine, *args)
-        }
-        catch(ex: InvocationTargetException){
-            throw ex.cause ?: ex
-        }
-        return if(result is T) result
-        else if (result == null && T::class == Unit::class) Unit as T //this seems to be a problem with kotlin mapping through reflection.
-        else throw ClassCastException("$result cannot be cast to ${T::class} as needed for the return type of $name")
-    }
-
-    private fun CoroutineScope.launchChild(
-            description: String? = null,
-            context: CoroutineContext = EmptyCoroutineContext + Dispatchers.Unconfined,
-            start: CoroutineStart = CoroutineStart.DEFAULT,
-            block: suspend CoroutineScope.() -> Unit
-    ) = launch(context, start) {
-        val id = jobId.getAndIncrement()
-        val jobName = "job-$id${description?.let { "=$it" } ?: ""}"
-        trace { "started $jobName" }
+    // note: I dont have access to awaitInternal() on JobSupport
+    // which is what DeferredCoroutine uses.
+    // so we synchronize with join() and fetch the result with our own state.
+    override suspend fun await(): Int {
+        val tracing = tracing.mark("await")
         try {
-            block()
-            trace { "completed $jobName normally" }
+            tracing.trace { "${processState.get()} -> await()" }
+            join()
+            val result = makeResult<Result<Int>>(tracing)
+            return result.getOrThrow()
         }
-        catch(ex: Exception){
-            trace { "completed $jobName exceptionally: $ex" }
-            throw ex
+        finally {
+            tracing.trace { "await() -> ${processState.get()}" }
         }
     }
 
-    private fun makeCME(expected: State) = ConcurrentModificationException(
-            "expected state=$expected but was actually $state"
-    )
-    private inline fun <reified T> makeCME() = ConcurrentModificationException(
-            "expected 'state is ${T::class.simpleName}' but was actually state=$state"
-    )
 
-    companion object Factory {
+    private fun makeCancelledException(tracing: CoroutineTracer, cancellingEx: Throwable) =
+        CancellationException("Process was cancelled (and killed)", cancellingEx)
 
-        operator fun invoke(
-                config: ProcessConfiguration,
-                parentContext: CoroutineContext,
-                start: CoroutineStart,
-                pidGen: ProcessIDGenerator,
-                listenerFactory: ProcessListenerProvider.Factory,
-                processControlFactory: ProcessControlFacade.Factory
-        ) = ExecCoroutine(
-                config,
-                parentContext, start != CoroutineStart.LAZY,
-                pidGen, listenerFactory, processControlFactory, ::ProcessBuilder, { it.outputStream.toSendChannel(config) },
-                aggregateChannel = Channel(config.aggregateOutputBufferLineCount.asQueueChannelCapacity()),
-                inputLines = Channel(Channel.RENDEZVOUS)
-        )
+    private fun makeProcessKilledException(
+        tracing: CoroutineTracer,
+        exitCode: Int?,
+        sourceException: Exception? = null
+    ): ProcessKilledException {
+        val message = buildString {
+            append("killed ")
+            if(exitCode != null) append("(with exit code $exitCode) ")
+            appendAbbreviatedCommandLine()
+        }
+        return ProcessKilledException(message, sourceException).apply {
+            stackTrace = tracing.makeMangledTrace().toTypedArray()
+        }
+    }
 
-        @JvmStatic
-        private val atomicState = AtomicReferenceFieldUpdater.newUpdater(
-                ExecCoroutine::class.java,
-                State::class.java,
-                "state"
-        )
+    private fun makeInvalidExitCodeException(
+        tracing: CoroutineTracer,
+        exitCode: Int
+    ): InvalidExitCodeException {
+        val recentErrorLines = recentErrors.toList()
+
+        val message = buildString {
+            append("exit code $exitCode from ")
+            appendAbbreviatedCommandLine()
+            if(recentErrorLines.any()) appendLine().appendLine("the most recent standard-error output was:")
+            for (recentErrorLine in recentErrorLines) {
+                appendLine(recentErrorLine.take(ColumnLimit))
+            }
+        }
+        return InvalidExitCodeException(
+            exitCode, config.expectedExitCodes,
+            config.command, recentErrorLines, message
+        ).apply {
+            stackTrace = tracing.makeMangledTrace().toTypedArray()
+        }
+    }
+
+    private fun StringBuilder.appendAbbreviatedCommandLine() {
+        val cmdLine = config.command.joinToString(" ")
+        append(cmdLine.take(ColumnLimit))
+        if (cmdLine.length > ColumnLimit) append("[...]")
+    }
+
+    override suspend fun receive(): ProcessEvent {
+        val tracing = tracing.mark("receive")
+        tracing.trace { "${processState.get()} -> receive()"}
+
+        return try {
+            channel.receive()
+        }
+        catch(ex: CancellationException){
+            throw CancellationException("process cancelled (no further output)", ex).apply {
+                stackTrace = tracing.makeMangledTrace().toTypedArray()
+            }
+        }
+        finally {
+            tracing.trace { "receive() -> ${processState.get()}"}
+        }
+    }
+    override suspend fun receiveOrNull(): ProcessEvent? {
+        return channel.receiveOrNull()
+    }
+
+    @OptIn(InternalCoroutinesApi::class)
+    override suspend fun collect(collector: FlowCollector<ProcessEvent>) {
+        val tracing = tracing.mark("collect")
+        try {
+            // do we convert channel to flow ahead of time once or do we do it per request?
+            // im doing the latter because it throws-away aborted flows
+            // (calling first() will abort the flow, but I do not want that to prevent future output)
+            val flow = channel.receiveAsFlow()
+
+            flow.collect(object: FlowCollector<ProcessEvent> {
+                override suspend fun emit(value: ProcessEvent) {
+//                    try {
+                        collector.emit(value)
+//                    }
+//                    catch (ex: CancellationException) {
+//                        // TODO: write a test that actually incurrs this exception? How do we get it?
+//                        throw CancellationException("failed to emit element", ex).apply {
+//                            stackTrace = tracing.makeMangledTrace().toTypedArray()
+//                        }
+//                    }
+                }
+            })
+        }
+        catch(ex: Exception) {
+            throw if(ex is CancellationException)
+                ex else //abort flow exception must be thrown as-is
+                CancellationException("Process abruptly stopped producing output", ex).apply {
+                    stackTrace = tracing.makeMangledTrace().toTypedArray()
+                }
+        }
     }
 }
 
-private val jobId = AtomicInteger(1)
-
-private fun makeName(config: ProcessConfiguration)= CoroutineName(
-        config.debugName ?: "exec ${makeNameString(config, 50)}"
+private fun killed(state: Running, closedOutput: ProcessClosing) = BeingKilled(
+    state.errOpen,
+    state.outOpen,
+    state.exitCodeOrNull,
+    closedOutput
 )
 
-private fun makeNameString(config: ProcessConfiguration, targetLength: Int) = buildString {
-    val commandSeq = config.command.asSequence()
-    append(commandSeq.first().replace("\\", "/").substringAfterLast("/").take(targetLength))
+private fun closedOrPromoted(
+    state: RunningOrBeingKilled,
+    errNowOpen: Boolean = state.errOpen,
+    outNowOpen: Boolean = state.outOpen,
+    newExitCodeOrNull: Int? = state.exitCodeOrNull
+): State {
+    val exitCodeOrNull = state.exitCodeOrNull ?: newExitCodeOrNull
+    val isFinished = !errNowOpen && !outNowOpen && exitCodeOrNull != null
 
-    val iterator = commandSeq.drop(1).iterator()
-    if(length < targetLength){
-        while(length < targetLength -1 && iterator.hasNext()){
-            append(" ")
-            append(iterator.next().take(targetLength - length))
-        }
-        append("...")
+    val result = when {
+        state is Running && ! isFinished -> Running(
+            errOpen = errNowOpen,
+            outOpen = outNowOpen,
+            exitCodeOrNull = exitCodeOrNull
+        )
+        state is Running && isFinished -> AllOutputsReported(
+            ProcessClosing.CompletedNormally(newExitCodeOrNull!!)
+        )
+        state is BeingKilled  && ! isFinished -> BeingKilled(
+            errOpen = errNowOpen,
+            outOpen = outNowOpen,
+            exitCodeOrNull = exitCodeOrNull,
+            state.closedOutput
+        )
+        state is BeingKilled && isFinished -> AllOutputsReported(
+            state.closedOutput
+        )
+        else -> TODO("cant close or promote $state")
+    }
+
+    require(state != result) { "didnt close and didnt promote, before=$state, after=$result" }
+
+    return result
+}
+
+private sealed class State { }
+private object NotStarted: State()
+interface RunningOrBeingKilled {
+    val errOpen: Boolean
+    val outOpen: Boolean
+    val exitCodeOrNull: Int?
+}
+private class Running(
+    override val errOpen: Boolean = true,
+    override val outOpen: Boolean = true,
+    override val exitCodeOrNull: Int? = null
+): State(), RunningOrBeingKilled
+
+private class BeingKilled(
+    override val errOpen: Boolean = true,
+    override val outOpen: Boolean = true,
+    override val exitCodeOrNull: Int? = null,
+    val closedOutput: ProcessClosing
+): State(), RunningOrBeingKilled {
+    fun copy(newClosedOutput: ProcessClosing) = BeingKilled(errOpen, outOpen, exitCodeOrNull, newClosedOutput)
+}
+
+sealed class ProcessClosing() {
+
+    abstract val exitCode: Int
+
+    data class CompletedNormally(override val exitCode: Int): ProcessClosing()
+    data class CancelledAndKilled(val cancellingEx: ProcessKilledException): ProcessClosing() {
+        override val exitCode get() = CancelledExitCode
+    }
+    data class Killed(val obtrudeExitCode: Int?, val killSource: ProcessKilledException): ProcessClosing() {
+        override val exitCode get() = obtrudeExitCode ?: KilledWithoutObtrudingCodeExitCode
     }
 }
 
-private val NullProcBuilder = java.lang.ProcessBuilder()
+private class AllOutputsReported(val closedOutput: ProcessClosing): State()
+private class Closed(val closedOutput: ProcessClosing): State()
 
-private inline fun <T, V> AtomicReferenceFieldUpdater<T, V>.getAndUpdateAndGet(obj: T, updater: (V) -> V): Pair<V, V>{
-    var prev: V
-    var next: V
-    do {
-        prev = get(obj)
-        next = updater(prev)
-    } while (!compareAndSet(obj, prev, next))
-
-    return prev to next
-}
+val BackoffWindowMillis = 0L .. 100L
+val END_OF_FILE_CHUNK: CharArray? = null

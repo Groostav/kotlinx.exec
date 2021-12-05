@@ -1,6 +1,5 @@
 package groostav.sanity
 
-import groostav.kotlinx.exec.nfg
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.channels.Channel.Factory.RENDEZVOUS
@@ -9,6 +8,7 @@ import kotlinx.coroutines.selects.SelectInstance
 import kotlinx.coroutines.selects.select
 import org.junit.Ignore
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.jvm.internal.FunctionReference
@@ -16,7 +16,6 @@ import kotlin.reflect.KClass
 import kotlin.reflect.KFunction1
 import kotlin.reflect.jvm.jvmName
 import kotlin.test.*
-
 
 @InternalCoroutinesApi
 class KotlinTests {
@@ -151,7 +150,7 @@ class KotlinTests {
             //else wait for the other to complete
             side == Side.Left -> right.await()
             side == Side.Right -> left.await()
-            else -> nfg()
+            else -> TODO()
         }
     }
 
@@ -183,7 +182,7 @@ class KotlinTests {
 
     @Test fun `when using orAsyncLazy should not start until left completes`() = runBlocking {
         val left = CompletableDeferred<Boolean>()
-        val right: suspend () -> Nothing = { nfg("blam: you evaluated right eagerly!") }
+        val right: suspend () -> Nothing = { TODO("blam: you evaluated right eagerly!") }
 
         val result = left orAsyncLazy { right() }
 
@@ -360,11 +359,11 @@ class KotlinTests {
         //region copied from DeferredCoroutine
 
 //        override val cancelsParent: Boolean get() = true
-        override fun getCompleted(): Int = nfg("delegates to internal method with bad type: getCompletedInternal() as Int")
-        override suspend fun await(): Int = nfg("delegates to internal method with bad type: awaitInternal() as Int")
+        override fun getCompleted(): Int = TODO("delegates to internal method with bad type: getCompletedInternal() as Int")
+        override suspend fun await(): Int = TODO("delegates to internal method with bad type: awaitInternal() as Int")
         override val onAwait: SelectClause1<Int> get() = this
         override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R) =
-                nfg("delegates to internal method with bad type: registerSelectClause1Internal(select, block)")
+            TODO("delegates to internal method with bad type: registerSelectClause1Internal(select, block)")
 
         //endregion
 
@@ -484,7 +483,7 @@ class KotlinTests {
     }
     object MaindThingy{
         @JvmStatic fun main(args: Array<String>){
-            nfg()
+            TODO()
         }
     }
 
@@ -570,6 +569,58 @@ class KotlinTests {
         // thus, to get "nice" behaviour where ExecCoroutine doesnt exit until the process is dead,
         // you need to fire the killAsync() from within the suspend block, not from an onCancellation listener.
         // which "must be fast and lock free".
+    }
+
+    @Test fun `when decoding a string fragment should be manageable`(){
+        // ok, so my thinking is that we extract the concept of UTF-8 encoding of standard-out/err out of ExecCoroutine
+        // and have ExecCoroutine operate on this concept of ByteArray Chunks
+        // this would make it more useful for doing things like passing binary formats through input and output
+        // but it would require us to decode byte array chunks, which won't necessarily
+        // be delimited on byte boundaries
+        // (IE; if you have the string [8-bit-utf-char][16-bit-utf-char])
+        // and you read a byte-array of 2 elements, you'd get a truncated first-half of the second (16 bit) char.
+        //
+        // so if we do this encoding of chunks, what does Charsets.decode(chunkWithTruncatedLastChar) do?
+        TODO()
+    }
+
+    @Test fun `when starting a job as the child of a cancelled process should work anyways`() = runBlocking<Unit>(Dispatchers.IO){
+
+        val started = CountDownLatch(1)
+        val proceedToLaunchChild = CountDownLatch(1)
+        var child: Job? = null
+        var ran: Boolean = false
+
+        val cancellingParent = launch {
+            started.countDown()
+            proceedToLaunchChild.await()
+
+            child = launch(start = CoroutineStart.ATOMIC) {
+                ran = true
+            }
+        }
+        started.await()
+
+        //act
+        cancellingParent.cancel()
+        proceedToLaunchChild.countDown()
+        cancellingParent.join()
+        child?.join()
+
+        // assert
+        assertTrue(ran, "the coroutine $cancellingParent can start running child job after it was cancelled")
+        // interestingly:
+        assertFalse(child in cancellingParent.children, "the child coroutine:\n$child\nwas not a child of the parent\n$cancellingParent")
+    }
+
+    @Test fun `when asking powershell things`(){
+        val process = ProcessBuilder()
+            .command("powershell.exe", "-Command", "Get-Process")
+            .start()
+
+        val lines = process.inputStream.reader().readLines()
+
+        assertTrue(lines.isNotEmpty())
     }
 }
 
