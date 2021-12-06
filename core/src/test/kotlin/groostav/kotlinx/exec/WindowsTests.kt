@@ -2,18 +2,18 @@ package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.selects.select
-import org.amshove.kluent.*
-import org.junit.Assert.assertTrue
+import org.hamcrest.core.IsEqual
+import org.junit.Assert.assertThat
 import org.junit.Assume
 import org.junit.BeforeClass
 import org.junit.Ignore
 import org.junit.Test
 import java.util.*
-import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 
 // Wow, so powershell takes 10X longer to start (~1 second) than cmd (~100ms)
@@ -28,16 +28,14 @@ class WindowsTests {
 
     @Ignore("functional")
     @Test fun `when running calc should get a calc`() = runBlocking<Unit> {
-        val code = execVoid("calc.exe")
+        val (output, code) = exec("calc.exe")
 
-        code shouldEqual 0
+        assertEquals(0, code)
     }
 
     @Test fun `when running simple echo statement should properly redirect`() = runBlocking<Unit> {
 
-        val runningProcess = execAsync {
-            command = listOf("cmd", "/C", "echo", "hello command line!")
-        }
+        val runningProcess = execAsync(commandLine=listOf("cmd", "/C", "echo", "hello command line!"))
 
         val messages = runningProcess.map { event -> when(event){
             is StandardErrorMessage -> "std-err: ${event.line}"
@@ -45,14 +43,14 @@ class WindowsTests {
             is ExitCode -> "exit code: ${event.code}"
         }}
 
-        val exitCode = runningProcess.exitCode.await()
+        val exitCode = runningProcess.await()
         val messagesList = messages.toList()
 
-        messagesList.shouldEqual(listOf(
-                "\"hello command line!\"", //extra quotes inserted by cmd
-                "exit code: 0"
-        ))
-        exitCode.shouldEqual(0)
+        assertEquals(listOf(
+            "\"hello command line!\"", //extra quotes inserted by cmd
+            "exit code: 0"
+        ), messagesList)
+        assertEquals(0, exitCode)
     }
 
 
@@ -93,14 +91,23 @@ class WindowsTests {
                 val message = Message(event.line)
                 localDecoder.send(message)
                 val nextInputLine = message.response.await()
-                if(nextInputLine != null) { process.send(nextInputLine) }
+                if(nextInputLine != null) { process.sendLine(nextInputLine) }
             }
             is ExitCode -> event
         }}
-        val result = runningOutputChannel
-                .map { (it as? StandardOutputMessage)?.run { copy(line = line.replace(IP_REGEX, "1.2.3.4"))} ?: it }
-                .map { it.also { trace { it.toString() } } }
-                .toList()
+        val result = select<List<ProcessEvent>?> {
+            async {
+                runningOutputChannel
+                        .map {
+                            (it as? StandardOutputMessage)?.run { copy(line = line.replace(IP_REGEX, "1.2.3.4")) } ?: it
+                        }
+                        .map { it.also { println(it.toString()) } }
+                        .toList()
+            }.onAwait { it }
+            onTimeout(10_000_000) { null }
+        }
+
+        val x= 4;
 
         //assert
         val expectedAlmostSequence = listOf(
@@ -135,10 +142,10 @@ class WindowsTests {
         // so to avoid flappers, we'll do set equality on the whole thing,
         // then sequence equality on the channels separately.
         // assertEquals(expectedAlmostSequence, result) passes _most_ of the time.
-        assertEquals(expectedAlmostSequence.toSet(), result.toSet())
-        assertEquals(expectedAlmostSequence.filterIsInstance<StandardOutputMessage>(), result.filterIsInstance<StandardOutputMessage>())
-        assertEquals(expectedAlmostSequence.filterIsInstance<StandardErrorMessage>(), result.filterIsInstance<StandardErrorMessage>())
-        assertEquals(expectedAlmostSequence.last(), result.last())
+        assertEquals(expectedAlmostSequence.toSet(), result?.toSet())
+        assertEquals(expectedAlmostSequence.filterIsInstance<StandardOutputMessage>(), result?.filterIsInstance<StandardOutputMessage>())
+        assertEquals(expectedAlmostSequence.filterIsInstance<StandardErrorMessage>(), result?.filterIsInstance<StandardErrorMessage>())
+        assertEquals(expectedAlmostSequence.last(), result?.last())
     }
 
     @Test fun `when using script with Write-Progress style progress bar should only see echo statements`() = runBlocking <Unit>{
@@ -151,15 +158,15 @@ class WindowsTests {
                 "-SleepTime", "1",
                 "-ExecutionPolicy", "Bypass"
         )
-        val output = proc.standardOutput.lines().map { println(it); it }.toList()
+        val output = proc.mapNotNull { (it as? StandardOutputMessage)?.formattedMessage }.map { println(it); it }.toList()
 
         //assert
-        output shouldEqual listOf(
+        assertEquals(listOf(
                 "Important task 42",
                 //unfortunately the progress bar, which shows up as a nice UI element in powershell ISE
                 // or as a set of 'ooooooo's in powershell terminal doesnt get emitted to any standard output channel, so we loose it.
                 "done Important Task 42!"
-        )
+        ), output)
 
     }
 
@@ -173,7 +180,7 @@ class WindowsTests {
                 "-SleepTime", "1",
                 "-ExecutionPolicy", "Bypass"
         )
-        val output = proc.standardOutput.lines().map { println(it); it }.toList()
+        val output = proc.mapNotNull { (it as? StandardOutputMessage)?.formattedMessage }.map { println(it); it }.toList()
 
         //assert
         assertEquals(listOf(
@@ -206,11 +213,10 @@ class WindowsTests {
             null
         }
         //note, a scripts 'thrown error' is simply 'exit code 1' in powershell semantics
-        catch(ex: InvalidExitValueException){ ex }
+        catch(ex: InvalidExitCodeException){ ex }
 
-        assertEquals("""
-            |exec 'powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass'
-            |exited with code 1 (expected 0)
+        assertThat(thrown?.message, IsEqual.equalTo("""
+            |exit code 1 from powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass
             |the most recent standard-error output was:
             |this is an important message!
             |At $simpleScript:12 char:5
@@ -220,7 +226,7 @@ class WindowsTests {
             |    + FullyQualifiedErrorId : this is an important message!
             |${" "}
             |
-        """.trimMargin().lines(), thrown?.message?.lines())
+        """.trimMargin()))
     }
 
     @Test fun `when async command returns non-zero exit code should throw by default`() = runBlocking<Unit>{
@@ -233,44 +239,36 @@ class WindowsTests {
                     "-ThrowError",
                     "-ExecutionPolicy", "Bypass"
             )
-            running.exitCode.await()
+            running.await()
             null
         }
-        catch(ex: InvalidExitValueException){ ex }
+        catch(ex: InvalidExitCodeException){ ex }
 
-        assertEquals("""
-            |exec 'powershell.exe -File $simpleScript -ThrowError -ExecutionPolicy Bypass'
-            |exited with code 1 (expected 0)
-            |the most recent standard-error output was:
-            |this is an important message!
-            |At $simpleScript:12 char:5
-            |+     throw "this is an important message!"
-            |+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-            |    + CategoryInfo          : OperationStopped: (this is an important message!:String) [], RuntimeException
-            |    + FullyQualifiedErrorId : this is an important message!
-            |${" "}
-            |
-        """.trimMargin().lines(), thrown?.message?.lines())
-        assertNotNull(thrown?.cause)
-        assertEquals(
-                //assert that cause points to exec.exec() at its top --not into the belly of some coroutine
-                "groostav.kotlinx.exec.ExecKt.execAsync(exec.kt:LINE_NUM)",
-                thrown?.cause?.stackTrace?.get(0)?.toString()?.replace(Regex(":\\d+\\)"), ":LINE_NUM)")
-        )
-    }
+        assertThat(thrown?.stackTraceWithoutLineNumbersToString(22)?.trim(), IsEqual.equalTo("""
+            groostav.kotlinx.exec.InvalidExitCodeException: exit code 1 from powershell.exe -File <SCRIPT_PATH> -ThrowError -ExecutionPolicy Bypass
+            the most recent standard-error output was:
+            this is an important message!
+            At <SCRIPT_PATH>:12 char:5
+            +     throw "this is an important message!"
+            +     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                + CategoryInfo          : OperationStopped: (this is an important message!:String) [], RuntimeException
+                + FullyQualifiedErrorId : this is an important message!
+            ${" "}
 
-    @Test fun `when running with non standard env should do things`() = runBlocking<Unit> {
-        val simpleScript = getLocalResourcePath("SimpleScript.ps1")
-        val (lines, _) = exec {
-            command = listOf(
-                    "powershell.exe",
-                    "-File", simpleScript,
-                    "-ExecutionPolicy", "Bypass"
-            )
-            environment += "GROOSTAV_ENV_VALUE" to "Testing!"
-        }
+            ${TAB}at groostav.kotlinx.exec.CoroutineTracer.mark(CoroutineTracer.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.ExecCoroutine.await(ExecCoroutine.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.WindowsTests${'$'}when async command returns non-zero exit code should throw by default${'$'}1.invokeSuspend(WindowsTests.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.CoroutineTracer.ASYNC_RECOVERY_FOR_START(Unknown Source)
+            ${TAB}at groostav.kotlinx.exec.CoroutineTracer.mark(CoroutineTracer.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.ExecCoroutine.onStart(ExecCoroutine.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.ExecCoroutine.<init>(ExecCoroutine.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.ExecCoroutine.<init>(ExecCoroutine.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.ExecKt.execAsync(exec.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.ExecKt.execAsync(exec.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.ExecKt.execAsync${'$'}default(exec.kt:<LINE_NUM>)
+            ${TAB}at groostav.kotlinx.exec.WindowsTests${'$'}when async command returns non-zero exit code should throw by default${'$'}1.invokeSuspend(WindowsTests.kt:<LINE_NUM>)
+        """.trimIndent()))
 
-        assertEquals(listOf<String>("env:GROOSTAV_ENV_VALUE is 'Testing!'"), lines)
     }
 
 
@@ -284,33 +282,27 @@ class WindowsTests {
         // So this test verifies that using a script with Read-Host -Prompt **does not** work.
 
         //setup
-        val runningProc = execAsync {
-            command = listOf(
+        val runningProc = execAsync(
+            commandLine = listOf(
                     "powershell.exe",
                     "-ExecutionPolicy", "Bypass",
                     "-File", getLocalResourcePath("ReadHostStyleScript.ps1")
-            )
-            delimiters += ":" //doesnt help, the characters dont show up on the reader!
-        }
+            ),
+            delimiters = listOf("\r", "\n", "\r\n", ":") //doesnt help, the characters dont show up on the reader!
+        )
 
         //act
         var result = emptyList<String>()
         do {
-            val next = select<String> {
-                runningProc.onReceiveOrNull { it?.formattedMessage ?: "closed" }
-                runningProc.exitCode.onAwait { "exited" }
+            val next = withTimeoutOrNull(if("hello!" in result) 200 else 999_999) {
+                runningProc.receiveOrNull()?.formattedMessage ?: "closed"
+            } ?: "timed-out"
 
-                if("hello!" in result) {
-                    onTimeout(200) {
-                        "timed-out"
-                    }
-                }
-            }
             result += next
         }
         while(next != "exited" && next != "timed-out" && next != "closed")
 
-        runningProc.cancel()
+        runningProc.kill(0)
 
         //assert
         assertEquals(listOf("hello!", "timed-out"), result)
@@ -326,54 +318,58 @@ class WindowsTests {
         // in opposition to the above, powershell does 'wire standard-input' input to the 'input-pipeline',
         // so we can leverage that here fairly effectively.
 
-        //setup
-        val runningProc = execAsync {
-            command = listOf(
-                    "powershell.exe",
-                    "-ExecutionPolicy", "Bypass",
-                    "-File", getLocalResourcePath("ReadPipelineInputStyleScript.ps1")
-            )
-        }
-        val responses = queueOf("hello", "powershell!")
+        TODO("lost channel semantics")
 
-        //act
-        var result = emptyList<String>()
-        while( ! runningProc.isClosedForReceive) {
-            val next = select<String> {
-                runningProc.onReceive { it.formattedMessage }
-                runningProc.exitCode.onAwait { "exited" }
-            }
-            result += next
-
-            println("output=$next")
-
-            val response: String? = when(next){
-                "Go ahead and write things to input..." -> responses.poll() ?: "[EOF]"
-                "exited" -> null
-                else -> null
-            }
-            println("response=$response")
-
-            when(response){
-                "[EOF]" -> runningProc.close() //you may also write runningProc.inputstream.close()
-                is String -> runningProc.send(response)
-                null -> {}
-            }
-            if(next == "exited" || next == "timed-out") break;
-        }
-
-        //assert
-        assertEquals(
-                listOf(
-                        "Go ahead and write things to input...",
-                        "processing hello!",
-                        "Go ahead and write things to input...",
-                        "processing powershell!!",
-                        "Go ahead and write things to input...", //send EOF signal
-                        "done!",
-                        "exited"
-                ),
-        result)
+//        //setup
+//        val runningProc = execAsync(
+//            commandLine = listOf(
+//                    "powershell.exe",
+//                    "-ExecutionPolicy", "Bypass",
+//                    "-File", getLocalResourcePath("ReadPipelineInputStyleScript.ps1")
+//            )
+//        )
+//        val responses = queueOf("hello", "powershell!")
+//
+//        //act
+//        var result = emptyList<String>()
+//        do {
+//            val next = select<String?> {
+//                runningProc.onAwait { "exited" }
+//                if( ! runningProc.isClosedForReceive) runningProc.onReceiveOrNull { it?.formattedMessage }
+//            }
+//
+//            result += next ?: continue
+//
+//            println("output=$next")
+//
+//            val response: String? = when(next){
+//                "Go ahead and write things to input..." -> responses.poll() ?: "[EOF]"
+//                "exited" -> null
+//                else -> null
+//            }
+//            println("response=$response")
+//
+//            when(response){
+//                "[EOF]" -> runningProc.close() //you may also write runningProc.inputstream.close()
+//                is String -> runningProc.send(response)
+//                null -> {}
+//            }
+//        } while (next != "exited" && next != "timed-out")
+//
+//        //assert
+//        assertEquals(
+//                listOf(
+//                        "Go ahead and write things to input...",
+//                        "processing hello!",
+//                        "Go ahead and write things to input...",
+//                        "processing powershell!!",
+//                        "Go ahead and write things to input...", //send EOF signal
+//                        "done!",
+//                        "Process finished with exit code 0",
+//                        "exited"
+//                ),
+//                result
+//        )
     }
 }
 

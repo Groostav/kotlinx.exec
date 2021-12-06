@@ -1,166 +1,148 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.channels.*
-import java.io.IOException
-import java.lang.ProcessBuilder as JProcBuilder
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.nio.charset.Charset
+import java.nio.file.Path
+import java.nio.file.Paths
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.coroutineContext
+
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
 
-internal fun execAsync(config: ProcessBuilder): RunningProcess {
+suspend fun exec(
+    command: String,
+    vararg arg: String,
+    environment: Map<String, String> = InheritedDefaultEnvironment,
+    workingDirectory: Path = Paths.get("").toAbsolutePath(),
+    delimiters: List<String> = listOf("\r", "\n", "\r\n"),
+    encoding: Charset = Charsets.UTF_8,
+    standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+    standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+    aggregateOutputBufferLineCount: Int = 2000,
+    gracefulTimeoutMillis: Long = 1500L,
+    includeDescendantsInKill: Boolean = false,
+    expectedOutputCodes: Set<Int>? = setOf(0), //see also
+    linesForExceptionError: Int = 15
+): ProcessResult = exec(
+    ArrayList<String>(arg.size + 1).apply {
+        add(command)
+        addAll(arg)
+    },
+    environment, workingDirectory,
+    delimiters, encoding,
+    standardErrorBufferCharCount, standardOutputBufferCharCount, aggregateOutputBufferLineCount,
+    gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
+)
 
-    val jvmProcessBuilder = JProcBuilder(config.command).apply {
+suspend fun exec(
+    commandLine: List<String>,
+    environment: Map<String, String> = InheritedDefaultEnvironment,
+    workingDirectory: Path = Paths.get("").toAbsolutePath(),
+    delimiters: List<String> = listOf("\r", "\n", "\r\n"),
+    encoding: Charset = Charsets.UTF_8,
+    standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+    standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+    aggregateOutputBufferLineCount: Int = 2000,
+    gracefulTimeoutMillis: Long = 1500L,
+    includeDescendantsInKill: Boolean = false,
+    expectedOutputCodes: Set<Int>? = setOf(0), //see also
+    linesForExceptionError: Int = 15
+): ProcessResult {
 
-        environment().apply {
-            if(this !== config.environment) {
-                clear()
-                putAll(config.environment)
-            }
-        }
+    val config = copyAndValidate(ProcessConfiguration(
+        commandLine, environment, workingDirectory,
+        delimiters, encoding,
+        standardErrorBufferCharCount, standardOutputBufferCharCount, aggregateOutputBufferLineCount,
+        gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
+    ))
 
-        directory(config.workingDirectory.toFile())
-    }
+    val coroutine = ExecCoroutine(coroutineContext + Dispatchers.IO, config, lazy = false)
+    coroutine.start(CoroutineStart.DEFAULT, coroutine.body)
+//    coroutine.start() //this doesnt call initParent ...?
+    val exitCode = coroutine.await()
+    val lines = coroutine.toList().map { it.formattedMessage }
 
-    val runningProcessFactory = RunningProcessFactory()
-
-    val listenerProviderFactory = makeListenerProviderFactory()
-
-    val jvmRunningProcess = try { jvmProcessBuilder.start() }
-            catch(ex: IOException){ throw InvalidExecConfigurationException(ex.message!!, config, ex.takeIf { TRACE }) }
-
-    val pidProvider = makePIDGenerator(jvmRunningProcess)
-    trace { "selected pidProvider=$pidProvider" }
-    val processID = pidProvider.pid.value
-
-    val processControllerFacade: ProcessControlFacade = makeCompositeFacade(jvmRunningProcess, processID)
-    trace { "selected facade=$processControllerFacade" }
-
-    val listenerProvider = listenerProviderFactory.create(jvmRunningProcess, processID, config)
-    trace { "selected listenerProvider=$listenerProvider" }
-
-    return runningProcessFactory.create(config, jvmRunningProcess, processID, processControllerFacade, listenerProvider)
+    return ProcessResult(lines, exitCode)
 }
 
-fun CoroutineScope.execAsync(config: ProcessBuilder.() -> Unit): RunningProcess{
+fun CoroutineScope.execAsync(
+        commandLine: List<String>,
+        environment: Map<String, String> = InheritedDefaultEnvironment,
+        workingDirectory: Path = Paths.get("").toAbsolutePath(),
+        delimiters: List<String> = listOf("\r", "\n", "\r\n"),
+        encoding: Charset = Charsets.UTF_8,
+        standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+        standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+        aggregateOutputBufferLineCount: Int = 2000,
+        gracefulTimeoutMillis: Long = 1500L,
+        includeDescendantsInKill: Boolean = false,
+        expectedOutputCodes: Set<Int>? = setOf(0), //see also
+        linesForExceptionError: Int = 15,
+        context: CoroutineContext = EmptyCoroutineContext,
+        lazy: Boolean = false
+): RunningProcess {
+    val config = copyAndValidate(ProcessConfiguration(
+        commandLine, environment, workingDirectory,
+        delimiters, encoding,
+        standardErrorBufferCharCount, standardOutputBufferCharCount, aggregateOutputBufferLineCount,
+        gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
+    ))
 
-    val configActual = processBuilder(coroutineScope = this@execAsync) {
-        config()
-        source = AsynchronousExecutionStart(command.toList())
-    }
-    return execAsync(configActual)
-}
-fun CoroutineScope.execAsync(commandFirst: String, vararg commandRest: String): RunningProcess = execAsync {
-    command = listOf(commandFirst) + commandRest.toList()
-}
-
-suspend fun exec(config: ProcessBuilder.() -> Unit): ProcessResult {
-
-    val configActual = processBuilder(GlobalScope) {
-        standardErrorBufferCharCount = 0
-        standardOutputBufferCharCount = 0
-
-        apply(config)
-
-        source = SynchronousExecutionStart(command.toList())
-    }
-
-    val runningProcess = execAsync(configActual)
-    runningProcess.join()
-
-    val output = runningProcess
-            .filter { it !is ExitCode }
-            .map { it.formattedMessage }
-
-    return ProcessResult(output.toList(), runningProcess.exitCode.getCompleted())
+    return execAsync(config, context, lazy)
 }
 
-suspend fun exec(commandFirst: String, vararg commandRest: String): ProcessResult
-        = exec { command = listOf(commandFirst) + commandRest }
+fun CoroutineScope.execAsync(
+        command: String,
+        vararg arg: String,
+        environment: Map<String, String> = InheritedDefaultEnvironment,
+        workingDirectory: Path = Paths.get("").toAbsolutePath(),
+        delimiters: List<String> = listOf("\r", "\n", "\r\n"),
+        encoding: Charset = Charsets.UTF_8,
+        standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+        standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+        aggregateOutputBufferLineCount: Int = 2000,
+        gracefulTimeoutMillis: Long = 1500L,
+        includeDescendantsInKill: Boolean = false,
+        expectedOutputCodes: Set<Int>? = setOf(0), //see also
+        linesForExceptionError: Int = 15,
+        context: CoroutineContext = EmptyCoroutineContext,
+        lazy: Boolean = false
+): RunningProcess {
 
-suspend fun execVoid(config: ProcessBuilder.() -> Unit): Int {
-    val configActual = processBuilder(GlobalScope) {
-        aggregateOutputBufferLineCount = 0
-        standardErrorBufferCharCount = 0
-        standardErrorBufferCharCount = 0
+    val config = copyAndValidate(ProcessConfiguration(
+        ArrayList<String>(1 + arg.size).apply {
+            add(command)
+            addAll(arg)
+        },
+        environment, workingDirectory,
+        delimiters, encoding,
+        standardErrorBufferCharCount, standardOutputBufferCharCount, aggregateOutputBufferLineCount,
+        gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
+    ))
 
-        apply(config)
-
-        source = SynchronousExecutionStart(command.toList())
-    }
-    val runningProcess = execAsync(configActual)
-    val result = runningProcess.exitCode.await()
-
-    return result
-}
-suspend fun execVoid(commandFirst: String, vararg commandRest: String): Int = execVoid {
-    command = listOf(commandFirst) + commandRest.toList()
-}
-
-class InvalidExitValueException(
-        val command: List<String>,
-        val exitValue: Int,
-        val expectedExitCodes: Set<Int>?,
-        val recentStandardErrorLines: List<String>,
-        message: String,
-        stackTraceApplier: InvalidExitValueException.() -> Unit
-): RuntimeException(message) {
-
-    init {
-        stackTraceApplier()
-        if(stackTrace == null || stackTrace.isEmpty()) super.fillInStackTrace()
-    }
-
-    override fun fillInStackTrace(): Throwable = this.also {
-        //noop, this is handled by init
-    }
+    return execAsync(config, context, lazy)
 }
 
-fun `kotlin is pretty smart`(){
-    val nullableSet: Set<Int>? = setOf(1, 2, 3)
 
-    when(nullableSet?.size){
-        null -> {}
-        else -> { nullableSet.first() } //smart-cast knew that nullableSet isnt null through the ?. operator? wow.
-    }
+fun CoroutineScope.execAsync(
+    configuration: ProcessConfiguration,
+    context: CoroutineContext = EmptyCoroutineContext,
+    lazy: Boolean = false
+): RunningProcess {
+    val newContext = newCoroutineContext(context + Dispatchers.IO)
+    val coroutine = ExecCoroutine(newContext, configuration, lazy)
+    val start = if(lazy) CoroutineStart.LAZY else CoroutineStart.DEFAULT
+    coroutine.start(start, coroutine.body)
+//    coroutine.start() //this doesn't call initParent()
+    return coroutine
 }
 
-internal fun makeExitCodeException(config: ProcessBuilder, exitCode: Int, recentErrorOutput: List<String>): Throwable {
-    val expectedCodes = config.expectedOutputCodes
-    val builder = StringBuilder().apply {
-
-        appendln("exec '${config.command.joinToString(" ")}'")
-
-        val parentheticDescription = when(expectedCodes?.size){
-            null -> "any exit value".also { TODO("How did you get here!?") }
-            1 -> "${expectedCodes.single()}"
-            in 2 .. Int.MAX_VALUE -> "one of ${expectedCodes.joinToString()}"
-            else -> TODO()
-        }
-        appendln("exited with code $exitCode (expected $parentheticDescription)")
-
-        if(recentErrorOutput.any()){
-            appendln("the most recent standard-error output was:")
-            recentErrorOutput.forEach { appendln(it) }
-        }
-    }
-
-    val result = InvalidExitValueException(config.command, exitCode, expectedCodes, recentErrorOutput, builder.toString()){
-        val source = config.source
-        when(source){
-            is AsynchronousExecutionStart -> {
-                initCause(source)
-            }
-            is SynchronousExecutionStart -> {
-                stackTrace = source.stackTrace
-            }
-        }
-    }
-
-    require(result.stackTrace != null)
-
-    return result
-}
-
-class InvalidExecConfigurationException(message: String, val configuration: ProcessBuilder, cause: Exception? = null)
-    : RuntimeException(message, cause)
+val KilledBeforeStartedExitCode = -1
+val CancelledExitCode = -2
+val InternalErrorExitCode = -3
+val NotYetPostedExitCode = -4
+val KilledWithoutObtrudingCodeExitCode = -5
+val ColumnLimit = 512

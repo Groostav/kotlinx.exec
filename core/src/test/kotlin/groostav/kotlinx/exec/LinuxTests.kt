@@ -1,10 +1,8 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.channels.map
-import kotlinx.coroutines.channels.toList
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
-import org.amshove.kluent.shouldBe
-import org.amshove.kluent.shouldEqual
 import org.junit.Assume
 import org.junit.BeforeClass
 import org.junit.Ignore
@@ -22,18 +20,16 @@ class LinuxTests {
 
     @Ignore("functional")
     @Test fun `when running nautilus should get a nautilus`() = runBlocking<Unit> {
-        val code = execVoid("nautilus")
+        val (output, code) = exec("nautilus")
         //interestingly, nautilus takes a long time to return.
         // That's not a bug, its just its behaviour.
-        code shouldEqual 0
+        assertEquals(0, code)
     }
 
 
     @Test fun `when running simple echo statement should properly redirect`() = runBlocking<Unit> {
 
-        val runningProcess = execAsync {
-            command = listOf("bash", "-c", "echo hello command line!")
-        }
+        val runningProcess = execAsync(commandLine=listOf("bash", "-c", "echo hello command line!"))
 
         val messages = runningProcess.map { event -> when(event){
             is StandardErrorMessage -> "std-err: ${event.line}"
@@ -41,14 +37,11 @@ class LinuxTests {
             is ExitCode -> "exit code: ${event.code}"
         }}
 
-        val exitCode = runningProcess.exitCode.await()
+        val exitCode = runningProcess.await()
         val messagesList = messages.toList()
 
-        messagesList.shouldEqual(listOf(
-                "hello command line!",
-                "exit code: 0"
-        ))
-        exitCode.shouldBe(0)
+        assertEquals(listOf("hello command line!", "exit code: 0"), messagesList)
+        assertEquals(0, exitCode)
     }
 
 
@@ -57,8 +50,7 @@ class LinuxTests {
         val testScript = getLocalResourcePath("InlineProgressBar.sh")
 
         //act
-        val proc = execAsync("bash", testScript, "10")
-        val output = proc.standardOutput.lines().map { println(it); it }.toList()
+        val (output, code) = exec("bash", testScript, "10")
 
         //assert
         assertEquals(listOf(

@@ -1,4 +1,4 @@
-Write-Host "Hello!"
+Write-Host "Hello from $PID"
 Read-Host
 Write-Host "done!"
 
