@@ -1,6 +1,6 @@
 buildscript {
-    ext.kotlin_version = '1.4.32'
-    ext.kotlinx_coroutines_version = '1.4.3'
+    ext.kotlin_version = '1.6.0'
+    ext.kotlinx_coroutines_version = '1.5.2'
 
     repositories {
         mavenCentral()
@@ -18,7 +18,7 @@ plugins {
 
 allprojects {
     group 'groostav'
-    version '0.7'
+    version '0.8'
     
     repositories {
         mavenCentral()
@@ -37,16 +37,16 @@ subprojects {
 project('core'){
     dependencies {
     
-        compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
-        compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-        compile "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
-        compile "org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:$kotlinx_coroutines_version"
-        compile "org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinx_coroutines_version"
+        implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+        implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+        implementation "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
+        implementation "org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:$kotlinx_coroutines_version"
+        implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinx_coroutines_version"
 
-        compile "net.java.dev.jna:jna-platform:5.5.0"
+        implementation "net.java.dev.jna:jna-platform:5.5.0"
 
-        testCompile group: 'junit', name: 'junit', version: '4.12'
-        testCompile 'org.amshove.kluent:kluent:1.39'
+        testImplementation group: 'junit', name: 'junit', version: '4.12'
+        testImplementation 'org.amshove.kluent:kluent:1.39'
         testImplementation "org.jetbrains.kotlin:kotlin-test:$kotlin_version"
     }
     

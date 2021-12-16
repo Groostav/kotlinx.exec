@@ -1,6 +1,7 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 
@@ -28,7 +29,7 @@ interface RunningProcess: Flow<ProcessEvent> {
     // oook so im really torn.
     // I actually think that
     suspend fun receive(): ProcessEvent
-    suspend fun receiveOrNull(): ProcessEvent?
+    suspend fun receiveCatching(): ChannelResult<ProcessEvent>
 
     @OptIn(InternalCoroutinesApi::class)
     override suspend fun collect(collector: FlowCollector<ProcessEvent>)

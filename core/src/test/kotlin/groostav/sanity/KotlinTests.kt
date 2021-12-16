@@ -317,7 +317,7 @@ class KotlinTests {
     class MyCoroutine(
             parentContext: CoroutineContext,
             active: Boolean
-    ): AbstractCoroutine<Int>(parentContext, active), MyCoroutineScope, MyUsefulConcurrentDataStructure, SelectClause1<Int>  {
+    ): AbstractCoroutine<Int>(parentContext, true, active), MyCoroutineScope, MyUsefulConcurrentDataStructure, SelectClause1<Int>  {
 
 //        val _channel: Channel<Int> = TODO()
 

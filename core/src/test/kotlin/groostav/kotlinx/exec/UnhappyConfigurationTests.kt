@@ -5,6 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
+import java.io.IOException
 import java.nio.file.Paths
 import kotlin.test.assertEquals
 
@@ -23,7 +24,7 @@ class UnhappyConfigurationTests {
     @Test fun `when attempting to run nonexistant program should get exception`() = runBlocking<Unit> {
 
         //act
-        val result = Catch<IllegalArgumentException> {
+        val result = Catch<IOException> {
             exec(commandLine = listOf("prog-that-doesn't-exist-a1ccfa01-cf9a-474c-b95f-94377655ea75"))
         }
 

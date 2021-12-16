@@ -106,7 +106,7 @@ class StandardIOTests {
         } // looks like a regular closed Send channel.
     }
 
-    @Test fun `assert that the polling or blocking thread for the IO is on stack trace when you do something like map on aggregate channel`() = runBlocking<Unit>{
+    @Test fun `assert that the polling or blocking thread for the IO is on stack trace when you collect the flow`() = runBlocking<Unit>{
 
         val runningProc = execAsync(commandLine = printMultipleLinesCommand())
 
@@ -114,7 +114,13 @@ class StandardIOTests {
             Exception("stack producing: $it")
         }.toList()
 
-        assertEquals(emptyList<Exception>(), exceptions)
+        assertEquals("""
+               java.lang.Exception: stack producing: StandardOutputMessage(line=hello)
+               ${TAB}at groostav.kotlinx.exec.StandardIOTests${'$'}assert that the polling or blocking thread for the IO is on stack trace when you collect the flow${'$'}1${'$'}invokeSuspend${'$'}${'$'}inlined${'$'}map${'$'}1${'$'}2.emit(Collect.kt:137)
+	           ${TAB}at groostav.kotlinx.exec.ExecCoroutine${'$'}collect${'$'}2${'$'}1.emit(ExecCoroutine.kt:564)
+            """.trimIndent(),
+            exceptions.first().stackTraceWithoutLineNumbersToString(100)
+        )
     }
 
     @Test fun `when sending stdin before starting process should still operate correctly`() = runBlocking<Unit>{

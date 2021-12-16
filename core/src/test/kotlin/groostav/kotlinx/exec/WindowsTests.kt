@@ -14,7 +14,6 @@ import org.junit.Ignore
 import org.junit.Test
 import java.util.*
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 
 // Wow, so powershell takes 10X longer to start (~1 second) than cmd (~100ms)
 // I suppose thats .netframework startup time, which is supposidly faster than the jvm, but it sure ain't fast.
@@ -111,28 +110,29 @@ class WindowsTests {
 
         //assert
         val expectedAlmostSequence = listOf(
-                StandardOutputMessage(line = "Serious script(tm)(C)(R)"),
-                StandardOutputMessage(line = "Input the user name"),
-                StandardOutputMessage(line = "groostav"),
-                StandardOutputMessage(line = "Input your server name, or 'quit' to exit"),
-                StandardOutputMessage(line = "jetbrains.com"),
-                StandardOutputMessage(line = "Sorry groostav, jetbrains.com is already at 1.2.3.4"),
-                StandardOutputMessage(line = "Input your server name, or 'quit' to exit"),
-                StandardOutputMessage(line = "asdf.asdf.asdf.12345.!!!"),
+            StandardOutputMessage(line = "Serious script(tm)(C)(R)"),
+            StandardOutputMessage(line = "Input the user name"),
+            StandardOutputMessage(line = "groostav"),
+            StandardOutputMessage(line = "Input your server name, or 'quit' to exit"),
+            StandardOutputMessage(line = "jetbrains.com"),
+            StandardOutputMessage(line = "Sorry groostav, jetbrains.com is already at 1.2.3.4"),
+            StandardOutputMessage(line = "Input your server name, or 'quit' to exit"),
 
-                StandardErrorMessage(line = "Resolve-DnsName : asdf.asdf.asdf.12345.!!! : DNS name contains an invalid character"),
-                StandardErrorMessage(line = "At $testScript:12 char:22"),
-                StandardErrorMessage(line = "+     \$ServerDetails = Resolve-DnsName \$Server"),
-                StandardErrorMessage(line = "+                      ~~~~~~~~~~~~~~~~~~~~~~~"),
-                StandardErrorMessage(line = "    + CategoryInfo          : ResourceUnavailable: (asdf.asdf.asdf.12345.!!!:String) [Resolve-DnsName], Win32Exception"),
-                StandardErrorMessage(line = "    + FullyQualifiedErrorId : DNS_ERROR_INVALID_NAME_CHAR,Microsoft.DnsClient.Commands.ResolveDnsName"),
-                StandardErrorMessage(line = " "),
+            StandardErrorMessage(line = "Resolve-DnsName : asdf.asdf.asdf.12345.!!! : DNS name contains an invalid character"),
+            StandardErrorMessage(line = "At $testScript:12 "),
+            StandardErrorMessage(line = "char:22"),
+            StandardErrorMessage(line = "+     \$ServerDetails = Resolve-DnsName \$Server"),
+            StandardErrorMessage(line = "+                      ~~~~~~~~~~~~~~~~~~~~~~~"),
+            StandardErrorMessage(line = "    + CategoryInfo          : ResourceUnavailable: (asdf.asdf.asdf.12345.!!!:String) [Resolve-DnsName], Win32Exception"),
+            StandardErrorMessage(line = "    + FullyQualifiedErrorId : DNS_ERROR_INVALID_NAME_CHAR,Microsoft.DnsClient.Commands.ResolveDnsName"),
+            StandardErrorMessage(line = " "),
 
-                StandardOutputMessage(line = "you're in luck groostav, asdf.asdf.asdf.12345.!!! isnt taken!"),
-                StandardOutputMessage(line = "Input your server name, or 'quit' to exit"),
-                StandardOutputMessage(line = "quit"),
-                StandardOutputMessage(line = "Have a nice day!"),
-                ExitCode(code = 0)
+            StandardOutputMessage(line = "asdf.asdf.asdf.12345.!!!"),
+            StandardOutputMessage(line = "you're in luck groostav, asdf.asdf.asdf.12345.!!! isnt taken!"),
+            StandardOutputMessage(line = "Input your server name, or 'quit' to exit"),
+            StandardOutputMessage(line = "quit"),
+            StandardOutputMessage(line = "Have a nice day!"),
+            ExitCode(code = 0)
         )
 
         localDecoder.close()
@@ -142,7 +142,7 @@ class WindowsTests {
         // so to avoid flappers, we'll do set equality on the whole thing,
         // then sequence equality on the channels separately.
         // assertEquals(expectedAlmostSequence, result) passes _most_ of the time.
-        assertEquals(expectedAlmostSequence.toSet(), result?.toSet())
+        assertEquals(expectedAlmostSequence.joinToString("\n") { it.formattedMessage }, result?.joinToString("\n") { it.formattedMessage })
         assertEquals(expectedAlmostSequence.filterIsInstance<StandardOutputMessage>(), result?.filterIsInstance<StandardOutputMessage>())
         assertEquals(expectedAlmostSequence.filterIsInstance<StandardErrorMessage>(), result?.filterIsInstance<StandardErrorMessage>())
         assertEquals(expectedAlmostSequence.last(), result?.last())
@@ -244,7 +244,7 @@ class WindowsTests {
         }
         catch(ex: InvalidExitCodeException){ ex }
 
-        assertThat(thrown?.stackTraceWithoutLineNumbersToString(22)?.trim(), IsEqual.equalTo("""
+        assertThat(thrown?.stackTraceWithoutLineNumbersToString(26)?.trim(), IsEqual.equalTo("""
             groostav.kotlinx.exec.InvalidExitCodeException: exit code 1 from powershell.exe -File <SCRIPT_PATH> -ThrowError -ExecutionPolicy Bypass
             the most recent standard-error output was:
             this is an important message!
@@ -295,7 +295,7 @@ class WindowsTests {
         var result = emptyList<String>()
         do {
             val next = withTimeoutOrNull(if("hello!" in result) 200 else 999_999) {
-                runningProc.receiveOrNull()?.formattedMessage ?: "closed"
+                runningProc.receiveCatching().getOrNull()?.formattedMessage ?: "closed"
             } ?: "timed-out"
 
             result += next

@@ -10,7 +10,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.coroutineContext
 
 
-data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int)
+data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int?)
 
 suspend fun exec(
     command: String,
@@ -59,9 +59,11 @@ suspend fun exec(
         gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
     ))
 
-    val coroutine = ExecCoroutine(coroutineContext + Dispatchers.IO, config, lazy = false)
-    coroutine.start(CoroutineStart.DEFAULT, coroutine.body)
-//    coroutine.start() //this doesnt call initParent ...?
+    val coroutine = ExecCoroutine(coroutineContext + Dispatchers.IO, config)
+    if( ! coroutine.isCancelled) {
+        val started = coroutine.start()
+        check(started) { "unstarted coroutine failed to start" }
+    }
     val exitCode = coroutine.await()
     val lines = coroutine.toList().map { it.formattedMessage }
 
@@ -133,16 +135,10 @@ fun CoroutineScope.execAsync(
     lazy: Boolean = false
 ): RunningProcess {
     val newContext = newCoroutineContext(context + Dispatchers.IO)
-    val coroutine = ExecCoroutine(newContext, configuration, lazy)
-    val start = if(lazy) CoroutineStart.LAZY else CoroutineStart.DEFAULT
-    coroutine.start(start, coroutine.body)
-//    coroutine.start() //this doesn't call initParent()
+    val coroutine = ExecCoroutine(newContext, configuration)
+    if( ! coroutine.isCancelled) {
+        val started = coroutine.start()
+        check(started) { "unstarted coroutine failed to start" }
+    }
     return coroutine
 }
-
-val KilledBeforeStartedExitCode = -1
-val CancelledExitCode = -2
-val InternalErrorExitCode = -3
-val NotYetPostedExitCode = -4
-val KilledWithoutObtrudingCodeExitCode = -5
-val ColumnLimit = 512

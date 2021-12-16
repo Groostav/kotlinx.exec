@@ -1,8 +1,20 @@
 package groostav.kotlinx.exec
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
+import kotlinx.coroutines.flow.MutableSharedFlow
 import org.junit.Ignore
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.time.Duration
+import java.time.Instant
+import java.util.*
+import java.util.concurrent.CompletableFuture
+import java.util.stream.Stream
 
 /**
  * Use fake process objects to project odd but legal behaviour from process API,
@@ -43,29 +55,31 @@ internal class TortureTests {
     }
 
     @Test fun `when process emits exit code before emitting and closing standard error should hold process open`(): Unit = runBlocking {
-        TODO()
-//        // setup
-//        val interceptors = Interceptors()
-//        val exec = makeStartedExecCoroutine(interceptors)
-//
-//        // act
-//        interceptors.apply {
-//            emit(ExitCode(0))
-//            emit(StandardOutputMessage("ahah"))
-//            standardOutput.close()
-//            standardInput.close()
-//        }
-//        val firstMessage = select<String?> {
-//            onTimeout(1500) { null }
-//            exec.onAwait { "exit code $it" }
-//            exec.onReceive { it.formattedMessage }
-//        }
-//        delay(500)
-//
-//        // assert
-//        assertEquals("ahah", firstMessage)
-//        assertFalse(exec.isCompleted)
-//        assertFalse(exec.state.errEOF, "expected stderrEOF=false, but state=${exec.state}")
+        // setup
+        val interceptors = Interceptors()
+        val exec = makeStartedExecCoroutine(interceptors)
+
+        // act
+        val fakeProcess = FakeProcess().apply {
+
+        }
+        interceptors.apply {
+            emit(ExitCode(0))
+            emit(StandardOutputMessage("ahah"))
+            standardOutput.close()
+            standardInput.close()
+        }
+        val firstMessage = select<String?> {
+            onTimeout(1500) { null }
+            exec.onAwait { "exit code $it" }
+            exec.onReceive { it.formattedMessage }
+        }
+        delay(500)
+
+        // assert
+        assertEquals("ahah", firstMessage)
+        assertFalse(exec.isCompleted)
+        assertFalse(exec.state.errEOF, "expected stderrEOF=false, but state=${exec.state}")
     }
 
     @Test fun `when process completes without anybody waiting for it should go into completed state anyways`() = runBlocking<Unit> {
@@ -160,4 +174,66 @@ internal class TortureTests {
 //        it.kickoff()
 //        it.start(CoroutineStart.DEFAULT, it, ExecCoroutine::waitFor)
     )
+}
+
+@ExperimentalCoroutinesApi
+class FakeProcess: Process() {
+
+    val result = CompletableDeferred<Int>()
+    val stdin = Channel<Byte>(capacity = UNLIMITED)
+    val stderr = Channel<Byte>(capacity = UNLIMITED)
+    val stdout = Channel<Byte>(capacity = UNLIMITED)
+
+    //standard-input
+    override fun getOutputStream(): OutputStream = object: OutputStream() {
+        override fun write(b: Int) { stdin.trySend(b.toByte()) }
+    }
+
+    override fun getInputStream(): InputStream = object: InputStream() {
+        //performance here is terrible but... for a testing platform, do I care?
+        // yeahhhhh but creating an event queue to fetch a single byte? thats a bridge too far...
+//        fail;
+        override fun read(): Int {
+            val result: Byte = (stdout.tryReceive().getOrNull()
+                ?: runBlocking { (stdout.receiveCatching().getOrNull() ?: -1) })
+//            return result
+        }
+    }
+    override fun getErrorStream(): InputStream = object: InputStream() {
+        override fun read(): Int = runBlocking { (stderr.receiveCatching().getOrNull() ?: -1).toInt() }
+    }
+
+    override fun waitFor(): Int = runBlocking { result.await() }
+    override fun exitValue(): Int = if( ! result.isCompleted) throw IllegalThreadStateException() else result.getCompleted()
+
+    override fun destroy() {
+        result.complete(-1)
+    }
+
+    override fun toHandle() = object: ProcessHandle {
+
+        override fun compareTo(other: ProcessHandle?): Int {
+            TODO("Not yet implemented")
+        }
+
+        override fun pid(): Long = -2
+        override fun parent(): Optional<ProcessHandle> = Optional.ofNullable(null)
+        override fun children(): Stream<ProcessHandle> = Stream.empty()
+        override fun descendants(): Stream<ProcessHandle> = Stream.empty()
+
+        override fun info(): ProcessHandle.Info = TODO()
+
+        override fun onExit(): CompletableFuture<ProcessHandle> {
+            TODO("Not yet implemented")
+        }
+
+        override fun supportsNormalTermination(): Boolean = "windows" !in System.getProperty("os.name").lowercase()
+        override fun destroy(): Boolean = true
+        override fun destroyForcibly(): Boolean = true
+
+        override fun isAlive(): Boolean {
+            TODO("Not yet implemented")
+        }
+    }
+}
 }

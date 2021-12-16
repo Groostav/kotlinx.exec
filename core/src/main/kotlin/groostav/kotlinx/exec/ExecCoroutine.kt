@@ -3,31 +3,25 @@ package groostav.kotlinx.exec
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.receiveOrNull
+import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.internal.resumeCancellableWith
+import java.io.IOException
 import java.lang.IllegalArgumentException
-import java.lang.RuntimeException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.coroutines.ContinuationInterceptor
-import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.intrinsics.createCoroutineUnintercepted
-import kotlin.coroutines.intrinsics.intercepted
-import kotlin.coroutines.resume
+import kotlin.coroutines.*
 
 @OptIn(InternalCoroutinesApi::class)
 class ExecCoroutine(
     context: CoroutineContext,
     val config: ProcessConfiguration,
-    private val lazy: Boolean,
     private val channel: Channel<ProcessEvent> = Channel<ProcessEvent>(
         capacity = config.aggregateOutputBufferLineCount,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
-): AbstractCoroutine<Int?>(context, !lazy), RunningProcess, Flow<ProcessEvent> {
+): AbstractCoroutine<Int?>(context, initParentJob = true, active = false), RunningProcess, Flow<ProcessEvent> {
 
     init {
         require(config.command.isNotEmpty())
@@ -49,108 +43,140 @@ class ExecCoroutine(
     private var tracing = CoroutineTracer(config.command.first().split("/").last().take(30))
 
     init {
-        if( ! lazy) onStart()
-        if(lazy) tracing = tracing.mark("init")
+        tracing = tracing.mark("init")
     }
 
     override val processID: Long get() = handle.pid()
 
     // kotlinx coroutines guarantee: this will only be called once
     override fun onStart() {
+        try {
+            tracing.trace { "${processState.get()} -> onStart()" }
 
-        val newState = processState.updateAndGet { state ->
-            when(state){
-                is NotStarted -> Running()
-                is Closed -> state
-                is AllOutputsReported, is BeingKilled, is Running -> TODO("state=$state onStart()")
-            }
-        }
-
-        when (newState) {
-            is Running -> {
-                val processBuilder = ProcessBuilder(config.command)
-                    .directory(config.workingDirectory.toFile())
-                    .apply {
-                        if(config.environment !== InheritedDefaultEnvironment) {
-                            environment().apply { clear(); putAll(config.environment) }
-                        }
-                    }
-
-                process = processBuilder.start()
-                handle = process.toHandle()
-
-                tracing = tracing
-                    .appendName(handle.pid().toString())
-                    .mark("start")
-
-                err = NamedTracingProcessReader.forStandardError(process, processID, config.encoding)
-                out = NamedTracingProcessReader.forStandardOutput(process, processID, config.encoding)
-
-                if (lazy) {
-                    val continuation = body.createCoroutineUnintercepted(this)
-                    try {
-                        continuation.intercepted().resumeCancellableWith(Result.success(Unit))
-                    }
-                    catch (e: Throwable) {
-                        this.resumeWith(Result.failure(e))
-                    }
+            // even though onstart() cant be called twice,
+            // we could be cancelled while onStart-ing.
+            val newState = processState.updateAndGet { state ->
+                when (state) {
+                    is NotStarted -> Running()
+                    is Closed -> state
+                    is AllOutputsReported, is BeingKilled, is Running -> TODO("state=$state onStart()")
                 }
             }
-            is Closed -> this.resume(KilledBeforeStartedExitCode) // contention on start() and kill()
-            is AllOutputsReported, is BeingKilled, is NotStarted -> TODO("state=$newState onStart()")
+
+            when (newState) {
+                is Running -> {
+                    val processBuilder = ProcessBuilder(config.command)
+                        .directory(config.workingDirectory.toFile())
+                        .apply {
+                            if (config.environment !== InheritedDefaultEnvironment) {
+                                environment().apply { clear(); putAll(config.environment) }
+                            }
+                        }
+
+                    val procStartResult /* :Throwable|Process */ = try {
+                        //TODO: is there a non platform specific way to find out if the command is on the PATH?
+                        processBuilder.start()
+                    }
+                    catch(ex: IOException){
+                        ex
+                    }
+
+                    when(procStartResult){
+                        is Process -> {
+                            // TODO: we have a race condition here;
+                            // after process.start(), the sub process may
+                            // already be flooding its standard-output.
+                            // we really dont want to be doing any work after process.start() so that we can get to
+                            // reading its output asap
+                            process = procStartResult
+                            handle = procStartResult.toHandle()
+
+                            tracing = tracing
+                                .appendName(handle.pid().toString())
+                                .mark("start")
+
+                            err = NamedTracingProcessReader.forStandardError(procStartResult, processID, config.encoding)
+                            out = NamedTracingProcessReader.forStandardOutput(procStartResult, processID, config.encoding)
+
+                            // inlined copy-pasta from CoroutineStart.start...
+//                            val continuation = body.createCoroutineUnintercepted(this)
+                            makeCoroutine(suspensionGappedFunction = body, context = coroutineContext, pipeOutputTo = this::resume)
+                                .tryCancellablyInvoke(finally = this::resumeWithException)
+                        }
+                        is IOException -> {
+                            processState.updateAndGet { state ->
+                                val x = 4;
+                                when(state){
+                                    is NotStarted -> TODO("state=$newState onStart()")
+                                    is Running, is BeingKilled -> {
+                                        // note: if we got killed before this,
+                                        Closed(ProcessClosing.NotStarted(procStartResult))
+                                    }
+                                    is AllOutputsReported, is Closed -> TODO("state=$newState onStart()")
+                                }
+                            }
+                            // failed to start the sub-process but we're already running
+                            this.resume(KilledBeforeStartedExitCode)
+                        }
+                    }
+                }
+                is Closed -> this.resume(newState.closedOutput.exitCode) // contention on start() and kill()
+                is AllOutputsReported, is BeingKilled, is NotStarted -> TODO("state=$newState onStart()")
+            }
+        }
+        catch(ex: Exception){
+            tracing.trace { "onStart() crashed with $ex" }
+            throw ex
+        }
+        finally {
+            tracing.trace { "onStart() -> ${processState.get()}" }
         }
     }
 
     internal val body: suspend () -> Int? = body@ {
+        doTracing("body.invoke()") {
+            withContext(NonCancellable) {
 
-        try { withContext(NonCancellable) {
+                tracing.trace { "${processState.get()} -> body.invoke()" }
 
-            tracing.trace { "${processState.get()} -> body.invoke()" }
+                var polledState = processState.get()
+                //note: we may already be in the final state
+                // if there is contention between coroutine.start() and kill()
 
-            var initialState = processState.get()
-            //note: we may already be in the final state if there is contention between coroutine.start() and kill()
+                var backoff = BackoffWindowMillis.first
 
-            var backoff = BackoffWindowMillis.first
+                while (polledState is RunningOrBeingKilled) {
 
-            while (initialState is RunningOrBeingKilled) {
+                    polledState.run { check(errOpen || errOpen || exitCodeOrNull != null) { "state not promoted: $this" } }
 
-                initialState.run { check(errOpen || errOpen || exitCodeOrNull != null) { "state not promoted: $this" } }
+                    if (isCancelled && polledState is Running) {
+                        kill0(CancelledExitCode)
+                    }
 
-                if (isCancelled && initialState is Running) {
-                    kill0(CancelledExitCode)
+                    check(coroutineContext[ContinuationInterceptor] == Dispatchers.IO)
+
+                    when (val outputsOrNull = pollOutputsAndUpdateState(polledState)) {
+                        null -> {
+                            backoff = (backoff * 2)
+                                .coerceIn(BackoffWindowMillis)
+                                .coerceAtLeast(1)
+
+                            delay(backoff)
+                        }
+                        else -> for (event in outputsOrNull) {
+                            output(event)
+                        }
+                    }
+
+                    polledState = processState.get()
                 }
 
-                check(coroutineContext[ContinuationInterceptor] == Dispatchers.IO)
-
-                when(val outputsOrNull = pollOutputsAndUpdateState(initialState)){
-                    null -> {
-                        backoff = (backoff * 2)
-                            .coerceIn(BackoffWindowMillis)
-                            .coerceAtLeast(1)
-
-                        delay(backoff)
-                    }
-                    else -> for(event in outputsOrNull){
-                        output(event)
-                    }
+                when (val finishingState = polledState) {
+                    is AllOutputsReported -> finishingState.closedOutput.exitCode
+                    is Closed -> makeResult<Result<Int>>(tracing).getOrThrow()
+                    is BeingKilled, is NotStarted, is Running -> TODO("finishingState=$finishingState in body.finally")
                 }
-
-                initialState = processState.get()
             }
-
-            when (val finishingState = initialState) {
-                is AllOutputsReported -> finishingState.closedOutput.exitCode
-                is Closed -> makeResult<Result<Int>>(tracing).getOrThrow()
-                is BeingKilled, is NotStarted, is Running -> TODO("finishingState=$finishingState in body.finally")
-            }
-        }}
-        catch(ex: Exception){
-            if(ex is CancellationException) throw ex
-            RuntimeException("INTERNAL EXEC COROUTINE FAILURE", ex).printStackTrace()
-            InternalErrorExitCode
-        }
-        finally {
-            tracing.trace { "body.invoke() -> ${processState.get()}" }
         }
     }
 
@@ -244,44 +270,42 @@ class ExecCoroutine(
     }
 
     private fun output(it: ProcessEvent) {
-        channel.offer(it)
+        val sent = channel.trySend(it)
+
+        if(sent.isFailure) tracing.trace { "failed to send '$it' !?" }
     }
 
-    override fun onCancelled(cause: Throwable, handled: Boolean) {
-        tracing.trace { "${processState.get()} -> onCancelled($cause, $handled)" }
-        try {
-            val previousState = processState.getAndUpdate { state -> when (state) {
-                is NotStarted -> {
-                    // happens when a lazy coroutine is created and then the parent is killed
-                    Closed(ProcessClosing.Killed(null, makeProcessKilledException(tracing, null)))
-                }
-                is Running, is BeingKilled -> TODO("state=$state in onCancelled($cause)")
-                is AllOutputsReported -> Closed(state.closedOutput)
-                is Closed -> state.also { tracing.trace { "onCancelled when somebody closed?" } }
-            }}
-
-            if (previousState !is Closed) onProcessStateClosed()
-        }
-        finally {
-            tracing.trace { "onCancelled(...) -> ${processState.get()}" }
-        }
+    override fun onCancelling(cause: Throwable?) = doTracing("onCancelling($cause)"){
+        // noop?
     }
 
-    override fun onCompleted(value: Int?) {
-        tracing.trace { "${processState.get()} -> onCompleted($value)" }
+    override fun onCancelled(cause: Throwable, handled: Boolean) = doTracing("onCancelled($cause)"){
+        val previousState = processState.getAndUpdate { state -> when (state) {
+            is NotStarted -> {
+                // happens when a lazy coroutine is created and then the parent is killed
+                Closed(ProcessClosing.Killed(null, makeProcessKilledException(tracing, null)))
+            }
+            is Running -> {
+                if(cause is IOException)
+                    Closed(ProcessClosing.NotStarted(cause)) else
+                    TODO("state=$state in onCancelled($cause)")
+            }
+            is BeingKilled -> TODO("state=$state in onCancelled($cause)")
+            is AllOutputsReported -> Closed(state.closedOutput)
+            is Closed -> state.also { tracing.trace { "onCancelled when somebody closed?" } }
+        }}
 
-        try {
-            val previousState = processState.getAndUpdate { state -> when (state) {
-                is NotStarted, is Running, is BeingKilled -> TODO("state=$state in onCompleted($value)")
-                is AllOutputsReported -> Closed(state.closedOutput)
-                is Closed -> state.also { tracing.trace { "onComplete when somebody closed?" } }
-            }}
+        if (previousState !is Closed) commitClose()
+    }
 
-            if (previousState !is Closed) onProcessStateClosed()
-        }
-        finally {
-            tracing.trace { "onCompleted(...) -> ${processState.get()}" }
-        }
+    override fun onCompleted(value: Int?) = doTracing("onCompleted($value)"){
+        val previousState = processState.getAndUpdate { state -> when (state) {
+            is NotStarted, is Running, is BeingKilled -> TODO("state=$state in onCompleted($value)")
+            is AllOutputsReported -> Closed(state.closedOutput)
+            is Closed -> state.also { tracing.trace { "onComplete when somebody closed?" } }
+        }}
+
+        if (previousState !is Closed) commitClose()
     }
 
     // this method is tricky,
@@ -289,7 +313,7 @@ class ExecCoroutine(
     // but in the case of cancellation, closing-up in onCancel() is too eager
     // since the process will produce more output.
     // so the strategy is this: the guy who does a state transfer to Closed() is responsible for calling this.
-    private fun onProcessStateClosed() {
+    private fun commitClose() = doTracing("commitClose"){
         val state = processState.get()
         check(state is Closed)
 
@@ -316,6 +340,13 @@ class ExecCoroutine(
             is ProcessClosing.CancelledAndKilled -> {
                 Result.failure(makeCancelledException(tracing, output.cancellingEx))
             }
+            is ProcessClosing.NotStarted -> {
+                when(val ex = output.procStartException){
+                    is Throwable -> Result.failure(makeProcessFailedToStartException(tracing, output.procStartException))
+                    null -> Result.success(output.exitCode)
+                    else -> TODO("$ex not throwable nor null")
+                }
+            }
         } as T
     }
 
@@ -331,15 +362,12 @@ class ExecCoroutine(
     }
 
     override suspend fun kill(obtrudeExitCode: Int?): Unit {
+        require(obtrudeExitCode == null || obtrudeExitCode >= 0)
         kill0(obtrudeExitCode)
         join()
     }
 
-    @Suppress("ThrowableNotThrown")
-    private fun kill0(obtrudingExitCodeOrKillCode: Int?): Unit = try {
-
-        val tracing = tracing.mark("kill")
-        tracing.trace { "${processState.get()} -> kill0(code=$obtrudingExitCodeOrKillCode)" }
+    private fun kill0(obtrudingExitCodeOrKillCode: Int?): Unit = doTracing("kill0(obtrude=$obtrudingExitCodeOrKillCode)", mark = true){ tracing ->
 
         val closedOutput: ProcessClosing = when(obtrudingExitCodeOrKillCode){
             in 0 .. Int.MAX_VALUE -> ProcessClosing.Killed(obtrudingExitCodeOrKillCode, makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode))
@@ -352,7 +380,7 @@ class ExecCoroutine(
         val isCancelling = obtrudingExitCodeOrKillCode == CancelledExitCode
 
         val priorState = processState.getAndUpdate { state -> when(state) {
-            is NotStarted -> Closed(closedOutput)
+            is NotStarted -> Closed(ProcessClosing.NotStarted(null))
             is Running -> killed(state, closedOutput)
             is BeingKilled -> {
                 if(isCancelling)
@@ -371,7 +399,7 @@ class ExecCoroutine(
             is NotStarted -> {
                 // process never started,
                 check(processState.get() is Closed)
-                onProcessStateClosed()
+                commitClose()
             }
             is Running -> {
                 // we got the kill, so now we actually have to do it!
@@ -385,13 +413,6 @@ class ExecCoroutine(
                 // calling cancel() on a coroutine whose onComplete() has already gone off.
             }
         }
-
-        tracing.trace { "kill0(...) -> ${processState.get()}" }
-    }
-    catch(ex: Throwable){
-        RuntimeException("INTERNAL EXEC COROUTINE FAILURE", ex).printStackTrace()
-        if(ex is Error) throw ex
-        Unit
     }
 
     // function does not provide a synchronization mechanism on
@@ -412,7 +433,7 @@ class ExecCoroutine(
 
     fun doPlatformKillGracefullyAndSynchronize(deadline: Long): Boolean {
 
-        val os = System.getProperty("os.name").toLowerCase()
+        val os = System.getProperty("os.name").lowercase()
 
         val probablySuccededInGracefullKilling = when {
             "windows" in os -> {
@@ -447,22 +468,22 @@ class ExecCoroutine(
     // note: I dont have access to awaitInternal() on JobSupport
     // which is what DeferredCoroutine uses.
     // so we synchronize with join() and fetch the result with our own state.
-    override suspend fun await(): Int {
-        val tracing = tracing.mark("await")
-        try {
-            tracing.trace { "${processState.get()} -> await()" }
-            join()
-            val result = makeResult<Result<Int>>(tracing)
-            return result.getOrThrow()
-        }
-        finally {
-            tracing.trace { "await() -> ${processState.get()}" }
+    override suspend fun await(): Int? = doTracing("await", mark = true){
+        join()
+        val result = makeResult<Result<Int>>(tracing)
+        return result.getOrThrow().takeIf { it >= 0 }
+    }
+
+    private fun makeProcessFailedToStartException(tracing: CoroutineTracer, procStartException: IOException): IOException {
+        return IOException(procStartException.message).apply {
+            stackTrace = tracing.makeMangledTrace().toTypedArray()
         }
     }
 
-
     private fun makeCancelledException(tracing: CoroutineTracer, cancellingEx: Throwable) =
-        CancellationException("Process was cancelled (and killed)", cancellingEx)
+        CancellationException("Process was cancelled (and killed)", cancellingEx).apply {
+            stackTrace = tracing.makeMangledTrace().toTypedArray()
+        }
 
     private fun makeProcessKilledException(
         tracing: CoroutineTracer,
@@ -507,29 +528,30 @@ class ExecCoroutine(
         if (cmdLine.length > ColumnLimit) append("[...]")
     }
 
-    override suspend fun receive(): ProcessEvent {
-        val tracing = tracing.mark("receive")
-        tracing.trace { "${processState.get()} -> receive()"}
-
+    override suspend fun receive(): ProcessEvent = doTracing("receive", mark = true){
         return try {
             channel.receive()
         }
         catch(ex: CancellationException){
-            throw CancellationException("process cancelled (no further output)", ex).apply {
-                stackTrace = tracing.makeMangledTrace().toTypedArray()
-            }
-        }
-        finally {
-            tracing.trace { "receive() -> ${processState.get()}"}
+            throw makeCancelledException(tracing, ex)
         }
     }
-    override suspend fun receiveOrNull(): ProcessEvent? {
-        return channel.receiveOrNull()
+    override suspend fun receiveCatching(): ChannelResult<ProcessEvent> = doTracing("receiveCatching", true){
+        val result = channel.receiveCatching()
+        when {
+            result.isSuccess -> result
+            result.isClosed -> {
+                val sourceEx = result.exceptionOrNull() as? CancellationException
+                    ?: CancellationException("Cancellation while receiving", result.exceptionOrNull())
+                ChannelResult.closed(makeCancelledException(tracing, sourceEx))
+            }
+            result.isFailure -> result
+            else -> TODO()
+        }
     }
 
     @OptIn(InternalCoroutinesApi::class)
-    override suspend fun collect(collector: FlowCollector<ProcessEvent>) {
-        val tracing = tracing.mark("collect")
+    override suspend fun collect(collector: FlowCollector<ProcessEvent>) = doTracing("collect", mark = true) {
         try {
             // do we convert channel to flow ahead of time once or do we do it per request?
             // im doing the latter because it throws-away aborted flows
@@ -556,6 +578,22 @@ class ExecCoroutine(
                 CancellationException("Process abruptly stopped producing output", ex).apply {
                     stackTrace = tracing.makeMangledTrace().toTypedArray()
                 }
+        }
+    }
+
+    private inline fun <R> doTracing(blockName: String, mark: Boolean = false, block: (CoroutineTracer) -> R): R{
+        val tracing = if(mark) tracing.mark(blockName) else tracing
+        try {
+            tracing.trace { "${processState.get()} -> $blockName" }
+
+            return block(tracing)
+        }
+        catch(ex: Throwable){
+            tracing.trace { "$blockName threw" }
+            throw ex
+        }
+        finally {
+            tracing.trace { "$blockName -> ${processState.get()}" }
         }
     }
 }
@@ -602,7 +640,9 @@ private fun closedOrPromoted(
     return result
 }
 
-private sealed class State { }
+private sealed class State {
+    open override fun toString(): String = this::class.simpleName ?: "anon"
+}
 private object NotStarted: State()
 interface RunningOrBeingKilled {
     val errOpen: Boolean
@@ -628,11 +668,14 @@ sealed class ProcessClosing() {
 
     abstract val exitCode: Int
 
-    data class CompletedNormally(override val exitCode: Int): ProcessClosing()
-    data class CancelledAndKilled(val cancellingEx: ProcessKilledException): ProcessClosing() {
+    class NotStarted(val procStartException: IOException?): ProcessClosing(){
+        override val exitCode: Int get() = KilledBeforeStartedExitCode
+    }
+    class CompletedNormally(override val exitCode: Int): ProcessClosing()
+    class CancelledAndKilled(val cancellingEx: ProcessKilledException): ProcessClosing() {
         override val exitCode get() = CancelledExitCode
     }
-    data class Killed(val obtrudeExitCode: Int?, val killSource: ProcessKilledException): ProcessClosing() {
+    class Killed(val obtrudeExitCode: Int?, val killSource: ProcessKilledException): ProcessClosing() {
         override val exitCode get() = obtrudeExitCode ?: KilledWithoutObtrudingCodeExitCode
     }
 }
@@ -642,3 +685,15 @@ private class Closed(val closedOutput: ProcessClosing): State()
 
 val BackoffWindowMillis = 0L .. 100L
 val END_OF_FILE_CHUNK: CharArray? = null
+
+val KilledBeforeStartedExitCode = -1
+val CancelledExitCode = -2
+val InternalErrorExitCode = -3
+val KilledWithoutObtrudingCodeExitCode = -5
+val ColumnLimit = 512
+
+// helper to force the runtime to stop optimizing things
+// so a debugger can actually see what is happening
+internal fun doStuff(vararg any: Any?){
+    val x = 4;
+}

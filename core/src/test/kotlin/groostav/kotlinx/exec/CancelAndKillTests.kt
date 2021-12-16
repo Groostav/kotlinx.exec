@@ -236,10 +236,10 @@ class CancelAndKillTests {
         )
 
         //act
-        unstartedProcess.kill(1)
+        unstartedProcess.kill()
 
         //assert
-        assertEquals(unstartedProcess.toList(), emptyList())
+        assertEquals(emptyList(), unstartedProcess.toList())
         assertEquals(1, unstartedProcess.await())
         assertTrue(unstartedProcess.isCompleted)
     }
@@ -266,7 +266,7 @@ class CancelAndKillTests {
         //assert
         assertTrue(proc.isCompleted)
         assertEquals(0, proc.await())
-        assertEquals(emptyList(), proc.toList())
+        assertEquals(listOf(ExitCode(0)), proc.toList())
     }
 
 
