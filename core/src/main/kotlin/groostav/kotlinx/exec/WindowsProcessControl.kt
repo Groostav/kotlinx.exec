@@ -14,10 +14,7 @@ import java.io.Closeable
 import java.lang.ProcessBuilder.*
 import java.nio.file.Files
 import java.nio.file.Paths
-import java.time.Duration
-import java.time.Instant
 import java.util.*
-import java.util.concurrent.TimeUnit
 import kotlin.jvm.internal.FunctionReference
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
@@ -152,10 +149,7 @@ internal object WindowsProcessControl {
             //      spawned sub-process was some kind of cleanup, possibly initiated by a finally{} block
             //      so I think its best to leave it running.
 
-
             val pids: String = actualTree.toSequence().joinToString(",") { it.pid.toString() }
-            val name = "siginter -pid $pids"
-
             // this cant be that durable...
             val commandLine = listOf(
                 javaw.toAbsolutePath().toString(),
@@ -167,7 +161,7 @@ internal object WindowsProcessControl {
             val reaperCode = if(DEBUGGING_GRACEFUL_KILL){
                 ungracefullyKillGracefully(commandLine)
             }
-            else runBlocking(Dispatchers.IO) {
+            else runBlocking(Dispatchers.IO + tracing) {
                 val remainingTime = deadline - System.currentTimeMillis()
 
                 if(remainingTime > 0) withTimeoutOrNull(remainingTime) {
@@ -176,8 +170,9 @@ internal object WindowsProcessControl {
                         gracefulTimeoutMillis = 0, //avoid recursion
                         expectedOutputCodes = null
                     )
-                    reaper.collect { message: ProcessEvent ->
-                        tracing.trace { "$name: ${message.formattedMessage}" }
+                    val localTracing = tracing.appendName("reaper-pid=${reaper.processID}")
+                    reaper.collect {
+                        localTracing.trace { it.formattedMessage }
                     }
                     reaper.await()
                 }
@@ -194,9 +189,6 @@ internal object WindowsProcessControl {
     // but it looks like that just punts the problem from the jvm into kernel 32, which still uses the same
     // (blocking thread) strategy.
     // => dont bother, no matter the API we're still polling the bastard.
-
-    private const val DEBUGGING_GRACEFUL_KILL: Boolean = true
-    init { if(DEBUGGING_GRACEFUL_KILL) System.err.println("DEBUGGING_GRACEFUL_KILL enabled") }
 }
 
 fun ungracefullyKillGracefully(commandLine: List<String>): Int = ProcessBuilder()

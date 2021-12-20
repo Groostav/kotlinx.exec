@@ -9,6 +9,8 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.coroutineContext
 
+internal val TRACE = System.getProperty("groostav.kotlinx.exec.trace").toBoolean()
+internal val DEBUGGING_GRACEFUL_KILL: Boolean = System.getProperty("groostav.kotlinx.exec.DebuggingGracefulKill").toBoolean()
 
 data class ProcessResult(val outputAndErrorLines: List<String>, val exitCode: Int?)
 

@@ -1,24 +1,27 @@
 package groostav.kotlinx.exec
 
+import kotlinx.coroutines.Dispatchers
+import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.jvm.jvmName
 
-internal val TRACE = true
-
-internal data class CoroutineTracer private constructor(
+internal data class CoroutineTracer internal constructor(
     val debugName: String,
     val traceElements: List<Exception>
-) {
+): CoroutineContext.Element {
+
     constructor(name: String): this(name, emptyList())
 
+    companion object Key: CoroutineContext.Key<CoroutineTracer>
+
     init {
-        require( ! debugName.isNullOrBlank())
+        require(debugName.isNotBlank())
     }
 
     fun appendName(nameSuffix: String) = CoroutineTracer("$debugName/$nameSuffix", traceElements)
 
-    inline fun trace(crossinline messageSupplier: () -> String) {
+    inline fun trace(isErr: Boolean = false, crossinline messageSupplier: () -> String) {
         if(TRACE){
-            println("$debugName: ${messageSupplier()}")
+            (if(isErr) System.err else System.out).println("$debugName: ${messageSupplier()}")
         }
     }
 
@@ -95,16 +98,5 @@ internal data class CoroutineTracer private constructor(
 
     fun makeFrame(name: String) = StackTraceElement(CoroutineTracer::class.jvmName, "ASYNC_RECOVERY_FOR_${name.toUpperCase()}", null, 0)
 
-    fun makeReceiveException(ex: Exception): Exception {
-
-        TODO()
-//        val exceptions: List<Exception> = (exceptionStack + ex).toList()
-//
-//        for ((outerEx, innerEx) in exceptions.windowed(2)) {
-//            innerEx.originalCause.initCause(outerEx)
-//        }
-//
-//        return exceptions.last()
-    }
-
+    override val key: CoroutineContext.Key<CoroutineTracer> = Key
 }

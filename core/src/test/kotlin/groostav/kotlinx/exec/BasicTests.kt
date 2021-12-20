@@ -10,6 +10,10 @@ import kotlin.test.assertTrue
 
 class BasicTests {
 
+    init {
+        System.setProperty("groostav.kotlinx.exec.trace", "true")
+    }
+
     @Test
     fun `when command returns allowed nonzero exit code should return normally`() = runBlocking<Unit>{
 

@@ -13,6 +13,10 @@ import kotlin.test.assertTrue
 @OptIn(InternalCoroutinesApi::class)
 class CancelAndKillTests {
 
+    init {
+        System.setProperty("groostav.kotlinx.exec.trace", "true")
+    }
+
     @Test
     fun `when killing a process should suspend until process is terminated`() = runBlocking<Unit>{
         //setup
@@ -158,8 +162,6 @@ class CancelAndKillTests {
             gracefulTimeoutMillis = 99999999999
         )
 
-        delay(30)
-
         val pids = runningProcess
 //                .nonCancelling()
                 .map { it.also { println(it.formattedMessage) }}
@@ -225,23 +227,6 @@ class CancelAndKillTests {
         //assert
         assertEquals(listOf(StandardOutputMessage("interrupted"), ExitCode(42)), result)
 //        assertEquals(42, result)
-    }
-
-    @Test fun `when attempting to kill unstarted process should quietly do nothing`(): Unit = runBlocking<Unit> {
-        //setup
-        val unstartedProcess = execAsync(
-            commandLine = emptyScriptCommand(),
-            expectedOutputCodes = setOf(1),
-            lazy = true
-        )
-
-        //act
-        unstartedProcess.kill()
-
-        //assert
-        assertEquals(emptyList(), unstartedProcess.toList())
-        assertEquals(1, unstartedProcess.await())
-        assertTrue(unstartedProcess.isCompleted)
     }
 
     @Test fun `when attempting to get PID for a completed process should succeed`() = runBlocking<Unit> {
