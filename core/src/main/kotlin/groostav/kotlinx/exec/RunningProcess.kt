@@ -4,6 +4,7 @@ import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.selects.SelectClause1
 
 interface RunningProcess: Flow<ProcessEvent> {
 
@@ -21,7 +22,10 @@ interface RunningProcess: Flow<ProcessEvent> {
 //    public fun cancel(cause: CancellationException? = null)
 
     fun start(): Boolean
+
     suspend fun await(): Int?
+    public val onAwait: SelectClause1<Int?>
+
     suspend fun join(): Unit
 
     val isCompleted: Boolean
@@ -29,7 +33,12 @@ interface RunningProcess: Flow<ProcessEvent> {
     // oook so im really torn.
     // I actually think that
     suspend fun receive(): ProcessEvent
+    public val onReceive: SelectClause1<ProcessEvent>
+
     suspend fun receiveCatching(): ChannelResult<ProcessEvent>
+    public val onReceiveCatching: SelectClause1<ChannelResult<ProcessEvent>>
+
+    fun tryReceive(): ChannelResult<ProcessEvent>
 
     @OptIn(InternalCoroutinesApi::class)
     override suspend fun collect(collector: FlowCollector<ProcessEvent>)

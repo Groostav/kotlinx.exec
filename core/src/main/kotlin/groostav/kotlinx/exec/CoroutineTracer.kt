@@ -1,6 +1,5 @@
 package groostav.kotlinx.exec
 
-import kotlinx.coroutines.Dispatchers
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.jvm.jvmName
 
@@ -96,7 +95,12 @@ internal data class CoroutineTracer internal constructor(
         return result.toList()
     }
 
-    fun makeFrame(name: String) = StackTraceElement(CoroutineTracer::class.jvmName, "ASYNC_RECOVERY_FOR_${name.toUpperCase()}", null, 0)
+    fun makeFrame(name: String) = StackTraceElement(
+        CoroutineTracer::class.jvmName,
+        "ASYNC_RECOVERY_FOR_${name.uppercase()}",
+        null,
+        0
+    )
 
     override val key: CoroutineContext.Key<CoroutineTracer> = Key
 }

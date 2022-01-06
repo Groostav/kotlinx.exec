@@ -21,8 +21,8 @@ suspend fun exec(
     workingDirectory: Path = Paths.get("").toAbsolutePath(),
     delimiters: List<String> = listOf("\r", "\n", "\r\n"),
     encoding: Charset = Charsets.UTF_8,
-    standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
-    standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//    standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//    standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
     aggregateOutputBufferLineCount: Int = 2000,
     gracefulTimeoutMillis: Long = 1500L,
     includeDescendantsInKill: Boolean = false,
@@ -35,7 +35,7 @@ suspend fun exec(
     },
     environment, workingDirectory,
     delimiters, encoding,
-    standardErrorBufferCharCount, standardOutputBufferCharCount, aggregateOutputBufferLineCount,
+    aggregateOutputBufferLineCount, //standardErrorBufferCharCount, standardOutputBufferCharCount,
     gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
 )
 
@@ -45,8 +45,8 @@ suspend fun exec(
     workingDirectory: Path = Paths.get("").toAbsolutePath(),
     delimiters: List<String> = listOf("\r", "\n", "\r\n"),
     encoding: Charset = Charsets.UTF_8,
-    standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
-    standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//    standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//    standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
     aggregateOutputBufferLineCount: Int = 2000,
     gracefulTimeoutMillis: Long = 1500L,
     includeDescendantsInKill: Boolean = false,
@@ -57,7 +57,7 @@ suspend fun exec(
     val config = copyAndValidate(ProcessConfiguration(
         commandLine, environment, workingDirectory,
         delimiters, encoding,
-        standardErrorBufferCharCount, standardOutputBufferCharCount, aggregateOutputBufferLineCount,
+        aggregateOutputBufferLineCount,/// standardErrorBufferCharCount, standardOutputBufferCharCount,
         gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
     ))
 
@@ -78,8 +78,8 @@ fun CoroutineScope.execAsync(
         workingDirectory: Path = Paths.get("").toAbsolutePath(),
         delimiters: List<String> = listOf("\r", "\n", "\r\n"),
         encoding: Charset = Charsets.UTF_8,
-        standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
-        standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//        standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//        standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
         aggregateOutputBufferLineCount: Int = 2000,
         gracefulTimeoutMillis: Long = 1500L,
         includeDescendantsInKill: Boolean = false,
@@ -91,7 +91,7 @@ fun CoroutineScope.execAsync(
     val config = copyAndValidate(ProcessConfiguration(
         commandLine, environment, workingDirectory,
         delimiters, encoding,
-        standardErrorBufferCharCount, standardOutputBufferCharCount, aggregateOutputBufferLineCount,
+        aggregateOutputBufferLineCount, //standardErrorBufferCharCount, standardOutputBufferCharCount,
         gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
     ))
 
@@ -105,8 +105,8 @@ fun CoroutineScope.execAsync(
         workingDirectory: Path = Paths.get("").toAbsolutePath(),
         delimiters: List<String> = listOf("\r", "\n", "\r\n"),
         encoding: Charset = Charsets.UTF_8,
-        standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
-        standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//        standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//        standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
         aggregateOutputBufferLineCount: Int = 2000,
         gracefulTimeoutMillis: Long = 1500L,
         includeDescendantsInKill: Boolean = false,
@@ -123,7 +123,7 @@ fun CoroutineScope.execAsync(
         },
         environment, workingDirectory,
         delimiters, encoding,
-        standardErrorBufferCharCount, standardOutputBufferCharCount, aggregateOutputBufferLineCount,
+        aggregateOutputBufferLineCount, //standardErrorBufferCharCount, standardOutputBufferCharCount,
         gracefulTimeoutMillis, includeDescendantsInKill, expectedOutputCodes, linesForExceptionError
     ))
 

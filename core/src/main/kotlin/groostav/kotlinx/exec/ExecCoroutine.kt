@@ -7,6 +7,9 @@ import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.selects.SelectClause0
+import kotlinx.coroutines.selects.SelectClause1
+import kotlinx.coroutines.selects.SelectInstance
 import java.io.IOException
 import java.lang.IllegalArgumentException
 import java.util.concurrent.TimeUnit
@@ -47,10 +50,6 @@ class ExecCoroutine(
         coroutineContext[CoroutineTracer]?.appendName(name) ?: CoroutineTracer(name)
     }
 
-    init {
-        tracing = tracing.mark("init")
-    }
-
     override val processID: Long get() = handle.pid()
 
     // kotlinx coroutines guarantee: this will only be called once
@@ -68,6 +67,8 @@ class ExecCoroutine(
 
         when (newState) {
             is Running -> {
+                this.tracing = this.tracing.mark("start")
+
                 val processBuilder = ProcessBuilder(config.command)
                     .directory(config.workingDirectory.toFile())
                     .apply {
@@ -98,16 +99,14 @@ class ExecCoroutine(
                         process = procStartResult
                         handle = procStartResult.toHandle()
 
-                        this.tracing = this.tracing
-                            .appendName(handle.pid().toString())
-                            .mark("start")
+                        this.tracing = this.tracing.appendName(handle.pid().toString())
 
                         err = NamedTracingProcessReader.forStandardError(procStartResult, processID, config.encoding)
                         out = NamedTracingProcessReader.forStandardOutput(procStartResult, processID, config.encoding)
 
                         // inlined copy-pasta from CoroutineStart.start...
 //                            val continuation = body.createCoroutineUnintercepted(this)
-                        makeCoroutine(suspensionGappedFunction = body, context = coroutineContext, pipeOutputTo = this::resume)
+                        makeCoroutine(suspensionGappedFunction = ::readToProbableClose, context = coroutineContext, pipeOutputTo = this::resume)
                             .tryCancellablyInvoke(finally = this::resumeWithException)
                     }
                     is IOException -> {
@@ -126,52 +125,59 @@ class ExecCoroutine(
                     }
                 }
             }
-            is Closed -> this.resume(newState.closedOutput.exitCode) // contention on start() and kill()
+            is Closed -> this.resume(newState.closedOutput.exitCode) // kill() before start()
             is AllOutputsReported, is BeingKilled, is NotStarted -> TODO("state=$newState onStart()")
         }
     }
 
-    internal val body: suspend () -> Int? = body@ {
-        doTracing("body.invoke()") { tracing ->
-            withContext(NonCancellable) {
+    // this method can miss output on win32 because of attachToConsole,
+    // if a child process attaches to the same console as we're reading from we
+    // wont get a clear EOF signal on the standard output, so
+    private suspend fun readToProbableClose(): Int = doTracing("body.invoke()") { tracing ->
 
-                var polledState = processState.get()
-                //note: we may already be in the final state
-                // if there is contention between coroutine.start() and kill()
+        // ExecCoroutine does support cancellation
+        // but it is implemented entirely via kill(),
+        // regardless of whether or not we are cancelled this function
+        // must read output until it is closed.
+        // TODO: is it possible for 'kill -9' OR 'taskkill /force' to fail?
+        withContext(NonCancellable) {
 
-                var backoff = BackoffWindowMillis.first
+            var polledState = processState.get()
+            //note: we may already be in the final state
+            // if there is contention between coroutine.start() and kill()
 
-                while (polledState is RunningOrBeingKilled) {
+            var backoff = BackoffWindowMillis.first
 
-                    polledState.run { check(errOpen || errOpen || exitCodeOrNull != null) { "state not promoted: $this" } }
+            while (polledState is RunningOrBeingKilled) {
 
-                    if (isCancelled && polledState is Running) {
-                        kill0(CancelledExitCode)
-                    }
+                polledState.run { check(errOpen || errOpen || exitCodeOrNull != null) { "state not promoted: $this" } }
 
-                    check(coroutineContext[ContinuationInterceptor] == Dispatchers.IO)
-
-                    when (val outputsOrNull = pollOutputsAndUpdateState(polledState)) {
-                        null -> {
-                            backoff = (backoff * 2)
-                                .coerceIn(BackoffWindowMillis)
-                                .coerceAtLeast(1)
-
-                            delay(backoff)
-                        }
-                        else -> for (event in outputsOrNull) {
-                            output(event)
-                        }
-                    }
-
-                    polledState = processState.get()
+                if (isCancelled && polledState is Running) {
+                    kill0(CancelledExitCode)
                 }
 
-                when (val finishingState = polledState) {
-                    is AllOutputsReported -> finishingState.closedOutput.exitCode
-                    is Closed -> makeResult<Result<Int>>(tracing).getOrThrow()
-                    is BeingKilled, is NotStarted, is Running -> TODO("finishingState=$finishingState in body.finally")
+                check(coroutineContext[ContinuationInterceptor] == Dispatchers.IO)
+
+                when (val outputsOrNull = pollOutputsAndUpdateState(polledState)) {
+                    null -> {
+                        backoff = (backoff * 2)
+                            .coerceIn(BackoffWindowMillis)
+                            .coerceAtLeast(1)
+
+                        delay(backoff)
+                    }
+                    else -> for (event in outputsOrNull) {
+                        output(event)
+                    }
                 }
+
+                polledState = processState.get()
+            }
+
+            when (val finishingState = polledState) {
+                is AllOutputsReported -> finishingState.closedOutput.exitCode
+                is Closed -> makeResult<Result<Int>>(tracing).getOrThrow()
+                is BeingKilled, is NotStarted, is Running -> TODO("finishingState=$finishingState in body.finally")
             }
         }
     }
@@ -187,7 +193,6 @@ class ExecCoroutine(
     private suspend fun pollOutputsAndUpdateState(initialState: RunningOrBeingKilled): List<ProcessEvent>? {
 
         @Suppress("BlockingMethodInNonBlockingContext") val errReady = err.ready()
-        //im still not actually sure if this calls a prefetching code.
         @Suppress("BlockingMethodInNonBlockingContext") val outReady = out.ready()
         val exitCodeReady = !handle.isAlive
 
@@ -367,8 +372,7 @@ class ExecCoroutine(
     private fun kill0(obtrudingExitCodeOrKillCode: Int?): Unit = doTracing("kill0(obtrude=$obtrudingExitCodeOrKillCode)", mark = true){ tracing ->
 
         val closedOutput: ProcessClosing = when(obtrudingExitCodeOrKillCode){
-            in 0 .. Int.MAX_VALUE -> ProcessClosing.Killed(obtrudingExitCodeOrKillCode, makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode))
-            null -> ProcessClosing.Killed(null, makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode))
+            null, in 0 .. Int.MAX_VALUE -> ProcessClosing.Killed(obtrudingExitCodeOrKillCode, makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode))
             KilledBeforeStartedExitCode -> ProcessClosing.Killed(KilledBeforeStartedExitCode, makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode))
             CancelledExitCode -> ProcessClosing.CancelledAndKilled(makeProcessKilledException(tracing, obtrudingExitCodeOrKillCode, getCancellationException()))
             else -> throw IllegalArgumentException("unknown obtrudeExitCode $obtrudingExitCodeOrKillCode")
@@ -427,7 +431,6 @@ class ExecCoroutine(
         }
         else {
             JEP102ProcessFacade.killForcefullyAsync(tracing, process, config.includeDescendantsInKill)
-
         }
 //            process.waitFor()
     }
@@ -460,6 +463,8 @@ class ExecCoroutine(
         val timeout = deadline - System.currentTimeMillis()
         if(timeout <= 0) return false.also { tracing.trace { "timed out" }}
 
+        process.outputStream.close()
+
         val dead = probablySuccededInGracefullKilling
                 && process.waitFor(timeout, TimeUnit.MILLISECONDS)
 
@@ -473,6 +478,14 @@ class ExecCoroutine(
         join()
         val result = makeResult<Result<Int>>(tracing)
         return result.getOrThrow().takeIf { it >= 0 }
+    }
+
+    override val onAwait: SelectClause1<Int?> get() = object: SelectClause1<Int?>{
+        val delegate: SelectClause0 = onJoin
+        @InternalCoroutinesApi
+        override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int?) -> R) {
+            delegate.registerSelectClause0(select) { block(await()) }
+        }
     }
 
     private fun makeProcessFailedToStartException(tracing: CoroutineTracer, procStartException: IOException): IOException {
@@ -537,6 +550,10 @@ class ExecCoroutine(
             throw makeCancelledException(tracing, ex)
         }
     }
+
+    override val onReceive: SelectClause1<ProcessEvent>
+        get() = channel.onReceive
+
     override suspend fun receiveCatching(): ChannelResult<ProcessEvent> = doTracing("receiveCatching", true){ tracing ->
         val result = channel.receiveCatching()
         when {
@@ -550,6 +567,11 @@ class ExecCoroutine(
             else -> TODO()
         }
     }
+
+    override val onReceiveCatching: SelectClause1<ChannelResult<ProcessEvent>>
+        get() = channel.onReceiveCatching
+
+    override fun tryReceive(): ChannelResult<ProcessEvent> = channel.tryReceive()
 
     @OptIn(InternalCoroutinesApi::class)
     override suspend fun collect(collector: FlowCollector<ProcessEvent>) = doTracing("collect", mark = true) { tracing ->
@@ -681,7 +703,6 @@ val END_OF_FILE_CHUNK: CharArray? = null
 
 val KilledBeforeStartedExitCode = -1
 val CancelledExitCode = -2
-val InternalErrorExitCode = -3
 val KilledWithoutObtrudingCodeExitCode = -5
 val ColumnLimit = 512
 

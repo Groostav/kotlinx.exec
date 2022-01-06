@@ -57,7 +57,7 @@ data class ProcessConfiguration internal constructor(
          * - [java.lang.Process.getInputStream] also returns a [java.io.BufferedInputStream]
          *   instance with a non-configurable byte-buffer of 8KB [java.io.BufferedInputStream.DEFAULT_BUFFER_SIZE]
          */
-        var standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//        var standardErrorBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
         /**
          * Character count of output buffered for [RunningProcess.standardOutput].
@@ -82,7 +82,7 @@ data class ProcessConfiguration internal constructor(
          * - [java.lang.Process.getInputStream] also returns a [java.io.BufferedInputStream]
          *   instance with a non-configurable byte-buffer of 8KB [java.io.BufferedInputStream.DEFAULT_BUFFER_SIZE]
          */
-        var standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
+//        var standardOutputBufferCharCount: Int = 2 * 1024 * 1024, // 2MB
 
         /**
          * Number of lines to buffer in the aggregate channel
@@ -166,11 +166,11 @@ internal fun copyAndValidate(initial: ProcessConfiguration): ProcessConfiguratio
     result.run {
         require(initialCommandList.any()) { "cannot exec empty command" }
         require(initialCommandList.all { '\u0000' !in it }) { "cannot exec command with null character: $this" }
-        require(standardErrorBufferCharCount >= 0) { "cannot exec with output buffer size less than zero: $this" }
+//        require(standardErrorBufferCharCount >= 0) { "cannot exec with output buffer size less than zero: $this" }
         require(delimiters.all { it.any() }) { "cannot parse output lines with empty delimeter: $this" }
         require(aggregateOutputBufferLineCount >= 0)
-        require(standardErrorBufferCharCount >= 0)
-        require(standardOutputBufferCharCount >= 0)
+//        require(standardErrorBufferCharCount >= 0)
+//        require(standardOutputBufferCharCount >= 0)
     }
 
     return result

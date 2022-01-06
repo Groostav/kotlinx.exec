@@ -254,10 +254,4 @@ class CancelAndKillTests {
         assertEquals(listOf(ExitCode(0)), proc.toList())
     }
 
-
-    @Test fun `when killing a script gracefully that can be interrupted should interrupt`(){
-        TODO("in the retrofit im noticing that a lot of the kill gracefully code on powershell is failing")
-        // write a test here that can killgracefully a powershell script to still actually do something.
-        // maybe just write a powershell script with busy waiting? or a while(true) { sleep(1) } ?
-    }
 }

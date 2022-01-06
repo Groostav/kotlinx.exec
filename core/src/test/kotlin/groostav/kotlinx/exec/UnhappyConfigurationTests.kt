@@ -1,7 +1,7 @@
 package groostav.kotlinx.exec
 
-import junit.framework.Assert.assertTrue
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
@@ -9,6 +9,7 @@ import java.io.IOException
 import java.nio.file.Paths
 import kotlin.test.assertEquals
 
+@InternalCoroutinesApi
 class UnhappyConfigurationTests {
 
     val OSLocalizedNoSuchFileMessage = when(JavaProcessOS) {
@@ -50,12 +51,12 @@ class UnhappyConfigurationTests {
         //setup
         val runningProcess = execAsync (
             commandLine = printMultipleLinesCommand(),
-            standardOutputBufferCharCount = 0,
-            standardErrorBufferCharCount = 0,
+//            standardOutputBufferCharCount = 0,
+//            standardErrorBufferCharCount = 0,
             aggregateOutputBufferLineCount = 0
         )
 
-        delay(100)
+        runningProcess.await()
 
         //act & assert
 //        assertTrue(runningProcess.standardError.isEmpty)
@@ -68,38 +69,32 @@ class UnhappyConfigurationTests {
 
     @Test fun `when attempting to get status of unbufferred channel should get good behaviour`() = runBlocking<Unit> {
 
-        TODO()
+        //setup
+        val runningProcess = execAsync(
+            commandLine = emptyScriptCommand(),
+            aggregateOutputBufferLineCount = 0
+        )
 
-//        //setup
-//        val runningProcess = execAsync(
-//            commandLine = emptyScriptCommand(),
-//            aggregateOutputBufferLineCount = 0
-//        )
-//
-//        //act
-//        val beforeClose = object {
-//            val isClosedForReceive = runningProcess.isClosedForReceive
-//            val isEmpty = runningProcess.isEmpty
-//            val poll = runningProcess.poll()
-//        }
-//
-//        runningProcess.send("done!")
-//        val receivedElement = runningProcess.receiveOrNull()
-//        runningProcess.join()
-//
-//        val afterClose = object {
-//            val isClosedForReceive = runningProcess.isClosedForReceive
-//            val isEmpty = runningProcess.isEmpty
-//            val poll = runningProcess.poll()
-//        }
-//
-//        //assert
-//        assertEquals(false, beforeClose.isClosedForReceive)
-//        assertEquals(true, beforeClose.isEmpty)
-//        assertEquals(null, beforeClose.poll)
-//        assertEquals(ExitCode(0), receivedElement)
-//        assertEquals(true, afterClose.isClosedForReceive)
-//        assertEquals(false, afterClose.isEmpty) //thats pretty weird, a closed channel is non-empty? huh.
-//        assertEquals(null, afterClose.poll)
+        //act
+        val beforeClose = object {
+            val isCompleted: Boolean = runningProcess.isCompleted
+            val poll: ChannelResult<ProcessEvent>? = runningProcess.tryReceive()
+        }
+
+        runningProcess.sendLine("done!")
+        val receivedElement = runningProcess.receiveCatching().getOrNull()
+        runningProcess.join()
+
+        val afterClose = object {
+            val isCompleted: Boolean = runningProcess.isCompleted
+            val poll: ChannelResult<ProcessEvent>? = runningProcess.tryReceive()
+        }
+
+        //assert
+        assertEquals(false, beforeClose.isCompleted)
+        assertEquals(ChannelResult.failure<Nothing>(), beforeClose.poll)
+        assertEquals(ExitCode(0), receivedElement)
+        assertEquals(true, afterClose.isCompleted)
+        assertEquals(ChannelResult.closed<Nothing>(null), afterClose.poll)
     }
 }
