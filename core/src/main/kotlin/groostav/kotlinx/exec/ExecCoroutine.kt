@@ -7,6 +7,9 @@ import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.selects.OnCancellationConstructor
+import kotlinx.coroutines.selects.ProcessResultFunction
+import kotlinx.coroutines.selects.RegistrationFunction
 import kotlinx.coroutines.selects.SelectClause0
 import kotlinx.coroutines.selects.SelectClause1
 import kotlinx.coroutines.selects.SelectInstance
@@ -287,17 +290,26 @@ class ExecCoroutine(
                 // happens when a lazy coroutine is created and then the parent is killed
                 Closed(ProcessClosing.Killed(null, makeProcessKilledException(tracing, null)))
             }
-            is Running -> {
-                if(cause is IOException)
-                    Closed(ProcessClosing.NotStarted(cause)) else
-                    TODO("state=$state in onCancelled($cause)")
+            is Running -> when(cause){
+                // this is a hack; we're assuming a cancellation while running is actually from startup;
+                // thats true as long as the onStart() impl is the same. fixme.
+                is IOException -> Closed(ProcessClosing.NotStarted(cause))
+                else -> Closed(ProcessClosing.NotStarted(null))
             }
-            is BeingKilled -> TODO("state=$state in onCancelled($cause)")
+            is BeingKilled -> throw UnsupportedOperationException("state=$state in onCancelled()", cause)
             is AllOutputsReported -> Closed(state.closedOutput)
             is Closed -> state.also { tracing.trace { "onCancelled when somebody closed?" } }
         }}
 
-        if (previousState !is Closed) commitClose()
+        check(processState.get() is Closed)
+
+        if (previousState !is Closed) {
+            commitClose()
+        }
+
+        if (cause !is IOException){
+            throw cause
+        }
     }
 
     override fun onCompleted(value: Int?) = doTracing("onCompleted($value)"){ tracing ->
@@ -480,13 +492,7 @@ class ExecCoroutine(
         return result.getOrThrow().takeIf { it >= 0 }
     }
 
-    override val onAwait: SelectClause1<Int?> get() = object: SelectClause1<Int?>{
-        val delegate: SelectClause0 = onJoin
-        @InternalCoroutinesApi
-        override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int?) -> R) {
-            delegate.registerSelectClause0(select) { block(await()) }
-        }
-    }
+    override val onAwait: SelectClause1<Int?> get() = onAwaitInternal as SelectClause1<Int?>
 
     private fun makeProcessFailedToStartException(tracing: CoroutineTracer, procStartException: IOException): IOException {
         return IOException(procStartException.message).apply {
@@ -661,7 +667,7 @@ interface RunningOrBeingKilled {
     val outOpen: Boolean
     val exitCodeOrNull: Int?
 }
-private class Running(
+private class Running constructor(
     override val errOpen: Boolean = true,
     override val outOpen: Boolean = true,
     override val exitCodeOrNull: Int? = null

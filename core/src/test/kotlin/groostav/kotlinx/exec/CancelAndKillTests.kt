@@ -213,7 +213,6 @@ class CancelAndKillTests {
             expectedOutputCodes = setOf(42),
             gracefulTimeoutMillis = 9_999_999_999
         )
-        delay(3000)
         launch {
             process.kill(42)
         }

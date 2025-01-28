@@ -31,7 +31,7 @@ class KotlinTests {
             val y = 4;
         }
 
-        val result = producer.receiveOrNull()
+        val result = producer.receiveCatching().getOrNull()
 
         val z = 4;
     }
@@ -52,20 +52,8 @@ class KotlinTests {
             }
         }
 
-        merged.receiveOrNull()
+        merged.receiveCatching()
         //does not reach here.
-    }
-
-    @Test fun `when opening subscription after member already published should suspend`() = runBlocking {
-
-        val channel = ConflatedBroadcastChannel<Unit>()
-        channel.send(Unit)
-
-        val r = withTimeoutOrNull(200) {
-            channel.openSubscription().receive()
-        }
-
-        assertNotNull(r)
     }
 
     @Test fun `mssing around with eventloop`() = runBlocking {
@@ -317,7 +305,7 @@ class KotlinTests {
     class MyCoroutine(
             parentContext: CoroutineContext,
             active: Boolean
-    ): AbstractCoroutine<Int>(parentContext, true, active), MyCoroutineScope, MyUsefulConcurrentDataStructure, SelectClause1<Int>  {
+    ): AbstractCoroutine<Int>(parentContext, true, active), MyCoroutineScope, MyUsefulConcurrentDataStructure  {
 
 //        val _channel: Channel<Int> = TODO()
 
@@ -361,9 +349,7 @@ class KotlinTests {
 //        override val cancelsParent: Boolean get() = true
         override fun getCompleted(): Int = TODO("delegates to internal method with bad type: getCompletedInternal() as Int")
         override suspend fun await(): Int = TODO("delegates to internal method with bad type: awaitInternal() as Int")
-        override val onAwait: SelectClause1<Int> get() = this
-        override fun <R> registerSelectClause1(select: SelectInstance<R>, block: suspend (Int) -> R) =
-            TODO("delegates to internal method with bad type: registerSelectClause1Internal(select, block)")
+        override val onAwait: SelectClause1<Int> get() = onAwaitInternal as SelectClause1<Int>
 
         //endregion
 

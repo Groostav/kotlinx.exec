@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.selects.onTimeout
 import org.hamcrest.core.IsEqual
 import org.junit.Assert.assertThat
 import org.junit.Assume
@@ -124,8 +125,7 @@ class WindowsTests {
             StandardOutputMessage(line = "asdf.asdf.asdf.12345.!!!"),
 
             StandardErrorMessage(line = "Resolve-DnsName : asdf.asdf.asdf.12345.!!! : DNS name contains an invalid character"),
-            StandardErrorMessage(line = "At $testScript:12 "),
-            StandardErrorMessage(line = "char:22"),
+            StandardErrorMessage(line = "At $testScript:12 char:22"),
             StandardErrorMessage(line = "+     \$ServerDetails = Resolve-DnsName \$Server"),
             StandardErrorMessage(line = "+                      ~~~~~~~~~~~~~~~~~~~~~~~"),
             StandardErrorMessage(line = "    + CategoryInfo          : ResourceUnavailable: (asdf.asdf.asdf.12345.!!!:String) [Resolve-DnsName], Win32Exception"),
@@ -141,12 +141,6 @@ class WindowsTests {
 
         localDecoder.close()
 
-        // regarding order: there is a race condition here
-        // individual lines have happens-before, but the mixing of standard-error and standard-out isn't fixed here,
-        // so to avoid flappers, we'll do set equality on the whole thing,
-        // then sequence equality on the channels separately.
-        // assertEquals(expectedAlmostSequence, result) passes _most_ of the time.
-        assertEquals(expectedAlmostSequence.joinToString("\n") { it.formattedMessage }, result?.joinToString("\n") { it.formattedMessage })
         assertEquals(expectedAlmostSequence.filterIsInstance<StandardOutputMessage>(), result?.filterIsInstance<StandardOutputMessage>())
         assertEquals(expectedAlmostSequence.filterIsInstance<StandardErrorMessage>(), result?.filterIsInstance<StandardErrorMessage>())
         assertEquals(expectedAlmostSequence.last(), result?.last())

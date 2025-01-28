@@ -1,28 +1,21 @@
 buildscript {
-    ext.kotlin_version = '1.6.0'
-    ext.kotlinx_coroutines_version = '1.5.2'
+    ext.kotlin_version = '2.0.21'
+    ext.kotlinx_coroutines_version = '1.10.1'
 
     repositories {
         mavenCentral()
-        jcenter()
     }
     dependencies {
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-        classpath 'com.jfrog.bintray.gradle:gradle-bintray-plugin:1.+'
     }
 }
 
-plugins {
-    id "com.jfrog.bintray" version "1.7"
-}
-
 allprojects {
-    group 'groostav'
-    version '0.9'
+    group = 'groostav'
+    version = '0.10'
     
     repositories {
         mavenCentral()
-        jcenter()
     }
 
 }
@@ -30,8 +23,6 @@ allprojects {
 subprojects {
     apply plugin: 'java'
     apply plugin: 'kotlin'
-    
-    sourceCompatibility = 9
 }
 
 project('core'){
@@ -46,17 +37,10 @@ project('core'){
         implementation "net.java.dev.jna:jna-platform:5.5.0"
 
         testImplementation group: 'junit', name: 'junit', version: '4.12'
-        testImplementation 'org.amshove.kluent:kluent:1.39'
+//        testImplementation 'org.amshove.kluent:kluent:1.39'
         testImplementation "org.jetbrains.kotlin:kotlin-test:$kotlin_version"
     }
     
-    compileKotlin {
-        kotlinOptions.jvmTarget = "1.8"
-    }
-    compileTestKotlin {
-        kotlinOptions.jvmTarget = "1.8"
-    }
-
     jar {
         archiveBaseName = 'kotlinx-exec-core'
     }
